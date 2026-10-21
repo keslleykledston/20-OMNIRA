@@ -417,3 +417,199 @@ Próxima fase: F4 — Compatibilidade de DB, backup e restore (integrar tools/mi
 ```
 
 **Veredito: PASS**
+
+---
+
+## F4 — Compatibilidade de DB, backup e restore
+
+```
+Fase: F4
+Baseline SHA: 7c677f4 (commit mais recente desta mesma branch)
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+Implementação:
+  tools/migrate-sql.sh (modificado): ledger de checksum por migration — coluna `checksum`
+    aditiva (ALTER TABLE ... ADD COLUMN IF NOT EXISTS, nunca reescreve linhas já existentes);
+    toda migration aplicada por `up` (ou marcada via BASELINE_UP_TO) grava o sha256 do arquivo
+    no momento da aplicação. Novo subcomando `verify`: recomputa o sha256 de cada migration
+    APLICADA e compara com o gravado — MODIFIED/MISSING bloqueiam (exit 1), UNKNOWN (linhas
+    aplicadas antes deste recurso existir) é só informativo, nunca falha. `up` agora chama essa
+    mesma verificação ANTES de aplicar qualquer migration pendente (achado Codex: só existir em
+    `verify` não bloqueava a instalação normal, que é o que a especificação pede). Novo
+    subcomando `backfill-checksums`: opt-in, exige CONFIRM_BACKFILL=1, nunca chamado por
+    automação, grava o checksum de hoje em linhas pré-existentes sem checksum — não é
+    "reescrever uma migration já aplicada" (o arquivo .up.sql nunca é tocado), é dar à linha do
+    ledger seu primeiro checksum, com a suposição explícita e documentada de que o arquivo no
+    disco hoje é o mesmo que foi aplicado.
+  tools/apply-migrations.sh, tools/migrate.sh (removidos): "duas fontes de aplicação de SQL"
+    que a especificação proíbe explicitamente. apply-migrations.sh não tinha ledger de
+    idempotência nem ON_ERROR_STOP (psql sem -v ON_ERROR_STOP=1 continua após um erro dentro do
+    arquivo) e era a base real usada por scripts/test-integration.sh e
+    scripts/test-archive-wa-groups.sh — migrados para tools/migrate-sql.sh (único caller real).
+    migrate.sh era um wrapper morto (zero callers) para golang-migrate, com um ESQUEMA DE LEDGER
+    INCOMPATÍVEL (schema_migrations `version bigint, dirty boolean` do golang-migrate vs.
+    `version TEXT, applied_at, checksum` deste projeto) — puro risco, sem uso real.
+  scripts/test-integration.sh, scripts/test-archive-wa-groups.sh (modificados): usam
+    tools/migrate-sql.sh com MIGRATIONS_DIR explícito (achado Codex: sem isso, o runner padrão
+    `/migrations` absoluto não existe no host, quebrando os dois únicos callers reais de
+    apply-migrations.sh). test-integration.sh agora também roda `migrate-sql.sh verify` logo
+    após montar o template, exercitando a detecção de drift em TODO run de CI, não só num teste
+    sintético isolado.
+  scripts/release/lint-migration-safety.sh (novo): lint estático (heurístico, documentado como
+    tal, não um parser de SQL) que compara o DDL de uma migration contra o database_strategy
+    que uma release declara (release/policies/compatibility.yaml). Detecta, com escopo por
+    tabela.coluna e respeitando a ordem das instruções no arquivo: DROP TABLE/COLUMN (com ou sem
+    a palavra-chave COLUMN, que o Postgres torna opcional), RENAME COLUMN/TO, TRUNCATE (distinto
+    do nome de privilégio homônimo em GRANT/REVOKE), DROP VALUE de enum, e a família completa
+    NOT NULL/DEFAULT: ADD COLUMN com NOT NULL inline sem DEFAULT, SET NOT NULL numa coluna
+    pré-existente ou adicionada sem DEFAULT no mesmo arquivo, DEFAULT NULL (literal ou
+    `(NULL)`) tratado como "sem DEFAULT real", DROP DEFAULT/SET DEFAULT NULL que revoga a
+    compatibilidade de uma coluna NOT NULL, e SET DEFAULT (via ALTER COLUMN, não só inline)
+    como uma forma igualmente válida de dar compatibilidade. Nomes de tabela com schema
+    (`public.foo`) são capturados por completo, nunca só o primeiro segmento. 17 achados reais
+    de 13 rodadas de revisão independente do Codex, todos corrigidos e re-testados (lista
+    completa abaixo).
+  release/fixtures/migration-lint/*.up.sql (16 fixtures novas): bons e maus exemplos de cada
+    padrão acima, exercitados por scripts/release/test-lint-migration-safety.sh — pedido
+    explícito desta fase ("fixtures boas/alteradas/maliciosas", mesmo espírito do F3).
+  release/policies/backup.yaml (novo): declara o que uma promoção de canal exige como evidência
+    de backup/restore por classe de recuperação (R0–R4, ADR-0054 §2.5) — reaproveita
+    scripts/backup-omnira-*.sh e scripts/backup-restore-*.sh já existentes, nunca os substitui
+    (ADR-0054 §2.1). Declara o estado REAL deste host: backup lógico (pg_dump), sem WAL/PITR,
+    sem cron instalado (F0 §5.3, reconfirmado) — e por isso fixa min_rpo_minutes=60 (honesto
+    para dump periódico manual), nunca os 5 min alvo de docs/operations/DISASTER-RECOVERY.md,
+    que dependem de PITR ausente aqui. "Bloquear promoção que exija esse RPO/RTO em vez de
+    inventar proteção" (pedido explícito da fase) — nenhuma promoção "stable" pode declarar um
+    RPO menor que este sem um ADR que troque current_topology primeiro.
+  scripts/release/test-migration-ledger.sh, test-upgrade-n1.sh, test-lint-migration-safety.sh
+    (novos): ver Testes executados abaixo.
+Arquivos: ver Implementação acima; nenhuma migration nova (o ledger de checksum é aditivo via
+  ALTER TABLE ... ADD COLUMN IF NOT EXISTS dentro do próprio tools/migrate-sql.sh, não um
+  arquivo numerado em migrations/ — schema_migrations não é uma tabela de aplicação, é
+  infraestrutura do próprio runner).
+Migrations: nenhuma.
+Contratos/endpoints: nenhum (a API de /api/v1/platform/* é F6).
+Testes executados (comandos, PASS/FAIL, Postgres 16 real via containers descartáveis):
+  bash scripts/release/test-lint-migration-safety.sh → PASS (18 fixtures + varredura completa
+    das 160 migrations reais do repositório sob expand_only: exatamente 1 achado, o pré-existente
+    documentado abaixo, nada mais — zero falso positivo novo, zero falso negativo conhecido)
+  sudo bash scripts/release/test-migration-ledger.sh → PASS (12 checks, Postgres 16 descartável
+    real): primeira aplicação grava checksum em toda linha nova; segunda aplicação (retry) é
+    idempotente, 0 migrations aplicadas, 0 linhas novas no ledger; `verify` limpo; adulterar um
+    arquivo já aplicado é detectado por `verify` E bloqueia `up` de aplicar QUALQUER coisa
+    (inclusive uma migration nova, nunca antes aplicada); apagar um arquivo já aplicado é
+    detectado; uma linha sem checksum (simulando ledger pré-existente ao recurso) é UNKNOWN, não
+    falha; `backfill-checksums` recusa sem CONFIRM_BACKFILL=1 e grava corretamente com ele
+  sudo bash scripts/release/test-upgrade-n1.sh → PASS (7 checks, Postgres 16 descartável real):
+    checkpoint real 000168 (último estado de schema que rodou em produção antes deste programa,
+    não um número inventado) → aplica os 4 migrations seguintes → dado escrito em 000168
+    sobrevive integralmente ao upgrade; FORCE RLS inalterado; ledger termina na migration real
+    mais nova; `verify` limpo; os 4 migrations pós-checkpoint são expand_only-limpos pelo lint
+  bash scripts/release/validate-migrations.sh (F2, re-executado) → PASS, 160 migrations, sem
+    regressão
+  gofmt -l / go build ./... / go vet ./... (repo inteiro) → limpos
+  shellcheck -S warning em todos os scripts novos/modificados → limpo
+  scripts/backup-restore-check.sh (já existente, reaproveitado como evidência real desta fase,
+    rodado contra o omnira-postgres real — só bancos descartáveis, nunca omnira_dev) → PASS:
+    dump+restore no mesmo cluster E em cluster novo (disaster recovery), checksums de 19 tabelas
+    críticas + flags RLS/FORCE/policies/funções/ledger idênticos, isolamento cross-tenant
+    comprovado como omnira_app pós-restore. RTO medido: ~6,4s (mesmo cluster), ~6,8s (cluster
+    novo, incl. roles).
+  scripts/backup-omnira-db.sh (rodado de verdade, read-only sobre omnira_dev) → backup real
+    produzido: backups/omnira_dev/omnira_dev_20261021T021842Z.dump (6019786 bytes),
+    schema_version=000172_external_start_conversation
+  scripts/backup-restore-hub-check.sh (rodado com o dump real acima, cluster novo descartável)
+    → PASS: ledger do restaurado = migration mais nova do repositório; tabelas de controle do
+    Hub com a mesma contagem do live; modo de contexto de sessão (`enforce`) sobreviveu ao
+    restore; agente do Hub lê exatamente o oráculo independente permite (190 linhas); estranho e
+    identidade forjada leem 0. RTO medido: ~8,1s (cluster novo, com o dump real de produção).
+Gates de segurança / RLS: N/A nesta fase para RLS nova (sem tabela de plataforma ainda — F6).
+  Reaproveitada e comprovada de novo a RLS/isolamento das tabelas existentes via
+  backup-restore-check.sh/backup-restore-hub-check.sh acima (nenhuma regressão pelo ledger de
+  checksum ou pelas mudanças em migrate-sql.sh).
+Review Codex (evidência real): `codex exec review --uncommitted` executado 13 vezes nesta
+  branch (ciclo fix→retest→re-review a cada achado, mesma disciplina do F3). 17 achados reais
+  corrigidos; a 13ª rodada voltou "No actionable regressions were identified":
+    1. [P1] `up` nunca checava drift de checksum — só `verify`, separado, que um operador podia
+       nunca rodar. Corrigido: `up` chama a mesma verificação ANTES de aplicar qualquer
+       pendente, e passa a bloquear também uma migration NOVA se uma antiga estiver adulterada.
+    2. [P2] Lint aceitava SET NOT NULL numa coluna adicionada sem DEFAULT no mesmo arquivo (a
+       exceção só olhava o nome da coluna, não a tabela) — corrigido com chave tabela.coluna.
+    3. [P2] A mesma exceção ignorava NOT NULL inline em ADD COLUMN (só olhava ALTER COLUMN
+       separado) — corrigido, ADD COLUMN ... NOT NULL sem DEFAULT agora é achado por si só.
+    4-9. [P2 x6] Six achados sucessivos de borda real da mesma família NOT NULL/DEFAULT, cada um
+       reproduzido e corrigido: nome de tabela com schema (`public.a` colapsando com
+       `public.b`), `DEFAULT NULL` tratado como DEFAULT real, COLUMN opcional em DROP/ADD
+       (`ALTER TABLE t DROP email` sem a palavra COLUMN) escapando do lint, delimitador de fim
+       de clausula não reconhecendo ADD/DROP sem COLUMN (vazando DEFAULT de uma coluna para
+       outra no mesmo ALTER TABLE), DROP DEFAULT não revogando a exceção de uma coluna já NOT
+       NULL (nem quando o NOT NULL veio inline do próprio ADD COLUMN), SET DEFAULT via ALTER
+       COLUMN (não só inline) nunca contando como compatível.
+   10. [P2] Normalização de espaço em branco: `SET  DEFAULT` (dois espaços) comparado por
+       igualdade exata de string caía no ramo errado (tratado como remoção de DEFAULT) —
+       corrigido normalizando antes de comparar.
+   11. [P2] `DROP NOT NULL` nunca era reconhecido — uma coluna devolvida a nullable continuava
+       marcada como NOT NULL internamente, gerando falso positivo num DROP DEFAULT seguinte —
+       corrigido.
+   12. [P2] `DEFAULT (NULL)` (parenteses) escapava do mesmo tratamento de `DEFAULT NULL` —
+       corrigido.
+   13. [P2] Os checks simples (DROP TABLE, RENAME, TRUNCATE) usavam `grep` padrão, que casa uma
+       LINHA por vez — uma instrução destrutiva formatada em múltiplas linhas (`DROP` numa
+       linha, `TABLE widgets` na próxima) escapava do lint inteiramente. Corrigido normalizando
+       todo whitespace (inclusive quebras de linha reais) para um espaço antes desses checks; o
+       check de TRUNCATE foi reescrito para identificar a instrução pelo que a segue (um
+       identificador, nunca "ON") em vez de excluir linhas com GRANT/REVOKE, que no texto
+       normalizado apagaria o check inteiro se GRANT/REVOKE aparecesse em QUALQUER lugar do
+       arquivo.
+  LIMITAÇÃO ACEITA E DOCUMENTADA NO PRÓPRIO SCRIPT (não um achado corrigível sem transformar um
+  heurístico declarado em parser completo de SQL): múltiplas sub-clausulas de uma ALTER TABLE
+  separadas por vírgula (ex. `ALTER COLUMN x DROP DEFAULT, ALTER COLUMN x SET DEFAULT 2` numa
+  única instrução) são avaliadas sub-clausula por sub-clausula, não como o estado atômico final
+  que o Postgres realmente aplica — um padrão contorcido e sem uso real neste repositório (a
+  forma natural e igualmente segura é escrever só `SET DEFAULT 2`, que o lint já aceita). É a
+  direção seguro do viés documentado do próprio script (rejeitar demais um padrão raro, nunca
+  aceitar de menos um contrato real).
+  ACHADO PRÉ-EXISTENTE, NÃO CORRIGIDO (arquivo já aplicado em produção, reescrever uma migration
+  aplicada é proibido): migrations/000104_hub_work_pools.up.sql adiciona `hub_id UUID` (sem
+  DEFAULT), faz backfill, e só então `SET NOT NULL` — exatamente o padrão que database_strategy
+  expand_only proíbe (um release anterior ainda inserindo sem essa coluna quebraria). É uma
+  lacuna real de expand/contract de ANTES deste programa existir, só visível porque o lint desta
+  fase agora existe. Classificado, não mascarado, não revertido.
+Commits: (ver git log da branch feat/omnira-release-update-engine — commit desta fase citado no
+  próximo update deste arquivo)
+Pendências/risco:
+  - scripts/backup-omnira-db.sh: a cópia para o disco externo (`/mnt/omnira-backup-external`,
+    montagem NFS real, 20G livres) foi SKIPPED nesta sessão — não por disco cheio/desmontado,
+    mas aparentemente por permissão (o diretório `Backup/` esperado não existe sob o layout real
+    do mount, que tem `omnira_dev/`/`groups/` direto na raiz, e o usuário desta sessão não é o
+    dono do mount). Não é tratado como achado confirmado de pipeline quebrado: o cron real
+    (ainda não instalado, F0 §5.3) presumivelmente roda como outro usuário. Recomendado ao
+    operador verificar com o usuário real de cron, não corrigido aqui para não mascarar um
+    comportamento cujo contexto real (usuário/cron) esta sessão não tem.
+  - Cron de scripts/backup-omnira-db.sh e scripts/backup-omnira-media.sh continua não instalado
+    neste host (F0 §5.3, reconfirmado nesta fase) — gap operacional, fora do escopo de correção
+    deste programa de código, repetido aqui para que release/policies/backup.yaml nunca
+    presuma um agendamento que não existe de fato.
+  - PITR/WAL continuam ausentes deste host (alvo documentado em
+    docs/operations/DISASTER-RECOVERY.md, não implementado) — release/policies/backup.yaml fixa
+    o RPO honesto (60 min) em vez de herdar o alvo de 5 min; destravar isso exige um ADR que
+    adote Postgres gerenciado/WAL archiving antes de qualquer promoção "stable" poder prometer
+    menos.
+  - scripts/test-integration.sh, quando rodado NESTE worktree secundário (não no checkout
+    principal /opt/omnira/20-OMNIRA), constrói o template e roda `migrate-sql.sh verify` com
+    sucesso (confirmado nesta fase com um pacote real, internal/accounts/adapters), mas o
+    estágio seguinte (go test dentro de um container Docker) falha com
+    "fatal: not a git repository: .../.git/worktrees/release-engineering" — o arquivo `.git` de
+    QUALQUER worktree vinculado aponta para um caminho absoluto do host fora do que é montado no
+    container. Isto é uma limitação PRÉ-EXISTENTE do ambiente (afeta qualquer worktree, inclusive
+    os de outros agentes, não é causado por nenhuma mudança desta fase) e não uma regressão —
+    documentado, não corrigido (mudaria a estratégia de mount do script, fora do escopo de F4).
+  - `release/policies/backup.yaml` declara a política; o VERIFICADOR automático que a aplica
+    contra uma promoção real de canal "stable" é trabalho do F9 (catálogo stable/hardening),
+    como já estava previsto.
+  - platform_backup_records (tabela de evidência de backup ligada ao Update Manager) é F6
+    (backend), não F4 — esta fase só garante que a EVIDÊNCIA real (scripts já existentes) exista
+    e seja verificável, não a tabela que vai indexá-la.
+Próxima fase: F5 — Update Agent resiliente e recovery CLI
+```
+
+**Veredito: PASS**
