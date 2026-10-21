@@ -2,11 +2,15 @@ package agent
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/omnira/omnira/internal/platformrelease/domain"
 )
@@ -196,6 +200,65 @@ func TestCreateRun_IdempotentByKey(t *testing.T) {
 	// registro real gravado (e com o que GetRun devolveria).
 	if r2.FencingToken == 0 || r2.FencingToken != r1.FencingToken {
 		t.Fatalf("FencingToken do caminho de dedup deveria bater com o original (%d), veio %d", r1.FencingToken, r2.FencingToken)
+	}
+}
+
+// TestAcknowledgeRecovery_UnblocksHasUnresolvedRecoveryRequired: achado Codex P1 — o gate que
+// impede novos runs enquanto uma recuperação está pendente precisa sobreviver a QUALQUER
+// chamada de Reconcile, nunca só a atual; a ÚNICA forma de destravar é um AcknowledgeRecovery
+// explícito (operador), nunca o simples fato de RECOVERY_REQUIRED ser um estado terminal.
+func TestAcknowledgeRecovery_UnblocksHasUnresolvedRecoveryRequired(t *testing.T) {
+	l, _ := openTestLedger(t)
+	ctx := context.Background()
+	h, err := l.AcquireLock(ctx, "inst-1", "holder-a", time.Minute)
+	if err != nil {
+		t.Fatalf("AcquireLock: %v", err)
+	}
+	r, err := l.CreateRun(ctx, h, "run-1", "idem-1", `{}`, domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for _, to := range []domain.RunState{domain.StateFailed, domain.StateRecovering, domain.StateRecoveryRequired} {
+		if err := l.TransitionRun(ctx, h, r.RunID, to); err != nil {
+			t.Fatalf("TransitionRun para %s: %v", to, err)
+		}
+	}
+
+	pending, err := l.HasUnresolvedRecoveryRequired(ctx, "inst-1")
+	if err != nil {
+		t.Fatalf("HasUnresolvedRecoveryRequired: %v", err)
+	}
+	if !pending {
+		t.Fatal("deveria reportar recuperação pendente logo após RECOVERY_REQUIRED")
+	}
+
+	// Reconhecer um run EM OUTRO ESTADO deve ser recusado — nunca um atalho para destravar
+	// algo que nunca foi sinalizado.
+	r2, err := l.CreateRun(ctx, h, "run-2", "idem-2", `{}`, domain.StateDiscovered)
+	if err != nil {
+		t.Fatalf("CreateRun run-2: %v", err)
+	}
+	if err := l.AcknowledgeRecovery(ctx, h, r2.RunID); err == nil {
+		t.Fatal("AcknowledgeRecovery deveria recusar um run que não está em RECOVERY_REQUIRED")
+	}
+
+	if err := l.AcknowledgeRecovery(ctx, h, r.RunID); err != nil {
+		t.Fatalf("AcknowledgeRecovery: %v", err)
+	}
+	pending, err = l.HasUnresolvedRecoveryRequired(ctx, "inst-1")
+	if err != nil {
+		t.Fatalf("HasUnresolvedRecoveryRequired (pós-ack): %v", err)
+	}
+	if pending {
+		t.Fatal("deveria estar destravado após AcknowledgeRecovery")
+	}
+
+	got, err := l.GetRun(ctx, r.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if !got.RecoveryAcknowledged {
+		t.Fatal("GetRun deveria refletir RecoveryAcknowledged=true")
 	}
 }
 
@@ -457,5 +520,135 @@ func TestConcurrentHeartbeatAndCheckpoints_NoSpuriousErrors(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Errorf("operação concorrente falhou de forma inesperada: %v", err)
+	}
+}
+
+// TestOpenLedger_MigratesPreExistingDatabaseMissingRecoveryAcknowledged: achado Codex P1 —
+// `CREATE TABLE IF NOT EXISTS` nunca altera uma tabela já existente. Simula o caso real de
+// produção (o binário do agente é atualizado, mas o arquivo .db no disco é da versão
+// ANTERIOR, sem a coluna recovery_acknowledged) criando manualmente um ledger com o schema
+// ANTIGO — nunca via OpenLedger, que já inclui a coluna desde o CREATE TABLE — e confirmando
+// que abrir esse arquivo com o OpenLedger ATUAL migra, preserva os dados existentes e nunca
+// falha ao reabrir de novo (idempotência do ALTER TABLE).
+func TestOpenLedger_MigratesPreExistingDatabaseMissingRecoveryAcknowledged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	legacyDB, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("abrir banco legado: %v", err)
+	}
+	const legacySchema = `
+	CREATE TABLE update_runs (
+	  run_id          TEXT PRIMARY KEY,
+	  installation_id TEXT NOT NULL,
+	  idempotency_key TEXT NOT NULL,
+	  state           TEXT NOT NULL,
+	  fencing_token   INTEGER NOT NULL,
+	  manifest_json   TEXT NOT NULL,
+	  created_at      TEXT NOT NULL,
+	  updated_at      TEXT NOT NULL,
+	  UNIQUE(installation_id, idempotency_key)
+	);`
+	if _, err := legacyDB.Exec(legacySchema); err != nil {
+		t.Fatalf("criar schema legado: %v", err)
+	}
+	// Um run real já existente ANTES da migração — prova que migrar não apaga/corrompe dados.
+	if _, err := legacyDB.Exec(
+		`INSERT INTO update_runs(run_id, installation_id, idempotency_key, state, fencing_token, manifest_json, created_at, updated_at)
+		 VALUES ('run-legacy', 'inst-1', 'idem-legacy', 'RECOVERY_REQUIRED', 1, '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("inserir run legado: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("fechar banco legado: %v", err)
+	}
+
+	l, err := OpenLedger(path)
+	if err != nil {
+		t.Fatalf("OpenLedger deveria migrar um banco legado sem erro: %v", err)
+	}
+	defer l.Close()
+
+	got, err := l.GetRun(context.Background(), "run-legacy")
+	if err != nil {
+		t.Fatalf("GetRun após migração: %v", err)
+	}
+	if got.State != domain.StateRecoveryRequired {
+		t.Fatalf("dado pré-existente deveria ser preservado, veio state=%s", got.State)
+	}
+	if got.RecoveryAcknowledged {
+		t.Fatal("a nova coluna deveria assumir o default (false) para uma linha pré-existente")
+	}
+	pending, err := l.HasUnresolvedRecoveryRequired(context.Background(), "inst-1")
+	if err != nil {
+		t.Fatalf("HasUnresolvedRecoveryRequired após migração: %v", err)
+	}
+	if !pending {
+		t.Fatal("deveria detectar o RECOVERY_REQUIRED pré-existente mesmo após migrar o schema")
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reabrir de novo (schema já migrado) nunca deve falhar com "duplicate column name".
+	l2, err := OpenLedger(path)
+	if err != nil {
+		t.Fatalf("reabrir um ledger já migrado deveria ser idempotente, veio: %v", err)
+	}
+	defer l2.Close()
+}
+
+// TestOpenLedger_ConcurrentMigration_NeverFailsWithDuplicateColumn: achado Codex P2 — dois
+// PROCESSOS abrindo o MESMO ledger legado ao mesmo tempo (ex. o agente e `updatectl` logo
+// depois de um upgrade do próprio binário) podiam ambos observar a coluna ausente antes de
+// qualquer um rodar o ALTER — o primeiro tinha sucesso, o segundo falhava com "duplicate
+// column name". A migração agora corre dentro de uma transação (serializada pelo próprio
+// lock do SQLite via `_txlock=immediate`), então NENHUMA das N aberturas concorrentes deve
+// falhar.
+func TestOpenLedger_ConcurrentMigration_NeverFailsWithDuplicateColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-concurrent.db")
+	legacyDB, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("abrir banco legado: %v", err)
+	}
+	const legacySchema = `
+	CREATE TABLE update_runs (
+	  run_id          TEXT PRIMARY KEY,
+	  installation_id TEXT NOT NULL,
+	  idempotency_key TEXT NOT NULL,
+	  state           TEXT NOT NULL,
+	  fencing_token   INTEGER NOT NULL,
+	  manifest_json   TEXT NOT NULL,
+	  created_at      TEXT NOT NULL,
+	  updated_at      TEXT NOT NULL,
+	  UNIQUE(installation_id, idempotency_key)
+	);`
+	if _, err := legacyDB.Exec(legacySchema); err != nil {
+		t.Fatalf("criar schema legado: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("fechar banco legado: %v", err)
+	}
+
+	const n = 8
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l, err := OpenLedger(path)
+			if err != nil {
+				errs <- err
+				return
+			}
+			errs <- l.Close()
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("OpenLedger concorrente nunca deveria falhar com coluna duplicada ou qualquer outro erro: %v", err)
+		}
 	}
 }

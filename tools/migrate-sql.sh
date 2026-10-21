@@ -28,6 +28,10 @@
 #   MIGRATIONS_DIR      default /migrations
 #   BASELINE_UP_TO      version prefix (e.g. 000027): mark every migration <= it as applied WITHOUT
 #                       running it. Use once to adopt a database whose schema was applied by hand.
+#   MIGRATE_TARGET      version prefix (e.g. 000172): `up` stops BEFORE applying any pending
+#                       migration whose prefix is greater than this — used by the Update Agent
+#                       (F5) to never apply more than the release manifest's declared
+#                       migrations.target, even if migrations/ already has newer files on disk.
 #   APP_DB_PASSWORD     if set, sets the password of the application role omnira_app after migrating
 #                       (migration 000006 creates it with the development password "omnira_app").
 #   OMNIRA_SESSION_CTX_KEY  ADR-0042: hex key (>= 64 hex characters) the application signs its session contexts with; installed in the database after migrating
@@ -171,6 +175,17 @@ EOF
     for f in $(ls "$DIR"/*.up.sql | sort); do
       v=$(basename "$f" .up.sql)
       applied "$v" && continue
+      # MIGRATE_TARGET (achado Codex, F5): sem isto, `up` aplica TODO *.up.sql pendente no
+      # diretório, mesmo que a release selecionada só tenha aprovado/testado até
+      # manifest.migrations.target. Um diretório de migrations com arquivos mais novos que o
+      # alvo desta release (ex. uma rolagem para uma versão mais antiga) seria migrado além
+      # do que essa release de fato declara suportar. O loop varre em ordem crescente
+      # (`sort` sobre prefixos numéricos com zero-padding) — ao encontrar o primeiro arquivo
+      # ACIMA do alvo, nenhum arquivo seguinte pode estar dentro do alvo: break é seguro e
+      # para o `echo "applying"` de aparecer para algo que nunca será de fato aplicado.
+      if [ -n "${MIGRATE_TARGET:-}" ] && [ "$(prefix "$f")" \> "$MIGRATE_TARGET" ]; then
+        break
+      fi
       sum=$(sha256 <"$f")
       if [ -n "${BASELINE_UP_TO:-}" ] && [ "$(prefix "$f")" \< "$BASELINE_UP_TO" -o "$(prefix "$f")" = "$BASELINE_UP_TO" ]; then
         # This writes a ledger row for the first time (it did not exist before this command),

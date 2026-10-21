@@ -79,6 +79,11 @@ type fakeRunner struct {
 	calls  []string
 	fail   map[string]error  // "docker <primeiro-arg>" -> erro a devolver
 	stdout map[string]string // "docker <primeiro-arg>" -> stdout de sucesso a devolver
+	// stdoutByFormat diferencia por um FRAGMENTO do --format pedido — necessário quando o
+	// mesmo subcomando ("docker inspect") é usado com formatos diferentes no mesmo teste (ex.
+	// CurrentSnapshot pede {{.Config.Image}}, WaitHealthy pede {{.State.Running}}|...); checado
+	// ANTES do fallback por primeira palavra em `stdout`.
+	stdoutByFormat map[string]string
 }
 
 func (f *fakeRunner) run(_ context.Context, name string, args ...string) (string, string, error) {
@@ -89,6 +94,12 @@ func (f *fakeRunner) run(_ context.Context, name string, args ...string) (string
 	f.calls = append(f.calls, strings.Join(append([]string{name}, args...), " "))
 	if err, ok := f.fail[key]; ok {
 		return "", "simulated failure", err
+	}
+	full := strings.Join(args, " ")
+	for fragment, out := range f.stdoutByFormat {
+		if strings.Contains(full, fragment) {
+			return out, "", nil
+		}
 	}
 	return f.stdout[key], "", nil
 }

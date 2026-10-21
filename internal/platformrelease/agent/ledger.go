@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -47,14 +48,15 @@ CREATE TABLE IF NOT EXISTS agent_lock (
 );
 
 CREATE TABLE IF NOT EXISTS update_runs (
-  run_id          TEXT PRIMARY KEY,
-  installation_id TEXT NOT NULL,
-  idempotency_key TEXT NOT NULL,
-  state           TEXT NOT NULL,
-  fencing_token   INTEGER NOT NULL,
-  manifest_json   TEXT NOT NULL,
-  created_at      TEXT NOT NULL,
-  updated_at      TEXT NOT NULL,
+  run_id                TEXT PRIMARY KEY,
+  installation_id       TEXT NOT NULL,
+  idempotency_key       TEXT NOT NULL,
+  state                 TEXT NOT NULL,
+  fencing_token         INTEGER NOT NULL,
+  manifest_json         TEXT NOT NULL,
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL,
+  recovery_acknowledged INTEGER NOT NULL DEFAULT 0,
   UNIQUE(installation_id, idempotency_key)
 );
 
@@ -99,11 +101,123 @@ func OpenLedger(path string) (*Ledger, error) {
 	// (goroutines internas, nunca um pool grande) — limitar evita que o SQLite veja mais
 	// conexões simultâneas do que realmente precisa.
 	db.SetMaxOpenConns(4)
-	if _, err := db.Exec(schemaSQL); err != nil {
+	// Achado Codex P2: db.Exec(schemaSQL) FORA de uma transação explícita não se beneficiava
+	// da mesma serialização via _txlock=immediate que addColumnIfMissing usa — N processos
+	// abrindo o MESMO arquivo legado ao mesmo tempo (o cenário real exercitado por
+	// TestOpenLedger_ConcurrentMigration_NeverFailsWithDuplicateColumn) podiam colidir aqui
+	// com SQLITE_BUSY de forma intermitente (reproduzido: ~2 em 10 execuções), tornando
+	// OpenLedger não-determinístico sob concorrência real. Envolver a criação do schema
+	// inicial na MESMA disciplina de transação explícita elimina essa janela.
+	if err := retryOnBusy(func() error { return createSchema(db) }); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("agent: criar schema do ledger: %w", err)
 	}
+	if err := retryOnBusy(func() error { return migrateSchema(db) }); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("agent: migrar schema do ledger: %w", err)
+	}
 	return &Ledger{db: db}, nil
+}
+
+// retryOnBusy repete `fn` algumas vezes com um pequeno atraso quando o erro é um SQLITE_BUSY —
+// achado Codex P2: mesmo dentro de uma transação explícita (_txlock=immediate deveria
+// serializar isso via busy_timeout), N PROCESSOS abrindo e inicializando pela PRIMEIRA vez o
+// MESMO arquivo .db concorrentemente ainda reproduziam "database is locked (5)"
+// ocasionalmente (~1 em 10 execuções mesmo após a transação) — aparenta ser uma janela na
+// própria ABERTURA/criação dos arquivos .db-wal/.db-shm auxiliares, anterior a qualquer
+// PRAGMA busy_timeout já surtir efeito, não uma contenção normal de transação. Isto só
+// acontece na INICIALIZAÇÃO do ledger (createSchema/migrateSchema), nunca durante operação
+// normal — ambas as operações são idempotentes e totalmente seguras de repetir.
+func retryOnBusy(fn func() error) error {
+	const attempts = 20
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		lastErr = fn()
+		if lastErr == nil {
+			return nil
+		}
+		if !strings.Contains(lastErr.Error(), "SQLITE_BUSY") && !strings.Contains(lastErr.Error(), "database is locked") {
+			return lastErr
+		}
+		time.Sleep(time.Duration(10*(i+1)) * time.Millisecond)
+	}
+	return lastErr
+}
+
+func createSchema(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("iniciar transação de criação de schema: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(schemaSQL); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// migrateSchema aplica, de forma idempotente, as colunas acrescentadas DEPOIS da criação
+// original de uma tabela — achado Codex P1: `CREATE TABLE IF NOT EXISTS` nunca altera uma
+// tabela que já existe, então um ledger criado por uma versão anterior do agente (o caso
+// normal em produção: o binário é atualizado, mas o arquivo .db no disco é o mesmo) ficaria
+// sem `recovery_acknowledged` — toda query que a referencia falharia com "no such column",
+// quebrando reconciliação e leitura de runs logo depois de um upgrade do PRÓPRIO agente.
+// `addColumnIfMissing` consulta o schema real via PRAGMA table_info antes de alterar, nunca
+// tenta um ALTER TABLE ADD COLUMN "às cegas" (SQLite recusaria com "duplicate column name" se
+// a coluna já existisse — o que aconteceria em TODA abertura de um ledger já migrado).
+func migrateSchema(db *sql.DB) error {
+	return addColumnIfMissing(db, "update_runs", "recovery_acknowledged", "INTEGER NOT NULL DEFAULT 0")
+}
+
+// addColumnIfMissing inspeciona e, se necessário, altera o schema DENTRO DE UMA TRANSAÇÃO —
+// achado Codex P2: a versão anterior fazia a leitura (PRAGMA table_info) e a escrita (ALTER
+// TABLE) como duas operações soltas no *sql.DB; dois PROCESSOS abrindo o mesmo ledger legado
+// ao mesmo tempo (ex. o agente e `updatectl` no primeiro boot depois de um upgrade do próprio
+// binário) podiam ambos ver a coluna ausente antes de qualquer um rodar o ALTER — o primeiro
+// tinha sucesso, o segundo falhava com "duplicate column name", fazendo OpenLedger recusar um
+// banco que na verdade JÁ estava migrado corretamente. A transação IMMEDIATE (DSN
+// `_txlock=immediate`, ver OpenLedger) serializa com qualquer outra transação concorrente via
+// o próprio lock do SQLite — o segundo processo espera (busy_timeout) a transação do primeiro
+// COMMITAR e então vê a coluna já presente, nunca tenta o ALTER duplicado.
+func addColumnIfMissing(db *sql.DB, table, column, ddl string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("iniciar transação de migração de schema: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("inspecionar schema de %s: %w", table, err)
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("ler coluna de %s: %w", table, err)
+		}
+		if name == column {
+			found = true
+			break
+		}
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return fmt.Errorf("iterar colunas de %s: %w", table, rowsErr)
+	}
+	if found {
+		return nil // já migrado, nada a fazer — nem o ALTER precisa rodar
+	}
+	if _, err := tx.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, ddl)); err != nil {
+		return fmt.Errorf("adicionar coluna %s.%s: %w", table, column, err)
+	}
+	return tx.Commit()
 }
 
 func (l *Ledger) Close() error { return l.db.Close() }
@@ -263,6 +377,14 @@ type RunRecord struct {
 	ManifestJSON   string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	// RecoveryAcknowledged: true só depois de AcknowledgeRecovery — um operador confirmou,
+	// fora de banda (updatectl, runbook), que investigou um RECOVERY_REQUIRED e a instalação
+	// está segura para seguir recebendo novos runs. Achado Codex: sem isto, o bloqueio de
+	// "não processar mais runs desta instalação" só durava a chamada de Reconcile em que o
+	// RECOVERY_REQUIRED aconteceu — a PRÓXIMA chamada já não veria mais esse run (terminal,
+	// fora de ActiveRuns) e seguiria para runs novos sem nenhuma intervenção manual ter
+	// ocorrido de verdade.
+	RecoveryAcknowledged bool
 }
 
 // CreateRun cria um novo run OU, se já existe um com a mesma (installation_id,
@@ -281,17 +403,19 @@ func (l *Ledger) CreateRun(ctx context.Context, h *LockHandle, runID, idempotenc
 
 	var existing RunRecord
 	var state, createdAt, updatedAt string
+	var recoveryAck int
 	err = tx.QueryRowContext(ctx,
-		`SELECT run_id, state, fencing_token, manifest_json, created_at, updated_at FROM update_runs
+		`SELECT run_id, state, fencing_token, manifest_json, created_at, updated_at, recovery_acknowledged FROM update_runs
 		 WHERE installation_id = ? AND idempotency_key = ?`,
 		h.InstallationID, idempotencyKey,
-	).Scan(&existing.RunID, &state, &existing.FencingToken, &existing.ManifestJSON, &createdAt, &updatedAt)
+	).Scan(&existing.RunID, &state, &existing.FencingToken, &existing.ManifestJSON, &createdAt, &updatedAt, &recoveryAck)
 	if err == nil {
 		existing.InstallationID = h.InstallationID
 		existing.IdempotencyKey = idempotencyKey
 		existing.State = domain.RunState(state)
 		existing.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 		existing.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		existing.RecoveryAcknowledged = recoveryAck != 0
 		return &existing, nil // dedup: run já existe, nunca duplicar
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -358,10 +482,11 @@ func (l *Ledger) TransitionRun(ctx context.Context, h *LockHandle, runID string,
 func (l *Ledger) GetRun(ctx context.Context, runID string) (*RunRecord, error) {
 	var r RunRecord
 	var state, createdAt, updatedAt string
+	var recoveryAck int
 	err := l.db.QueryRowContext(ctx,
-		`SELECT run_id, installation_id, idempotency_key, state, fencing_token, manifest_json, created_at, updated_at
+		`SELECT run_id, installation_id, idempotency_key, state, fencing_token, manifest_json, created_at, updated_at, recovery_acknowledged
 		 FROM update_runs WHERE run_id = ?`, runID,
-	).Scan(&r.RunID, &r.InstallationID, &r.IdempotencyKey, &state, &r.FencingToken, &r.ManifestJSON, &createdAt, &updatedAt)
+	).Scan(&r.RunID, &r.InstallationID, &r.IdempotencyKey, &state, &r.FencingToken, &r.ManifestJSON, &createdAt, &updatedAt, &recoveryAck)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("agent: run %s não encontrado", runID)
@@ -371,14 +496,71 @@ func (l *Ledger) GetRun(ctx context.Context, runID string) (*RunRecord, error) {
 	r.State = domain.RunState(state)
 	r.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	r.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	r.RecoveryAcknowledged = recoveryAck != 0
 	return &r, nil
+}
+
+// HasUnresolvedRecoveryRequired reporta se ALGUM run desta instalação está em
+// RECOVERY_REQUIRED sem um AcknowledgeRecovery correspondente — achado Codex P1: o gate que
+// impede novos runs de avançar enquanto uma instalação tem uma recuperação pendente precisa
+// sobreviver a uma reconciliação subsequente (um novo processo do agente, ou a mesma chamada
+// de Reconcile em outro ciclo), não só ao loop atual. RECOVERY_REQUIRED é terminal
+// (domain.IsTerminal), então ActiveRuns por si só NUNCA mostraria este run de novo — este é o
+// único lugar que ainda sabe que ele existe e não foi resolvido.
+func (l *Ledger) HasUnresolvedRecoveryRequired(ctx context.Context, installationID string) (bool, error) {
+	var n int
+	err := l.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM update_runs WHERE installation_id = ? AND state = ? AND recovery_acknowledged = 0`,
+		installationID, string(domain.StateRecoveryRequired),
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("agent: verificar recuperação pendente: %w", err)
+	}
+	return n > 0, nil
+}
+
+// AcknowledgeRecovery marca um run RECOVERY_REQUIRED como resolvido fora de banda — a única
+// forma de destravar novos runs da mesma instalação depois disso (ver
+// HasUnresolvedRecoveryRequired). Nunca automático: só um operador confirmando via
+// `updatectl`/runbook que investigou, restaurou e verificou os dados chama isto. Exige que o
+// run exista, pertença à instalação do handle e esteja de fato em RECOVERY_REQUIRED — nunca
+// "reconhece" um run em qualquer outro estado (preveniria usar isto como um atalho para
+// destravar algo que nunca foi sinalizado).
+func (l *Ledger) AcknowledgeRecovery(ctx context.Context, h *LockHandle, runID string) error {
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("agent: iniciar transação de reconhecimento de recuperação: %w", err)
+	}
+	defer tx.Rollback()
+	if err := checkFencing(ctx, tx, h); err != nil {
+		return err
+	}
+	var state string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT state FROM update_runs WHERE run_id = ? AND installation_id = ?`, runID, h.InstallationID,
+	).Scan(&state); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("agent: run %s não encontrado para a instalação %s", runID, h.InstallationID)
+		}
+		return fmt.Errorf("agent: ler estado do run antes de reconhecer recuperação: %w", err)
+	}
+	if domain.RunState(state) != domain.StateRecoveryRequired {
+		return fmt.Errorf("agent: run %s não está em RECOVERY_REQUIRED (estado atual: %s) — nada para reconhecer", runID, state)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE update_runs SET recovery_acknowledged = 1, updated_at = ? WHERE run_id = ? AND installation_id = ?`,
+		nowRFC3339(), runID, h.InstallationID,
+	); err != nil {
+		return fmt.Errorf("agent: gravar reconhecimento de recuperação: %w", err)
+	}
+	return tx.Commit()
 }
 
 // ActiveRuns lista os runs de uma instalação cujo estado NÃO é terminal — é isto que a
 // reconciliação pós-crash do agente consulta ao iniciar (especificação §6.1).
 func (l *Ledger) ActiveRuns(ctx context.Context, installationID string) ([]RunRecord, error) {
 	rows, err := l.db.QueryContext(ctx,
-		`SELECT run_id, installation_id, idempotency_key, state, fencing_token, manifest_json, created_at, updated_at
+		`SELECT run_id, installation_id, idempotency_key, state, fencing_token, manifest_json, created_at, updated_at, recovery_acknowledged
 		 FROM update_runs WHERE installation_id = ? ORDER BY created_at ASC`, installationID,
 	)
 	if err != nil {
@@ -389,12 +571,14 @@ func (l *Ledger) ActiveRuns(ctx context.Context, installationID string) ([]RunRe
 	for rows.Next() {
 		var r RunRecord
 		var state, createdAt, updatedAt string
-		if err := rows.Scan(&r.RunID, &r.InstallationID, &r.IdempotencyKey, &state, &r.FencingToken, &r.ManifestJSON, &createdAt, &updatedAt); err != nil {
+		var recoveryAck int
+		if err := rows.Scan(&r.RunID, &r.InstallationID, &r.IdempotencyKey, &state, &r.FencingToken, &r.ManifestJSON, &createdAt, &updatedAt, &recoveryAck); err != nil {
 			return nil, fmt.Errorf("agent: ler linha de run: %w", err)
 		}
 		r.State = domain.RunState(state)
 		r.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 		r.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		r.RecoveryAcknowledged = recoveryAck != 0
 		if !domain.IsTerminal(r.State) {
 			out = append(out, r)
 		}
