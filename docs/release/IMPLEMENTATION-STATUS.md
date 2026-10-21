@@ -777,9 +777,46 @@ Review Codex (evidência real): `codex exec review --uncommitted` executado repe
            separando `RequireDatabaseURL()`, chamada só por `start`-adjacent/`reconcile`/pelo
            daemon (que podem migrar), nunca por `rollback`.
     Todas as 10 primeiras rodadas desta etapa fecharam com fix→teste real→re-review antes da
-    próxima; a 14ª rodada confirmou nenhuma regressão adicional.
-Commits: 3f314b2 (ledger), 0133130 (compose), 7042b8b (reconcile); daemon/CLI/agentconfig desta
-  sessão aguardando o commit seguinte (ver git log da branch para o SHA final).
+    próxima; a 14ª rodada confirmou nenhuma regressão adicional e o resultado foi comitado
+    (382da93). Uma 15ª rodada (`codex exec review --commit 382da93`, revisando o commit já
+    fechado como confirmação adicional) encontrou mais 3 achados reais, todos no artefato
+    systemd/runner de backup (nunca afetam produção — o unit nunca é instalado — mas
+    tornariam a instalação documentada literalmente quebrada se um operador a seguisse ao
+    pé da letra):
+       13. [P2] Os defaults de `--ledger-path`/`--compose-override-dir`
+           (`/var/lib/omnira-agent/...`) não batiam com `StateDirectory=omnira-update-agent`
+           do unit systemd (que o systemd cria/possui como `/var/lib/omnira-update-agent`) —
+           instalado com o EnvironmentFile mínimo documentado, o daemon falharia ao abrir o
+           ledger. Corrigido alinhando os defaults ao nome real do binário/serviço.
+       14. [P2] Sob `--compose-sudo`/`UMask=0077` do unit, o backup real roda inteiramente
+           como root via sudo (que PRESERVA o umask do chamador, nunca reseta) — o dump
+           nasceria root:root 0700/0600, ilegível para o próprio agente sem privilégio
+           tentar ler depois via BackupVerifier. Corrigido isolando a mudança a um
+           subprocesso `sh -c 'umask 0027; exec "$@"'` (nunca ao processo do agente inteiro,
+           que teria uma corrida real contra a goroutine de heartbeat).
+       15. [P1] A correção do achado 14 (`sudo -g <gid do agente>`) SEM `-u` explícito NUNCA
+           eleva o UID — sudo -g troca só o GID efetivo, mantendo o UID do chamador
+           (confirmado ao testar: `sudo -n -g "#<gid>" id` devolve uid=<chamador>, não
+           uid=0) — quebrando inteiramente o propósito de `--compose-sudo`: o backup real
+           (`docker exec`) voltaria a rodar SEM privilégio e falharia antes de criar
+           qualquer dump. Corrigido com `-u root` explícito junto de `-g #<gid>`
+           (confirmado: `sudo -n -u root -g "#<gid>" id` devolve uid=0 gid=<gid do agente>
+           — as duas propriedades exigidas ao mesmo tempo). O teste do achado 14 não pegou
+           isso porque o script fake original nunca fazia nada que exigisse root — reescrito
+           para gravar o próprio `id -u` visto dentro do dump e falhar se não for 0.
+       16. [P2] O Dockerfile exportava os binários sob um `/out/` intermediário
+           (`FROM scratch AS export` + `COPY ... /out/<bin>`), enquanto o `ExecStart` do
+           unit e o comando de instalação documentado assumiam os binários direto na raiz
+           do diretório exportado — seguindo a instalação ao pé da letra, o systemd falharia
+           com EXEC até alguém mover os binários manualmente. Corrigido exportando direto na
+           raiz (`COPY ... /<bin>`); reconfirmado com um `docker build --target export -o
+           <dir> .` real: os binários aparecem em `<dir>/<bin>`, sem subdiretório.
+    Uma 16ª rodada (`--uncommitted`, após corrigir 13-16) confirmou que o achado 15 era real
+    e crítico; o fix do achado 15 foi testado e re-revisado numa 17ª rodada, que fechou com
+    "No actionable regressions were identified".
+Commits: 3f314b2 (ledger), 0133130 (compose), 7042b8b (reconcile), 382da93 (daemon/CLI/
+  agentconfig); os achados 13–16 (systemd/backup runner) aguardam o commit seguinte (ver git
+  log da branch para o SHA final).
 Pendências/risco:
   - BLOCKED_EXTERNAL (sem credenciais nesta sessão): verificação real de assinatura/proveniência
     (GHCR/Cosign, release/policies/signing.yaml) não existe — `domain.ParseManifest` valida só a

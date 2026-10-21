@@ -1137,6 +1137,62 @@ func TestExecBackupRunner_EnvSurvivesSudoEnvReset(t *testing.T) {
 	}
 }
 
+// TestExecBackupRunner_SudoBackup_RunsAsRootAndStaysReadableByCaller: achado Codex, duas
+// propriedades que tiveram que ser provadas JUNTAS, cada uma quebrando a outra se corrigida
+// isoladamente:
+//  1. [P2] sudo PRESERVA o umask do processo chamador (nunca o reseta); um daemon systemd
+//     com UMask restrito (0077, como docs/release/systemd/omnira-update-agent.service
+//     declara) fazia o script, rodando como root via sudo, criar o dump root:root 0700/0600
+//     — ilegível para o próprio agente (sem privilégio) tentar ler depois via
+//     BackupVerifier, mesmo o backup tendo sido criado com sucesso.
+//  2. [P1] a correção de (1) (sudo -g <gid do agente>) SEM -u explícito NUNCA eleva o UID —
+//     sudo -g troca só o GID efetivo, mantendo o UID do chamador (confirmado ao testar:
+//     `sudo -n -g "#<gid>" id` devolve uid=<chamador>) — quebrando inteiramente o propósito
+//     de --compose-sudo: o backup real (docker exec) voltaria a rodar SEM privilégio.
+//
+// Prova real: o script fake grava o PRÓPRIO `id -u` visto (prova que rodou como root, não
+// como o chamador) dentro do dump; simula o UMask do systemd (syscall.Umask real); e
+// confirma que o PRÓPRIO processo de teste — nunca com sudo — consegue listar o diretório E
+// ler esse conteúdo depois.
+func TestExecBackupRunner_SudoBackup_RunsAsRootAndStaysReadableByCaller(t *testing.T) {
+	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
+		t.Skip("sudo -n não disponível sem senha nesta máquina — pulando prova real de acesso pós-sudo")
+	}
+	old := syscall.Umask(0o077)
+	t.Cleanup(func() { syscall.Umask(old) })
+
+	backupDir := t.TempDir()
+	script := filepath.Join(t.TempDir(), "fake-backup.sh")
+	scriptContent := "#!/bin/sh\n" +
+		"dir=\"$BACKUP_DIR/$DB_NAME\"\n" +
+		"mkdir -p \"$dir\"\n" +
+		"id -u > \"$dir/${DB_NAME}_20260101T000000Z.dump\"\n" +
+		"echo backup ok\n"
+	if err := os.WriteFile(script, []byte(scriptContent), 0o755); err != nil {
+		t.Fatalf("escrever script fake: %v", err)
+	}
+	b := execBackupRunner{ScriptPath: script, BackupDir: backupDir, DBName: "omnira_perm_test", CmdPrefix: []string{"sudo", "-n"}}
+	t.Cleanup(func() { _ = exec.Command("sudo", "-n", "rm", "-rf", backupDir).Run() })
+
+	got, err := b.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run com sudo -n sob UMask restritivo: %v", err)
+	}
+
+	// Sem sudo a partir daqui — exatamente o que BackupVerifier faz de verdade.
+	dumpDir := filepath.Dir(got)
+	if _, err := os.ReadDir(dumpDir); err != nil {
+		t.Fatalf("o processo chamador (sem privilégio) não conseguiu listar %s criado via sudo: %v", dumpDir, err)
+	}
+	content, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatalf("o processo chamador (sem privilégio) não conseguiu ler %s criado via sudo: %v", got, err)
+	}
+	if strings.TrimSpace(string(content)) != "0" {
+		t.Fatalf("script deveria ter rodado como root (uid 0) via sudo -u root, viu uid=%s", strings.TrimSpace(string(content)))
+	}
+}
+
 // TestExecBackupRunner_RelativeBackupDir_ResolvesAgainstScriptRepoNotProcessCwd: achado Codex
 // P2 — scripts/backup-omnira-db.sh sempre faz `cd "$(dirname "$0")/.."` antes de resolver um
 // BACKUP_DIR relativo (seu próprio default documentado é "backups"); resolver isso relativo ao

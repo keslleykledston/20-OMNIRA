@@ -69,7 +69,13 @@ func FlagSet(fs *flag.FlagSet) *Config {
 		"ID da instalação que este agente gerencia (ADR-0054 §2.4: hoje só existe uma, mas nunca hardcoded)")
 	fs.StringVar(&c.Holder, "holder", envStr("OMNIRA_AGENT_HOLDER", defaultHolder()),
 		"identidade deste processo do agente no lock (default: hostname:pid)")
-	fs.StringVar(&c.LedgerPath, "ledger-path", envStr("OMNIRA_AGENT_LEDGER_PATH", "/var/lib/omnira-agent/ledger.db"),
+	// Achado Codex P2: o default aqui era /var/lib/omnira-agent/..., um nome DIFERENTE do
+	// StateDirectory=omnira-update-agent que docs/release/systemd/omnira-update-agent.service
+	// declara (systemd cria/possui /var/lib/omnira-update-agent, não /var/lib/omnira-agent) —
+	// instalado com o EnvironmentFile mínimo documentado, o daemon falhava ao abrir o ledger
+	// (OpenLedger não cria diretórios pai, e o usuário dedicado do serviço não tem permissão
+	// para criar outro diretório solto em /var/lib). Alinhado ao nome real do binário/serviço.
+	fs.StringVar(&c.LedgerPath, "ledger-path", envStr("OMNIRA_AGENT_LEDGER_PATH", "/var/lib/omnira-update-agent/ledger.db"),
 		"caminho do ledger SQLite local (ADR-0054 §2.3)")
 	fs.DurationVar(&c.Lease, "lease", envDuration("OMNIRA_AGENT_LEASE", 5*time.Minute),
 		"duração do lock da instalação por aquisição")
@@ -84,7 +90,7 @@ func FlagSet(fs *flag.FlagSet) *Config {
 		envStr("OMNIRA_AGENT_COMPOSE_BASE_FILES", "docker-compose.yml:docker-compose.override.yml"), ":"))
 	fs.Var(&c.ComposeBaseFiles, "compose-base-files",
 		"lista ORDENADA de compose files reais desta instalação, separados por ':' (nunca omitir o override machine-local)")
-	fs.StringVar(&c.ComposeOverrideDir, "compose-override-dir", envStr("OMNIRA_AGENT_COMPOSE_OVERRIDE_DIR", "/var/lib/omnira-agent/overrides"),
+	fs.StringVar(&c.ComposeOverrideDir, "compose-override-dir", envStr("OMNIRA_AGENT_COMPOSE_OVERRIDE_DIR", "/var/lib/omnira-update-agent/overrides"),
 		"diretório onde o agente escreve os overrides de digest gerados por release")
 	fs.StringVar(&c.ComposeProject, "compose-project", envStr("OMNIRA_AGENT_COMPOSE_PROJECT", "omnira"),
 		"nome do projeto Docker Compose desta instalação")

@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -323,9 +324,44 @@ func (b execBackupRunner) Run(ctx context.Context) (string, error) {
 	// na ordem de precedência) e só então anexar os autoritativos ao FINAL garante que eles
 	// sempre vençam, nunca o contrário.
 	envArgs := append(envWithoutKeys(b.Env, "BACKUP_DIR", "DB_NAME"), "BACKUP_DIR="+b.BackupDir, "DB_NAME="+b.DBName)
-	full := append(append([]string{}, b.CmdPrefix...), "env")
-	full = append(full, envArgs...)
-	full = append(full, "bash", b.ScriptPath)
+
+	// Achado Codex P2: sob sudo, scripts/backup-omnira-db.sh roda inteiramente como ROOT — e
+	// sudo, por padrão, PRESERVA o umask do processo chamador (nunca o reseta). Um daemon
+	// systemd com UMask restrito (ex. 0077, o hardening de
+	// docs/release/systemd/omnira-update-agent.service) faria o dump e seus metadados
+	// nascerem root:root 0700/0600 — ilegíveis para o próprio agente, que roda SEM
+	// privilégio, tentar enumerar/ler depois via BackupVerifier. Toda atualização falharia
+	// no backup mesmo com o dump criado com sucesso. Corrigido com dois ajustes isolados A
+	// ESTE subprocesso (nunca ao processo do agente inteiro — mudar o umask do processo pai
+	// seria uma condição de corrida real contra a goroutine de heartbeat, que também cria
+	// arquivos): (1) `sudo -n -g <gid do processo atual>` faz o root criar os arquivos com o
+	// GRUPO do próprio agente, não o grupo de root; (2) um `sh -c 'umask ...; exec "$@"'`
+	// torna o dump/metadados group-readable (0027 → rw-r----- / rwxr-x---), legíveis pelo
+	// grupo que acabamos de forçar em (1). Sem sudo no prefixo, isso é um no-op inofensivo
+	// (o processo já é o dono, 0027 ainda permite leitura/escrita ao dono).
+	cmdPrefix := append([]string{}, b.CmdPrefix...)
+	if len(cmdPrefix) > 0 {
+		// Achado Codex P1: sudo -g SEM -u explícito NUNCA eleva o UID — só troca o GID
+		// efetivo, mantendo o UID do próprio chamador (confirmado ao testar:
+		// `sudo -n -g "#<gid>" id` devolve uid=<chamador>, não uid=0). Isso quebrava
+		// inteiramente o propósito de --compose-sudo: o backup real (docker exec) voltaria
+		// a rodar SEM privilégio e falharia antes de criar qualquer dump, bloqueando toda
+		// atualização. "-u root" explícito restaura a elevação; combinado com "-g #<gid>"
+		// (confirmado: `sudo -n -u root -g "#<gid>" id` devolve uid=0 gid=<chamador>) dá as
+		// DUAS propriedades exigidas ao mesmo tempo — root para o Docker socket, o grupo do
+		// agente para o verificador sem privilégio conseguir ler o resultado depois.
+		//
+		// Achado real ao testar: sudo -g SEM o prefixo "#" trata o argumento como NOME de
+		// grupo, procurando por um grupo chamado literalmente "1002" em /etc/group — e
+		// falha com "group '1002' not found" mesmo o GID 1002 existindo de verdade. "#gid"
+		// é a forma documentada do sudo para especificar um GID numérico diretamente, sem
+		// depender de esse GID ter um nome resolvível.
+		cmdPrefix = append(cmdPrefix, "-u", "root", "-g", "#"+strconv.Itoa(os.Getgid()))
+	}
+	inner := append([]string{"env"}, envArgs...)
+	inner = append(inner, "bash", b.ScriptPath)
+	full := append(cmdPrefix, "sh", "-c", `umask 0027; exec "$@"`, "sh")
+	full = append(full, inner...)
 	c := exec.CommandContext(ctx, full[0], full[1:]...)
 	killOnCancel(c)
 	// Base do ambiente do PRÓPRIO processo chamador (PATH, credenciais de rclone já

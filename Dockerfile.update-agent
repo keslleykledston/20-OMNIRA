@@ -48,9 +48,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -o /build/omnira-updatectl \
   ./apps/updatectl/cmd/omnira-updatectl
 
-# Stage de export: só os dois binários, para extração via `docker build --target export -o
-# <dir>` (BuildKit) ou `docker create <image> && docker cp <cid>:/out/. <dir>` — nunca um
-# `ENTRYPOINT`/`CMD` aqui, porque esta imagem nunca é executada como container.
+# Stage de export: só os dois binários, direto na raiz do filesystem exportado (achado
+# Codex P2: um `/out/` intermediário aqui fazia `docker build --target export -o <dir> .`
+# produzir <dir>/out/<binário>, não <dir>/<binário> como o ExecStart do unit systemd
+# documentava — corrigido para que o comando de instalação documentado abaixo funcione
+# literalmente). Extração via `docker build --target export -o <dir> .` (BuildKit) ou
+# `docker create <image> && docker cp <cid>:/. <dir>` — nunca um `ENTRYPOINT`/`CMD` aqui,
+# porque esta imagem nunca é executada como container.
 FROM scratch AS export
-COPY --from=builder /build/omnira-update-agent /out/omnira-update-agent
-COPY --from=builder /build/omnira-updatectl /out/omnira-updatectl
+COPY --from=builder /build/omnira-update-agent /omnira-update-agent
+COPY --from=builder /build/omnira-updatectl /omnira-updatectl
