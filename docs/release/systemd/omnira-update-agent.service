@@ -1,0 +1,90 @@
+# Artefato systemd versionado do Update Agent (F5, ADR-0054 §2.1/§2.4, especificação
+# docs/release/spec/OMNIRA_RELEASE_ENGINEERING_PACOTE_EXECUCAO.md §6.1 "Agente independente:
+# processo/serviço no host administrado por systemd ou supervisor equivalente").
+#
+# IMPORTANTE — NUNCA instalado automaticamente por esta sessão. Nenhuma automação deste
+# programa copia este arquivo para /etc/systemd/system/, roda `systemctl enable/start`, cria o
+# usuário/grupo dedicado, ou configura sudoers — tudo isso é uma decisão explícita do
+# operador humano, fora do escopo de código deste release engineering. Este arquivo é só o
+# ARTEFATO, revisado e versionado, pronto para quando essa autorização existir.
+#
+# Pré-condições operacionais (a aplicar manualmente, nunca por este programa):
+#   1. Usuário/grupo de serviço dedicado, SEM privilégio de root direto e SEM pertencer ao
+#      grupo `docker` (que equivale a root sobre o host via o socket Docker):
+#        useradd --system --no-create-home --shell /usr/sbin/nologin omnira-update-agent
+#   2. Binários extraídos do build reproduzível (Dockerfile.update-agent, stage `export`):
+#        docker build -f Dockerfile.update-agent --target export -o /opt/omnira/update-agent/bin .
+#      Nunca compilados ad-hoc no host de produção — o artefato Docker É a prova de build
+#      reproduzível (docs/deployment/DOCKER-FIRST.md).
+#   3. Ledger local (SQLite, ADR-0054 §2.3) em diretório próprio do serviço, nunca dentro do
+#      checkout do repositório (StateDirectory abaixo cuida disso).
+#   4. EnvironmentFile em /etc/omnira/update-agent.env (root:omnira-update-agent, modo 0640) —
+#      NUNCA no ExecStart/linha de comando, que fica visível via `ps aux` para qualquer
+#      usuário do host. Conteúdo mínimo (ver internal/platformrelease/agentconfig/config.go
+#      para a lista completa de OMNIRA_AGENT_*):
+#        OMNIRA_AGENT_INSTALLATION_ID=<id real da instalação>
+#        OMNIRA_AGENT_DATABASE_URL=postgres://<schema owner, nunca omnira_app>@...
+#        OMNIRA_AGENT_COMPOSE_BASE_FILES=docker-compose.yml:docker-compose.prod.yml
+#        OMNIRA_AGENT_COMPOSE_SUDO=true
+#   5. sudoers restrito (NUNCA grupo `docker` — ver NoNewPrivileges abaixo sobre por que este
+#      unit não pode usar o hardening de sandbox mais estrito do projeto, ex.
+#      deploy/whisper/omnira-whisper.service):
+#      /etc/sudoers.d/omnira-update-agent, validado com `visudo -cf`, restrito aos comandos
+#      EXATOS que tools/migrate-sql.sh e scripts/backup-omnira-db.sh de fato invocam (docker
+#      compose, docker exec/ps do container Postgres) — nunca `ALL=(ALL) NOPASSWD: ALL`.
+#
+# Por que este unit NÃO usa NoNewPrivileges=yes (diferente de deploy/whisper/*.service): o
+# próprio design do agente (achado Codex, internal/platformrelease/agent/reconcile.go) invoca
+# `sudo -n` como subprocesso para elevar privilégio SÓ nas chamadas de Compose/backup que
+# precisam do socket Docker — NoNewPrivileges bloquearia exatamente esse exec setuid,
+# quebrando o mecanismo de menor-privilégio que o --compose-sudo foi desenhado para fornecer.
+
+[Unit]
+Description=OMNIRA Update Agent (F5, ADR-0054) — reconciliação de releases via Reconcile/Execute
+Documentation=file:///opt/omnira/20-OMNIRA/docs/adr/0054-platform-release-update-engine.md
+Documentation=file:///opt/omnira/20-OMNIRA/docs/release/spec/OMNIRA_RELEASE_ENGINEERING_PACOTE_EXECUCAO.md
+After=network.target docker.service
+Wants=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=omnira-update-agent
+Group=omnira-update-agent
+WorkingDirectory=/opt/omnira/20-OMNIRA
+
+# Toda configuração (incluindo DATABASE_URL) vem daqui — nunca em argumentos de ExecStart, que
+# `ps aux`/`/proc/<pid>/cmdline` exporiam a qualquer usuário do host.
+EnvironmentFile=/etc/omnira/update-agent.env
+
+ExecStart=/opt/omnira/update-agent/bin/omnira-update-agent
+
+Restart=on-failure
+RestartSec=5
+
+# Ledger SQLite e qualquer estado local do agente — isolado do checkout do repositório, nunca
+# misturado com o código-fonte.
+StateDirectory=omnira-update-agent
+StateDirectoryMode=0700
+
+# --- hardening básico, compatível com sudo -n (ver nota acima sobre NoNewPrivileges) ---
+UMask=0077
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryMax=1G
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

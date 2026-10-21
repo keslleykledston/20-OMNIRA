@@ -559,6 +559,25 @@ func (l *Ledger) AcknowledgeRecovery(ctx context.Context, h *LockHandle, runID s
 // ActiveRuns lista os runs de uma instalação cujo estado NÃO é terminal — é isto que a
 // reconciliação pós-crash do agente consulta ao iniciar (especificação §6.1).
 func (l *Ledger) ActiveRuns(ctx context.Context, installationID string) ([]RunRecord, error) {
+	all, err := l.AllRuns(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+	var out []RunRecord
+	for _, r := range all {
+		if !domain.IsTerminal(r.State) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// AllRuns lista TODOS os runs de uma instalação, inclusive os terminais (SUCCEEDED,
+// ROLLED_BACK, RECOVERY_REQUIRED, CANCELLED, BLOCKED) — usado por `updatectl status` (dar ao
+// operador o histórico completo, não só o que ainda está em andamento) e por `updatectl
+// rollback` (achar o snapshot do run anterior mais recente, mesmo que ele já tenha
+// terminado). ActiveRuns é um filtro sobre isto, nunca uma query separada.
+func (l *Ledger) AllRuns(ctx context.Context, installationID string) ([]RunRecord, error) {
 	rows, err := l.db.QueryContext(ctx,
 		`SELECT run_id, installation_id, idempotency_key, state, fencing_token, manifest_json, created_at, updated_at, recovery_acknowledged
 		 FROM update_runs WHERE installation_id = ? ORDER BY created_at ASC`, installationID,
@@ -579,9 +598,7 @@ func (l *Ledger) ActiveRuns(ctx context.Context, installationID string) ([]RunRe
 		r.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 		r.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 		r.RecoveryAcknowledged = recoveryAck != 0
-		if !domain.IsTerminal(r.State) {
-			out = append(out, r)
-		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

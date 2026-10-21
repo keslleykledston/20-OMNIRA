@@ -1063,6 +1063,80 @@ func TestExecBackupRunner_PassesBackupDirAndDBNameToScript(t *testing.T) {
 	}
 }
 
+// TestExecBackupRunner_BackupDirAndDBNameAlwaysWinOverExtraEnv: achado Codex P2 — `env` usa
+// a ÚLTIMA atribuição de cada variável quando há duplicatas; se b.Env TAMBÉM contivesse um
+// BACKUP_DIR/DB_NAME (configuração extra colidindo por acidente), eles NUNCA podem vencer
+// sobre os valores derivados de b.BackupDir/b.DBName — são os MESMOS que
+// resolvedBackupDBDir usa para procurar o dump depois; se o script escrevesse no lugar
+// "errado" de b.Env, um backup bem-sucedido pareceria "sem dump encontrado".
+func TestExecBackupRunner_BackupDirAndDBNameAlwaysWinOverExtraEnv(t *testing.T) {
+	correctDir := t.TempDir()
+	wrongDir := t.TempDir()
+	script := filepath.Join(t.TempDir(), "fake-backup.sh")
+	scriptContent := "#!/bin/sh\n" +
+		"dir=\"$BACKUP_DIR/$DB_NAME\"\n" +
+		"mkdir -p \"$dir\"\n" +
+		"echo conteudo > \"$dir/${DB_NAME}_20260101T000000Z.dump\"\n" +
+		"echo backup ok\n"
+	if err := os.WriteFile(script, []byte(scriptContent), 0o755); err != nil {
+		t.Fatalf("escrever script fake: %v", err)
+	}
+	b := execBackupRunner{
+		ScriptPath: script,
+		BackupDir:  correctDir,
+		DBName:     "correct_db",
+		// Simula uma colisão: b.Env tenta impor outro BACKUP_DIR/DB_NAME — nunca deve
+		// vencer sobre os campos autoritativos acima.
+		Env: []string{"BACKUP_DIR=" + wrongDir, "DB_NAME=wrong_db"},
+	}
+	got, err := b.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := filepath.Join(correctDir, "correct_db", "correct_db_20260101T000000Z.dump")
+	if got != want {
+		t.Fatalf("esperava %s (BackupDir/DBName autoritativos), veio %s (b.Env venceu por engano)", want, got)
+	}
+}
+
+// TestExecBackupRunner_EnvSurvivesSudoEnvReset: achado Codex P1 — scripts/backup-omnira-db.sh
+// usa `docker ps`/`docker exec` de verdade (precisa do MESMO acesso privilegiado que o
+// ComposeAdapter), mas CmdPrefix=["sudo","-n"] sob a política padrão `env_reset` do sudo
+// DESCARTA o ambiente herdado do processo chamador — setar c.Env não sobreviveria a essa
+// fronteira. Prova REAL (sudo de verdade, nunca simulado): BACKUP_DIR/DB_NAME continuam
+// chegando ao script mesmo com sudo no meio, porque são transportados como ARGUMENTOS do
+// comando `env`, não como ambiente herdado.
+func TestExecBackupRunner_EnvSurvivesSudoEnvReset(t *testing.T) {
+	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
+		t.Skip("sudo -n não disponível sem senha nesta máquina — pulando prova real de env_reset")
+	}
+	backupDir := t.TempDir()
+	script := filepath.Join(t.TempDir(), "fake-backup.sh")
+	scriptContent := "#!/bin/sh\n" +
+		"[ -n \"$BACKUP_DIR\" ] || { echo 'BACKUP_DIR não chegou ao script' >&2; exit 1; }\n" +
+		"[ -n \"$DB_NAME\" ] || { echo 'DB_NAME não chegou ao script' >&2; exit 1; }\n" +
+		"dir=\"$BACKUP_DIR/$DB_NAME\"\n" +
+		"mkdir -p \"$dir\"\n" +
+		"echo conteudo > \"$dir/${DB_NAME}_20260101T000000Z.dump\"\n" +
+		"echo backup ok\n"
+	if err := os.WriteFile(script, []byte(scriptContent), 0o755); err != nil {
+		t.Fatalf("escrever script fake: %v", err)
+	}
+	b := execBackupRunner{ScriptPath: script, BackupDir: backupDir, DBName: "omnira_sudo_test", CmdPrefix: []string{"sudo", "-n"}}
+	// O script roda como root (via sudo) e cria arquivos ali — t.TempDir() não consegue
+	// removê-los depois sem privilégio. Limpa com sudo ANTES do cleanup padrão (defers de
+	// t.Cleanup correm em LIFO: registrado DEPOIS de t.TempDir(), este roda PRIMEIRO).
+	t.Cleanup(func() { _ = exec.Command("sudo", "-n", "rm", "-rf", backupDir).Run() })
+	got, err := b.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run com sudo -n: %v", err)
+	}
+	want := filepath.Join(backupDir, "omnira_sudo_test", "omnira_sudo_test_20260101T000000Z.dump")
+	if got != want {
+		t.Fatalf("esperava %s, veio %s", want, got)
+	}
+}
+
 // TestExecBackupRunner_RelativeBackupDir_ResolvesAgainstScriptRepoNotProcessCwd: achado Codex
 // P2 — scripts/backup-omnira-db.sh sempre faz `cd "$(dirname "$0")/.."` antes de resolver um
 // BACKUP_DIR relativo (seu próprio default documentado é "backups"); resolver isso relativo ao

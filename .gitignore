@@ -34,3 +34,5 @@ backups/
 
 # a plain `go build ./apps/hubctl/...` drops the binary here
 /omnira-hubctl
+/omnira-update-agent
+/omnira-updatectl

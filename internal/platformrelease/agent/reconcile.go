@@ -67,6 +67,15 @@ type execMigrateRunner struct {
 	CmdPrefix     []string // ex. ["sudo","-n"] em ambiente de teste sem grupo docker
 }
 
+// NewMigrateRunner constrói o MigrateRunner real que invoca tools/migrate-sql.sh de verdade
+// — o tipo concreto (execMigrateRunner) nunca é exportado, porque nada fora deste pacote
+// precisa conhecer sua forma, só a interface. Usado pelo daemon (apps/update-agent) e pela
+// CLI (apps/updatectl), as únicas duas coisas fora dos testes deste pacote que de fato
+// executam migrations.
+func NewMigrateRunner(scriptPath, migrationsDir, databaseURL string, cmdPrefix ...string) MigrateRunner {
+	return execMigrateRunner{ScriptPath: scriptPath, MigrationsDir: migrationsDir, DatabaseURL: databaseURL, CmdPrefix: cmdPrefix}
+}
+
 // killOnCancel coloca `c` no líder de um NOVO grupo de processos do SO (Setpgid) e substitui
 // o cancelamento padrão de exec.CommandContext para matar o GRUPO INTEIRO, não só `c.Process`.
 // Achado Codex P1: o comportamento padrão de Cancel só envia o sinal ao processo DIRETO (aqui,
@@ -253,10 +262,18 @@ type BackupRunner interface {
 
 type execBackupRunner struct {
 	ScriptPath string
-	Env        []string // ex. PG_CONTAINER=..., DB_NAME=..., BACKUP_DIR=...
+	Env        []string // ex. PG_CONTAINER=..., PG_OWNER=... — nunca BACKUP_DIR/DB_NAME, sempre derivadas de BackupDir/DBName
 	CmdPrefix  []string
 	BackupDir  string // onde scripts/backup-omnira-db.sh escreve <db>_<timestamp>.dump/.meta.json
 	DBName     string
+}
+
+// NewBackupRunner constrói o BackupRunner real que invoca scripts/backup-omnira-db.sh de
+// verdade. extraEnv é para configuração ADICIONAL do script (ex. PG_CONTAINER, PG_OWNER,
+// RETENTION_DAYS) — nunca BACKUP_DIR/DB_NAME, que Run() já deriva de backupDir/dbName e
+// sempre sobrescreve (ver resolvedBackupDBDir/achado Codex sobre propagar esses dois campos).
+func NewBackupRunner(scriptPath, backupDir, dbName string, extraEnv []string, cmdPrefix ...string) BackupRunner {
+	return execBackupRunner{ScriptPath: scriptPath, BackupDir: backupDir, DBName: dbName, Env: extraEnv, CmdPrefix: cmdPrefix}
 }
 
 func (b execBackupRunner) Run(ctx context.Context) (string, error) {
@@ -281,22 +298,41 @@ func (b execBackupRunner) Run(ctx context.Context) (string, error) {
 		beforeSet[f] = true
 	}
 
-	full := append(append([]string{}, b.CmdPrefix...), "bash", b.ScriptPath)
+	// Achado Codex P1: scripts/backup-omnira-db.sh usa `docker ps`/`docker exec` de verdade
+	// (o Postgres roda DENTRO de um container; o dump é feito via `docker exec ... pg_dump`
+	// DENTRO dele) — precisa do MESMO acesso privilegiado ao socket Docker que o
+	// ComposeAdapter usa, nunca "fala com Postgres via TCP" como um comentário anterior
+	// erroneamente assumia. Mas CmdPrefix=["sudo","-n"] sob a política padrão `env_reset` do
+	// sudo DESCARTA todo o ambiente do processo chamador antes do script rodar — setar
+	// `c.Env` não ajudaria, porque o sudo nunca o propaga ao processo filho. A correção é
+	// transportar as variáveis necessárias (BACKUP_DIR/DB_NAME, sempre derivadas de
+	// b.BackupDir/b.DBName — nunca de um valor herdado que poderia divergir de
+	// resolvedBackupDBDir — mais qualquer b.Env configurado) como ARGUMENTOS do comando
+	// `env` (coreutils), que o sudo NUNCA filtra (são parte da linha de comando do processo
+	// que o próprio sudo invoca, não do ambiente herdado) — funciona igual bem com ou sem
+	// sudo no CmdPrefix.
+	// Achado real ao testar: nem todo `env` aceita "--" como separador antes do comando
+	// (ex. uutils coreutils, cada vez mais comum em distros novas, rejeita com "No such
+	// file or directory") — omitido com segurança aqui, já que o comando seguinte (`bash
+	// <script>`) nunca é ambíguo com um par VAR=VALUE.
+	// Achado Codex P2: se b.Env também contivesse um BACKUP_DIR/DB_NAME (ex. configuração
+	// extra, ou colisão acidental), `env` usa a ÚLTIMA atribuição de cada variável — colocar
+	// os valores AUTORITATIVOS (derivados de b.BackupDir/b.DBName, os MESMOS que
+	// resolvedBackupDBDir usa para procurar o dump depois) ANTES de b.Env, como a versão
+	// anterior fazia, deixava b.Env vencer por vir depois. Filtrar primeiro (nunca confiar
+	// na ordem de precedência) e só então anexar os autoritativos ao FINAL garante que eles
+	// sempre vençam, nunca o contrário.
+	envArgs := append(envWithoutKeys(b.Env, "BACKUP_DIR", "DB_NAME"), "BACKUP_DIR="+b.BackupDir, "DB_NAME="+b.DBName)
+	full := append(append([]string{}, b.CmdPrefix...), "env")
+	full = append(full, envArgs...)
+	full = append(full, "bash", b.ScriptPath)
 	c := exec.CommandContext(ctx, full[0], full[1:]...)
 	killOnCancel(c)
-	// Mesmo achado Codex que em execMigrateRunner: preservar o ambiente herdado (PATH,
-	// credenciais de rclone/backup já configuradas no processo do agente), nunca descartá-lo.
-	//
-	// BACKUP_DIR/DB_NAME explicitamente removidas de qualquer valor herdado/em b.Env e
-	// reafirmadas a partir de b.BackupDir/b.DBName (achado Codex P2): resolvedBackupDBDir()
-	// usa esses MESMOS campos para decidir ONDE PROCURAR o dump depois — sem passá-los
-	// também para o script, um BackupDir/DBName diferente dos defaults do próprio script
-	// ("backups"/"omnira_dev") faria o script escrever num lugar e este runner procurar em
-	// outro, rejeitando um backup que na verdade teve sucesso. Removidas primeiro (nunca só
-	// "adicionadas ao final"): a ordem de precedência entre entradas DUPLICADAS num envp não
-	// é garantida de forma portável pela ordem da slice.
-	env := envWithoutKeys(append(os.Environ(), b.Env...), "BACKUP_DIR", "DB_NAME")
-	c.Env = append(env, "BACKUP_DIR="+b.BackupDir, "DB_NAME="+b.DBName)
+	// Base do ambiente do PRÓPRIO processo chamador (PATH, credenciais de rclone já
+	// configuradas) — preservada quando NÃO há sudo no meio; quando há, o sudo a substitui
+	// pela sua própria política de qualquer forma, e os `env ...` acima garantem o que
+	// realmente importa sobreviva.
+	c.Env = os.Environ()
 	out, err := c.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("agent: %s: %w (%s)", b.ScriptPath, err, out)
@@ -366,6 +402,13 @@ type backupMeta struct {
 // de cada dump e confirma que os campos mínimos de evidência estão presentes e plausíveis.
 type metaFileBackupVerifier struct {
 	MinSizeBytes int64 // default 1024, o mesmo mínimo que o próprio script já aplica
+}
+
+// NewBackupVerifier constrói o BackupVerifier real (lê o .meta.json ao lado do dump e
+// confirma tamanho/schema_version/format reais no disco). minSizeBytes <= 0 usa o default
+// (1024, o mesmo mínimo que scripts/backup-omnira-db.sh já aplica).
+func NewBackupVerifier(minSizeBytes int64) BackupVerifier {
+	return metaFileBackupVerifier{MinSizeBytes: minSizeBytes}
 }
 
 func (v metaFileBackupVerifier) Verify(_ context.Context, dumpPath string) error {
@@ -878,15 +921,11 @@ func (e *Executor) recover(ctx context.Context, h *LockHandle, runID string, man
 // deste run — o detail do checkpoint MAIS RECENTE com status "completed" para esse step.
 // Retorna (nil, nil) se esse passo nunca foi concluído (ex. a falha ocorreu antes de chegar lá).
 func (e *Executor) snapshotFromCheckpoint(ctx context.Context, runID string) (*Snapshot, error) {
-	detail, err := e.lastCompletedDetail(ctx, runID, StepSnapshot)
-	if err != nil || detail == "" {
+	cps, err := e.Ledger.Checkpoints(ctx, runID)
+	if err != nil {
 		return nil, err
 	}
-	var digests map[Unit]string
-	if err := json.Unmarshal([]byte(detail), &digests); err != nil {
-		return nil, fmt.Errorf("agent: desserializar snapshot do checkpoint: %w", err)
-	}
-	return &Snapshot{Digests: digests}, nil
+	return SnapshotFromCheckpoints(cps)
 }
 
 // lastCompletedDetail devolve o `detail` do checkpoint MAIS RECENTE com status "completed"
@@ -896,13 +935,37 @@ func (e *Executor) lastCompletedDetail(ctx context.Context, runID string, step S
 	if err != nil {
 		return "", err
 	}
-	for i := len(cps) - 1; i >= 0; i-- {
-		c := cps[i]
+	return LastCompletedDetail(cps, step), nil
+}
+
+// LastCompletedDetail devolve o `detail` do checkpoint MAIS RECENTE com status "completed"
+// para `step` em `checkpoints` (ex. de Ledger.Checkpoints) — "" se esse passo nunca
+// completou. Função PURA (nunca toca o Ledger): usada internamente e por `updatectl`, que
+// precisa da mesma leitura sem duplicar a lógica nem depender de nenhuma API.
+func LastCompletedDetail(checkpoints []Checkpoint, step Step) string {
+	for i := len(checkpoints) - 1; i >= 0; i-- {
+		c := checkpoints[i]
 		if c.Step == string(step) && c.Status == "completed" {
-			return c.Detail, nil
+			return c.Detail
 		}
 	}
-	return "", nil
+	return ""
+}
+
+// SnapshotFromCheckpoints desserializa o snapshot (unit -> digest) do checkpoint
+// StepSnapshot mais recente CONCLUÍDO em `checkpoints` — (nil, nil) se PREPARING nunca
+// completou (nunca houve mutação real, achado Codex R0). Usado por `updatectl rollback` para
+// decidir o que reinstalar olhando só o ledger local, sem depender de nenhuma API.
+func SnapshotFromCheckpoints(checkpoints []Checkpoint) (*Snapshot, error) {
+	detail := LastCompletedDetail(checkpoints, StepSnapshot)
+	if detail == "" {
+		return nil, nil
+	}
+	var digests map[Unit]string
+	if err := json.Unmarshal([]byte(detail), &digests); err != nil {
+		return nil, fmt.Errorf("agent: desserializar snapshot do checkpoint: %w", err)
+	}
+	return &Snapshot{Digests: digests}, nil
 }
 
 // isRollbackSafe reproduz a tabela de classes de recuperação (especificação §8, ADR-0054
@@ -942,12 +1005,48 @@ func isRollbackSafe(manifest *domain.ReleaseManifest) bool {
 // plano — o chamador é responsável por desserializá-lo e montar este mapa, mantendo este
 // pacote livre de qualquer decisão sobre QUAL release aplicar, só COMO aplicá-la).
 func (e *Executor) Reconcile(ctx context.Context, installationID, holder string, lease time.Duration, manifests map[string]*domain.ReleaseManifest) error {
+	return e.WithLockAndHeartbeat(ctx, installationID, holder, lease, func(execCtx context.Context, h *LockHandle) error {
+		// Achado Codex P1: este gate precisa ser consultado a cada chamada de Reconcile, não
+		// só decidir dentro do loop abaixo — RECOVERY_REQUIRED é terminal (domain.IsTerminal),
+		// então uma chamada SUBSEQUENTE de Reconcile (um novo processo do agente, ou o próximo
+		// ciclo) nunca veria esse run de novo via ActiveRuns e processaria runs novos da
+		// MESMA instalação como se nada tivesse acontecido. HasUnresolvedRecoveryRequired
+		// consulta o ledger diretamente por esse estado, independente de ActiveRuns, e só é
+		// destravado por um AcknowledgeRecovery explícito (operador via updatectl/runbook).
+		pending, err := e.Ledger.HasUnresolvedRecoveryRequired(ctx, installationID)
+		if err != nil {
+			return fmt.Errorf("agent: reconcile: verificar recuperação pendente de %s: %w", installationID, err)
+		}
+		if pending {
+			return fmt.Errorf("agent: reconcile: instalação %s tem uma recuperação pendente (RECOVERY_REQUIRED não reconhecido) — nenhum run novo será processado até intervenção manual", installationID)
+		}
+
+		runs, err := e.Ledger.ActiveRuns(ctx, installationID)
+		if err != nil {
+			return fmt.Errorf("agent: reconcile: listar runs ativos: %w", err)
+		}
+		return e.reconcileRuns(ctx, execCtx, h, runs, manifests)
+	})
+}
+
+// WithLockAndHeartbeat adquire o lock da instalação, mantém um heartbeat em BACKGROUND
+// durante toda a execução de `fn` (renovando o lease periodicamente — hbInterval = lease/3,
+// nunca deixando a operação perder a posse do lock por simplesmente demorar mais que o lease
+// original pedido), cancela execCtx no INSTANTE em que o heartbeat perde o fencing (matando
+// qualquer exec.CommandContext em andamento antes que ele possa terminar de mutar algo sob um
+// lock que já não se detém mais), e libera o lock ao final. Extraído de Reconcile para ser
+// reutilizável por qualquer operação externa que precise da MESMA proteção para uma mutação
+// potencialmente longa — hoje, além de Reconcile, `updatectl rollback` (achado Codex P1: uma
+// versão anterior desse comando chamava Compose.Rollback diretamente, sem heartbeat nenhum,
+// deixando uma janela real para o daemon assumir a instalação e reconciliar concorrentemente
+// enquanto o rollback manual ainda estava mutando containers).
+func (e *Executor) WithLockAndHeartbeat(ctx context.Context, installationID, holder string, lease time.Duration, fn func(execCtx context.Context, h *LockHandle) error) error {
 	h, err := e.Ledger.AcquireLock(ctx, installationID, holder, lease)
 	if err != nil {
-		return fmt.Errorf("agent: reconcile: adquirir lock de %s: %w", installationID, err)
+		return fmt.Errorf("agent: adquirir lock de %s: %w", installationID, err)
 	}
 	// Achado Codex P2: sem isto, o lock ficava detido por ESTE holder até o lease expirar
-	// NATURALMENTE, mesmo depois de Reconcile já ter terminado (sucesso, erro, ou bloqueado
+	// NATURALMENTE, mesmo depois da operação já ter terminado (sucesso, erro, ou bloqueado
 	// por RECOVERY_REQUIRED) — um operador tentando `updatectl` logo depois (ex. para chamar
 	// AcknowledgeRecovery, que também precisa adquirir o lock) ficaria esperando sem motivo.
 	// Registrado ANTES dos defers do heartbeat (LIFO: executa DEPOIS deles) — precisa rodar
@@ -958,13 +1057,6 @@ func (e *Executor) Reconcile(ctx context.Context, installationID, holder string,
 	// cancelada ou tenha falhado.
 	defer func() { _ = e.Ledger.ReleaseLock(context.Background(), h) }()
 
-	// Heartbeat em BACKGROUND durante toda a execução (achado Codex P1): backup, download,
-	// migrate e a janela de observação podem facilmente exceder `lease` sem isto — outro
-	// holder assumiria a instalação ENQUANTO esta execução ainda está mutando Docker/
-	// Postgres, e o fencing só detectaria isso DEPOIS que a ação externa já tivesse rodado
-	// (tarde demais). execCtx, derivado de ctx, é cancelado no INSTANTE em que o heartbeat
-	// perde o fencing — isso mata qualquer exec.CommandContext em andamento imediatamente,
-	// antes que ele possa terminar de mutar algo sob um lock que já não detemos mais.
 	execCtx, cancel := context.WithCancel(ctx)
 	hbInterval := lease / 3
 	if hbInterval <= 0 {
@@ -976,7 +1068,7 @@ func (e *Executor) Reconcile(ctx context.Context, installationID, holder string,
 	// `<-hbDone` tem que ser registrado ANTES de `cancel()` para executar DEPOIS dele — a
 	// goroutine do heartbeat só termina quando execCtx.Done() dispara (ou quando ela mesma
 	// chama cancel() ao perder o fencing), e isso só acontece quando cancel() É CHAMADO.
-	// Registrar `<-hbDone` primeiro e `cancel()` depois (como estava antes) fazia Reconcile
+	// Registrar `<-hbDone` primeiro e `cancel()` depois (como estava antes) fazia o chamador
 	// esperar a goroutine terminar ANTES de dar a ela qualquer motivo para terminar —
 	// deadlock garantido no caminho feliz, sem nenhum erro de heartbeat envolvido.
 	defer func() { <-hbDone }()
@@ -998,25 +1090,12 @@ func (e *Executor) Reconcile(ctx context.Context, installationID, holder string,
 		}
 	}()
 
-	// Achado Codex P1: este gate precisa ser consultado a cada chamada de Reconcile, não só
-	// decidir dentro do loop abaixo — RECOVERY_REQUIRED é terminal (domain.IsTerminal), então
-	// uma chamada SUBSEQUENTE de Reconcile (um novo processo do agente, ou o próximo ciclo)
-	// nunca veria esse run de novo via ActiveRuns e processaria runs novos da MESMA
-	// instalação como se nada tivesse acontecido. HasUnresolvedRecoveryRequired consulta o
-	// ledger diretamente por esse estado, independente de ActiveRuns, e só é destravado por um
-	// AcknowledgeRecovery explícito (operador via updatectl/runbook).
-	pending, err := e.Ledger.HasUnresolvedRecoveryRequired(ctx, installationID)
-	if err != nil {
-		return fmt.Errorf("agent: reconcile: verificar recuperação pendente de %s: %w", installationID, err)
-	}
-	if pending {
-		return fmt.Errorf("agent: reconcile: instalação %s tem uma recuperação pendente (RECOVERY_REQUIRED não reconhecido) — nenhum run novo será processado até intervenção manual", installationID)
-	}
+	return fn(execCtx, h)
+}
 
-	runs, err := e.Ledger.ActiveRuns(ctx, installationID)
-	if err != nil {
-		return fmt.Errorf("agent: reconcile: listar runs ativos: %w", err)
-	}
+// reconcileRuns é o corpo do loop de Reconcile — extraído para reduzir aninhamento depois da
+// refatoração de WithLockAndHeartbeat, nunca chamado diretamente fora de Reconcile.
+func (e *Executor) reconcileRuns(ctx, execCtx context.Context, h *LockHandle, runs []RunRecord, manifests map[string]*domain.ReleaseManifest) error {
 	var firstErr error
 	for _, run := range runs {
 		manifest, ok := manifests[run.RunID]

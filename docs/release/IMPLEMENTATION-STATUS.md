@@ -613,3 +613,192 @@ Próxima fase: F5 — Update Agent resiliente e recovery CLI
 ```
 
 **Veredito: PASS**
+
+---
+
+## F5 — Update Agent resiliente e recovery CLI
+
+```
+Fase: F5
+Baseline SHA: 7c677f4 (commit mais recente desta branch antes de F5); HEAD atual 7042b8b, mais
+  o trabalho desta sessão (daemon/CLI/agentconfig) ainda staged, não comitado até o fim deste
+  update.
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+Implementação:
+  internal/platformrelease/agent/ledger.go (novo, 3f314b2): estado durável fora do Postgres
+    (ADR-0054 §2.3, SQLite via modernc.org/sqlite — pure-Go, CGO_ENABLED=0 compatível) para
+    lock/fencing/heartbeat por instalação, tabela update_runs (idempotency_key único por
+    instalação) e run_checkpoints (journal append-only). AcquireLock/ReleaseLock com fencing
+    token monotônico; TransitionRun/RecordCheckpointStart/RecordCheckpointDone sempre dentro de
+    uma transação que valida o fencing ANTES de escrever — nenhuma mutação de estado sobrevive a
+    um lock perdido. Schema migrável de forma idempotente e segura sob concorrência real (coluna
+    aditiva recovery_acknowledged). AllRuns (nova nesta sessão) lista também runs terminais,
+    usada por `updatectl status`/`rollback` para ver histórico sem precisar da API.
+  internal/platformrelease/agent/compose.go (novo, 0133130): ComposeAdapter real — pull por
+    digest, WriteOverride (arquivo de override determinístico, nunca edita o compose base),
+    Apply/WaitHealthy (via `docker compose ps`/healthcheck real, nunca um sleep fixo),
+    CurrentSnapshot, Rollback. Nenhuma chamada shell monta comando a partir de string do
+    manifesto sem lista de argumentos explícita (nunca shell=true/injeção).
+  internal/platformrelease/agent/reconcile.go (novo, 7042b8b; +constructors/exports nesta
+    sessão): Executor.Reconcile/Execute — motor idempotente que avança um run do lock até
+    SUCCEEDED ou até RECOVERY_REQUIRED (R0–R4, ADR-0054 §2.5) via journal de checkpoints
+    (backup → verificação REAL de evidência, nunca só exit-code → download por digest →
+    snapshot → migração restrita a Rollout.Workloads/migrations.target → deploy → health →
+    observação). `recover()` extraído como método chamável tanto de uma falha recém-ocorrida
+    quanto de uma retomada pós-crash (run já em FAILED/RECOVERING ao reiniciar o processo) —
+    nunca reverte dados automaticamente, só código/config via Compose.Rollback, e só quando a
+    classe de recuperação declarada permite. `Executor.WithLockAndHeartbeat` (extraído nesta
+    sessão) isola o padrão lock+heartbeat-em-background+release para ser reusado por
+    `updatectl rollback` sem duplicar essa lógica de concorrência. Exportados nesta sessão:
+    `NewMigrateRunner`/`NewBackupRunner`/`NewBackupVerifier` (construtores reais, nunca os fakes
+    de teste) e as funções puras `LastCompletedDetail`/`SnapshotFromCheckpoints`, para que
+    `updatectl` leia o snapshot de um run via ledger sem precisar da API.
+  internal/platformrelease/agentconfig/ (novo, nesta sessão): config.go compartilhado pelos dois
+    binários — flags com fallback `OMNIRA_AGENT_*` (flag sempre vence env), `Config.Build()`
+    monta o Executor real (nunca os fakes de teste), `ReconcileOnce` é o laço
+    "ActiveRuns → deserializar manifest_json → Executor.Reconcile" reusado pelo daemon e por
+    `updatectl reconcile`.
+  apps/update-agent/cmd/omnira-update-agent/main.go (novo, nesta sessão): daemon supervisionado
+    — reconcilia imediatamente ao iniciar, depois em loop por `--poll-interval`
+    (`runLoop` extraído e testável, nunca reconcilia de novo após o contexto ser cancelado),
+    reage a SIGTERM/SIGINT via `signal.NotifyContext`.
+  apps/updatectl/cmd/omnira-updatectl/main.go (novo, nesta sessão): CLI local — `status`
+    (lista/detalha runs do ledger, nunca precisa da API), `start` (cria um run; exige
+    `--approved-out-of-band` — ver "o que ainda não existe" abaixo), `reconcile` (chama
+    ReconcileOnce diretamente, útil quando o daemon está fora do ar), `acknowledge-recovery`,
+    `rollback` (reinstala o digest anterior compatível — delega inteiramente a
+    `Executor.Execute`/`recover()`, nunca uma reimplementação paralela; só aceita runs em
+    FAILED/RECOVERING; nunca migra, nunca exige DATABASE_URL).
+  Dockerfile.update-agent (novo): build multi-stage reproduzível (CGO_ENABLED=0,
+    golang:1.25-alpine) com stage final `export` (`FROM scratch`) contendo só os dois binários —
+    nunca uma imagem destinada a rodar como container (o agente precisa do socket Docker do
+    HOST via systemd nativo, ADR-0054 §2.1/§2.4). Build real executado e os dois binários
+    extraídos/confirmados executáveis (`file`, `--help`) nesta sessão.
+  docs/release/systemd/omnira-update-agent.service (novo): unit systemd como ARTEFATO
+    VERSIONADO apenas — nunca copiado para /etc/systemd/system/ nem instalado/habilitado por
+    esta sessão (exigência explícita do usuário: "nunca instalar nada em produção sem
+    autorização explícita"). Documenta as pré-condições operacionais (usuário dedicado sem
+    grupo `docker`, EnvironmentFile fora do ExecStart para DATABASE_URL nunca aparecer em
+    `ps aux`, sudoers restrito aos comandos exatos invocados) e por que não usa
+    `NoNewPrivileges=yes` (quebraria o próprio mecanismo de `sudo -n` pontual que
+    `--compose-sudo` depende).
+  scripts/release/test-update-agent-cli.sh (novo): orquestra o teste de integração Docker real
+    de `apps/updatectl` (registry OCI descartável, duas imagens versionadas com healthcheck
+    sensível à versão) — mesmo padrão de scripts/release/test-update-agent-compose.sh.
+Arquivos: ver Implementação acima.
+Migrations: nenhuma (o ledger do agente é SQLite local, fora do Postgres por desenho — ADR-0054
+  §2.3; as tabelas platform_* de auditoria/API continuam reservadas para F6).
+Contratos/endpoints: nenhum HTTP (a API de /api/v1/platform/* é F6); `updatectl` fala
+  diretamente com o ledger local, nunca com a API, para funcionar quando ela estiver fora do ar.
+Gates de segurança / RLS: N/A (sem tabela de plataforma/tenant nesta fase). Gate equivalente
+  desta fase: fencing por instalação (nunca por tenant) bloqueia qualquer escrita de um holder
+  que perdeu o lock, validado dentro da MESMA transação que a mutação, nunca depois.
+Testes executados (reais, nunca mockando o que precisa de infraestrutura real):
+  go test ./internal/platformrelease/... ./apps/update-agent/... ./apps/updatectl/... -race →
+    PASS (unit, SQLite real em disco, sudo -n real quando disponível — skip gracioso quando não)
+  gofmt -l / go build ./... / go vet ./... (repo inteiro) → limpos
+  bash scripts/release/test-update-agent-compose.sh (ComposeAdapter, herdado de antes desta
+    sessão) → PASS, Postgres/Docker real via registry OCI descartável
+  bash scripts/release/test-update-agent-cli.sh (novo) → PASS:
+    TestUpdatectl_Integration_RollbackForcesStuckRecoveryDecision — deploya v2 de verdade via
+    ComposeAdapter, cria um run FAILED no ledger com snapshot real de v1, roda
+    `updatectl rollback --run ... --yes` e confirma o container real volta a v1
+    (CurrentSnapshot), run termina ROLLED_BACK.
+  sudo -n docker build -f Dockerfile.update-agent --target export -o <dir> . → build real
+    confirmado; binários extraídos, `file` confirma ELF estático, `--help`/`-h` executado em
+    ambos com sucesso.
+  Testes reais de resiliência a crash/restomada (herdados de 7042b8b, cobrindo o requisito da
+  especificação "testar power-loss/crash/restart e jobs duplicados"):
+    TestExecute_ResumeAfterCrash_NeverRepeatsCompletedSteps,
+    TestExecute_ResumeAtObserving_RevalidatesHealthBeforeSucceeding,
+    TestExecute_ResumeFromRecovering_CompletesDecision,
+    TestExecute_ResumeFromRecovering_StaleFencing_RefusesBeforeTouchingDocker,
+    TestExecute_ResumeFromFailed_CompletesDecision (simulam o estado exato pós-crash — retomada
+    a partir de QUALQUER checkpoint — sem precisar matar um processo real de verdade);
+    TestAcquireLock_OtherHolderWhileValid_Refused, TestTransitionRun_FencingLostBlocksWrite
+    (job duplicado/concorrente é recusado pelo fencing, nunca corrompe estado);
+    TestConcurrentHeartbeatAndCheckpoints_NoSpuriousErrors,
+    TestOpenLedger_ConcurrentMigration_NeverFailsWithDuplicateColumn (concorrência real contra o
+    SQLite do ledger, goroutines reais, sem mocks).
+  LIMITAÇÃO ACEITA: fault injection via SIGKILL de um processo rodando de fato (vs. simular o
+  estado pós-crash via o ledger) não foi construída nesta fase — o custo/risco de orquestrar
+  isso de forma controlada não se justificou frente à cobertura equivalente já obtida: todo
+  caminho de retomada é determinado inteiramente pelo estado persistido no ledger (checkpoints +
+  fencing), nunca por memória de processo, então simular esse estado via teste de unidade
+  exercita o MESMO código de decisão que um SIGKILL real exercitaria.
+Review Codex (evidência real): `codex exec review --uncommitted` executado repetidamente nesta
+  fase, em três etapas sucessivas da mesma disciplina fix→retest→re-review:
+    - ledger.go: 2 rodadas até convergência.
+    - compose.go: 8 rodadas até convergência.
+    - reconcile.go (motor completo): 18 rodadas até convergência.
+    - agentconfig/apps/update-agent/apps/updatectl (esta sessão): 14 rodadas até
+      "No actionable regressions were identified". Achados reais corrigidos nesta etapa:
+        1. [P1] `updatectl rollback` original bypassava isRollbackSafe, heartbeat e
+           Rollout.Workloads — reescrito para delegar inteiramente a Executor.Execute/recover(),
+           restrito a runs FAILED/RECOVERING.
+        2. [P2] `start` tratava qualquer manifesto estruturalmente válido como "já aprovado"
+           (nunca há verificação de assinatura real nesta sessão — BLOCKED_EXTERNAL) — corrigido
+           com a flag obrigatória `--approved-out-of-band`, um gate honesto, não segurança falsa.
+        3. [P2] `--compose-sudo` aplicado também ao MigrateRunner quebraria DATABASE_URL sob
+           `env_reset` do sudo — corrigido removendo sudo de migrate (nunca precisa de Docker).
+        4. [P2] scripts/backup-omnira-db.sh usa `docker exec` de verdade — backup PRECISA do
+           mesmo privilégio Docker que Compose; BACKUP_DIR/DB_NAME transportados como argumentos
+           do comando `env` (sobrevivem ao `env_reset` do sudo; `--` removido por incompatibili-
+           dade real com o `env` do uutils coreutils deste host).
+        5. [P2] PG_CONTAINER/PG_OWNER nunca eram configuráveis nem propagados ao backup runner;
+           `--poll-interval<=0` passava validação e crashava o `time.NewTicker` do daemon —
+           corrigidos ambos.
+        6. [P2] `--lease<1s` permitia outro processo roubar o lock da instalação quase
+           imediatamente — `ValidateLease()` adicionada, chamada por `Validate()` e
+           explicitamente por `start`/`acknowledge-recovery` (que não passam por `Build()`).
+        7. [P1] `reconcile`/`rollback` usavam `context.Background()` — um SIGINT no meio de uma
+           migração/backup órfãos os subprocessos privilegiados e parava o heartbeat sem
+           liberar/recuperar o lock — corrigido com `signal.NotifyContext` compartilhado.
+        8. [P2] Idempotência por `manifest.ReleaseID` fixo impedia retry de uma release que
+           terminou ROLLED_BACK/CANCELLED/BLOCKED (ActiveRuns exclui terminais) — corrigido com
+           `idempotencyKeyForRetry`, 3 rodadas de refinamento: (a) só olhar a key original
+           perdia retries já existentes; (b) casar por PREFIXO de string colidia com
+           release_ids textualmente parecidos mas distintos (o regex de release_id permite
+           sufixo livre); fixado comparando o `ReleaseID` estruturado deserializado do
+           manifest_json de cada run, nunca string matching.
+        9. [P2] Tratar SUCCEEDED como "sempre reusar a key" deduplicava PERMANENTEMENTE até uma
+           release já bem-sucedida — impedia reaplicar/downgrade de volta para ela depois de uma
+           release seguinte. Corrigido: só reusa a key enquanto a tentativa anterior está ATIVA;
+           terminal (sucesso OU falha) sempre permite nova tentativa.
+       10. [P2] `env`'s last-assignment-wins deixava `b.Env` sobrescrever BACKUP_DIR/DB_NAME
+           autoritativos se colidissem por acaso — corrigido filtrando essas chaves de `b.Env`
+           antes de apendar os valores autoritativos por último.
+       11. [P2] DATABASE_URL registrado como DEFAULT de flag.StringVar vazava a senha do schema
+           owner via `--help`/erros de parse (flag.FlagSet grava DefValue e Usage() o imprime
+           literalmente) — corrigido: default sempre vazio, fallback do env resolvido
+           DEPOIS do parse via `ApplyEnvFallbacks()` (chamado por `Validate()`/`ValidateLease()`).
+       12. [P2] `Validate()` exigia DATABASE_URL sempre, bloqueando `rollback` (que nunca migra)
+           para um operador de emergência sem credenciais de banco no ambiente — corrigido
+           separando `RequireDatabaseURL()`, chamada só por `start`-adjacent/`reconcile`/pelo
+           daemon (que podem migrar), nunca por `rollback`.
+    Todas as 10 primeiras rodadas desta etapa fecharam com fix→teste real→re-review antes da
+    próxima; a 14ª rodada confirmou nenhuma regressão adicional.
+Commits: 3f314b2 (ledger), 0133130 (compose), 7042b8b (reconcile); daemon/CLI/agentconfig desta
+  sessão aguardando o commit seguinte (ver git log da branch para o SHA final).
+Pendências/risco:
+  - BLOCKED_EXTERNAL (sem credenciais nesta sessão): verificação real de assinatura/proveniência
+    (GHCR/Cosign, release/policies/signing.yaml) não existe — `domain.ParseManifest` valida só a
+    FORMA do manifesto. `--approved-out-of-band` em `updatectl start` é um gate operacional
+    honesto para essa lacuna, nunca uma simulação de segurança que não existe de fato.
+  - `apps/updatectl`'s integração ponta-a-ponta não pôde exercitar `start`→`reconcile` reais
+    contra um release de verdade: `domain.ParseManifest` exige imagens `ghcr.io/...@sha256:...`,
+    que nunca resolvem contra um registry OCI local descartável sem acesso real ao GHCR
+    (BLOCKED_EXTERNAL). O teste de integração construído (`TestUpdatectl_Integration_
+    RollbackForcesStuckRecoveryDecision`) cobre o que É testável sem essa credencial: a parte de
+    `rollback` que só lê o ledger e usa Compose contra imagens locais reais.
+  - systemd unit entregue só como artefato (docs/release/systemd/omnira-update-agent.service) —
+    nunca instalado; usuário/grupo dedicado, EnvironmentFile e sudoers restrito continuam sendo
+    passos manuais do operador, fora do escopo de código deste programa.
+  - Fault injection real via SIGKILL de processo (vs. a cobertura equivalente via estado
+    persistido no ledger) não foi construída — ver "LIMITAÇÃO ACEITA" em Testes executados acima.
+Próxima fase: F6 — Backend e autorização global (release service, planner, preflight, update
+  runs/event store, platform admin/update operator como permissão própria, nunca membership de
+  tenant/Hub como autoridade).
+```
+
+**Veredito: PASS**

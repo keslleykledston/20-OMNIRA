@@ -356,6 +356,16 @@ func TestActiveRuns_ExcludesTerminal(t *testing.T) {
 	if len(runs) != 1 || runs[0].RunID != active.RunID {
 		t.Fatalf("esperava só [%s] como ativo, veio %+v", active.RunID, runs)
 	}
+
+	// AllRuns: usado por `updatectl status`/`rollback` para ver o HISTÓRICO completo,
+	// inclusive terminais — nunca o mesmo filtro de ActiveRuns.
+	all, err := l.AllRuns(ctx, "inst-1")
+	if err != nil {
+		t.Fatalf("AllRuns: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("esperava 2 runs (ativo + terminal), veio %d", len(all))
+	}
 }
 
 func TestCheckpoints_StartDoneFailed(t *testing.T) {
