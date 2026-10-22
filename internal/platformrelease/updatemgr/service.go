@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -548,18 +549,34 @@ func (s *Service) GetMonitoringStatus(ctx context.Context, operator uuid.UUID) (
 		out.VersionDivergence = out.InstallationReleaseID != "" && releaseID != out.InstallationReleaseID
 	}
 
-	// Achado Codex [P2]: nem o ledger (histórico de runs) nem o Postgres observam containers
-	// de verdade — um container substituído manualmente, ou uma implantação que falhou
-	// deixando outra imagem rodando, nunca apareceria na comparação acima. Compara o que o
-	// daemon de fato observou no Docker (RecordObservedDigests) contra o que a release mais
-	// recente SUCCEEDED declara — só quando AMBOS existem; a ausência de qualquer um dos dois
-	// nunca é tratada como divergência (só como "ainda não é possível confirmar").
+	// Achado Codex [P2] (rodada 1 desta fatia): nem o ledger (histórico de runs) nem o
+	// Postgres observam containers de verdade — um container substituído manualmente, ou uma
+	// implantação que falhou deixando outra imagem rodando, nunca apareceria na comparação
+	// acima. Compara o que o daemon de fato observou no Docker (RecordObservedDigests) contra
+	// o esperado POR UNIT através de TODO o histórico (achado Codex [P2] rodada 2: só olhar a
+	// release SUCCEEDED mais recente no geral perde drift em units tocadas por uma release
+	// MAIS ANTIGA quando a mais recente só atualizou outras — mesmo problema de
+	// rollbackTargetReleaseIDs, resolvido aqui com a mesma ideia de proveniência por unit).
 	if heartbeat.ObservedDigests != "" && heartbeat.ObservedDigests != "{}" {
 		var observed map[string]string
 		if jerr := json.Unmarshal([]byte(heartbeat.ObservedDigests), &observed); jerr == nil {
-			if m, found, merr := latestSucceededManifest(ctx, ledger, s.installationID); merr == nil && found {
-				for unit, want := range agent.ExpectedDigests(m) {
-					if got, ok := observed[unit]; ok && got != "" && got != want {
+			if expected, eerr := expectedDigestsAcrossHistory(ctx, ledger, s.installationID); eerr == nil {
+				for unit, want := range expected {
+					got, ok := observed[unit]
+					if !ok {
+						// Achado Codex [P2] rodada 2: ausente de verdade do mapa observado
+						// (nunca visto por CurrentSnapshot, ex. uma unit fora do escopo deste
+						// daemon) é "ainda não é possível confirmar" — nunca divergência.
+						continue
+					}
+					// got == "" é uma OBSERVAÇÃO REAL e bem-sucedida de "nenhum container
+					// rodando para esta unit" (CurrentSnapshot resolveu o container e não
+					// achou nada, ou achou algo sem digest utilizável) — distinto de "nunca
+					// observado". Quando uma release SUCCEEDED declara um digest esperado
+					// para essa unit, um got="" prova que o container esperado está
+					// AUSENTE/substituído por algo não-imutável — divergência real, nunca
+					// silenciosamente ignorada.
+					if got != want {
 						out.VersionDivergence = true
 						break
 					}
@@ -1789,20 +1806,41 @@ func latestSucceededVersion(ctx context.Context, ledger *agent.Ledger, installat
 	return m.PlatformVersion, m.ReleaseID, latest.RunID, latest.UpdatedAt, true, nil
 }
 
-// latestSucceededManifest (F9, monitoramento "versão real/digest divergente") devolve o
-// manifesto COMPLETO do run SUCCEEDED mais recente — latestSucceededVersion só extrai campos
-// escalares (version/releaseID), nunca o suficiente para saber o digest ESPERADO por unit
-// (agent.ExpectedDigests precisa do manifesto inteiro, Artifacts + Rollout.Workloads).
-func latestSucceededManifest(ctx context.Context, ledger *agent.Ledger, installationID string) (*domain.ReleaseManifest, bool, error) {
-	latest, found, err := latestSucceededRun(ctx, ledger, installationID)
-	if err != nil || !found {
-		return nil, false, err
-	}
-	m, err := domain.ParseManifest([]byte(latest.ManifestJSON))
+// expectedDigestsAcrossHistory (F9, monitoramento "versão real/digest divergente", achado
+// Codex [P2] rodada 2) devolve o digest esperado POR UNIT através de TODO o histórico de runs
+// SUCCEEDED desta instalação — nunca só da release SUCCEEDED mais recente no geral, que
+// rolloutUnits permite tocar só um SUBCONJUNTO dos workloads (release A só atualiza a API;
+// release B, depois, só o web — olhar só B perderia drift na API, mesmo com o digest
+// observado disponível). Para cada unit, usa o digest declarado pela release SUCCEEDED mais
+// recente que a tocou — mesma ideia de proveniência por unit de
+// Executor.rollbackTargetReleaseIDs, mas só SUCCEEDED aqui (nunca RECOVERY_REQUIRED: este
+// sinal é sobre o que foi INTENCIONALMENTE confirmado como bem-sucedido, não sobre o que pode
+// ter ficado parcialmente aplicado — distinto do propósito de segurança do rollback). Um
+// manifesto histórico ilegível é melhor esforço (pulado, nunca falha a chamada inteira): isto
+// é monitoramento, nunca um gate que bloqueia operação real.
+func expectedDigestsAcrossHistory(ctx context.Context, ledger *agent.Ledger, installationID string) (map[string]string, error) {
+	all, err := ledger.AllRuns(ctx, installationID)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return m, true, nil
+	sort.Slice(all, func(i, j int) bool { return all[i].UpdatedAt.After(all[j].UpdatedAt) })
+	result := map[string]string{}
+	for i := range all {
+		r := &all[i]
+		if r.State != domain.StateSucceeded {
+			continue
+		}
+		m, perr := domain.ParseManifest([]byte(r.ManifestJSON))
+		if perr != nil {
+			continue
+		}
+		for unit, digest := range agent.ExpectedDigests(m) {
+			if _, already := result[unit]; !already {
+				result[unit] = digest
+			}
+		}
+	}
+	return result, nil
 }
 
 // refreshPendingRun sincroniza o run NÃO-TERMINAL mais recente (se existir) com o ledger local,

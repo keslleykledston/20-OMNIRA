@@ -7,6 +7,7 @@ package updatemgr_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,6 +18,51 @@ import (
 	"github.com/omnira/omnira/internal/platformrelease/domain"
 	"github.com/omnira/omnira/internal/platformrelease/updatemgr"
 )
+
+// manifestJSONForUnit (F9, monitoramento "versão real/digest divergente", achado Codex [P2]
+// rodada 2) constrói um manifesto que toca SÓ `unit` — manifestJSONChannel (mesmo arquivo de
+// teste) está fixo em UnitAPI; os testes de drift parcial precisam de releases que tocam
+// units DIFERENTES, exatamente como rolloutUnits permite de verdade.
+func manifestJSONForUnit(t *testing.T, releaseID string, unit domain.BuildUnit, image string, fromVersions []string) []byte {
+	t.Helper()
+	m := domain.ReleaseManifest{
+		SchemaVersion:   domain.SupportedSchemaVersion,
+		ReleaseID:       releaseID,
+		PlatformVersion: "9.9.1",
+		Channel:         domain.ChannelCandidate,
+		Source: domain.Source{
+			Repository:    "k3g/omnira",
+			CommitSHA:     "4f6b5c1e2a9d8f3b7c0a1e4d9f2b6c8a0e1d3f5b",
+			WorkflowRunID: "999",
+		},
+		Artifacts:      []domain.Artifact{{Unit: unit, Image: image}},
+		ModulesChanged: []string{"platform_release"},
+		Compatibility: domain.Compatibility{
+			FromVersions:     fromVersions,
+			MinAgentProtocol: 1,
+			DatabaseStrategy: "expand_only",
+		},
+		Migrations: domain.Migrations{
+			StartAfter:     "000168",
+			Target:         "000172",
+			ChecksumBundle: "sha256:" + sha64("mig-"+releaseID),
+		},
+		Rollout: domain.Rollout{
+			Workloads:       []domain.BuildUnit{unit},
+			PreflightPolicy: "strict",
+			RecoveryClass:   domain.RecoveryR1,
+		},
+		ApprovedBy: "test-suite",
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := domain.ParseManifest(raw); err != nil {
+		t.Fatalf("manifesto de teste não passa no próprio parser: %v", err)
+	}
+	return raw
+}
 
 // backdateLedgerColumn simula o tempo passando sem precisar esperar de verdade (os limiares de
 // agentHeartbeatStaleAfter/stalledRunThreshold são minutos reais) — abre uma SEGUNDA conexão
@@ -346,5 +392,143 @@ func TestUpdateMgr_GetMonitoringStatus_RuntimeDigestDrift_DetectedEvenWhenLedger
 	}
 	if !status.VersionDivergence {
 		t.Fatal("um digest REAL observado diferente do esperado deveria reportar divergência, mesmo com ledger e Postgres idênticos entre si")
+	}
+}
+
+// TestUpdateMgr_GetMonitoringStatus_RuntimeDigestDrift_DetectsPartialWorkloadReleases é a
+// prova central do achado Codex [P2] (rodada 2): a release SUCCEEDED mais recente no GERAL
+// nem sempre toca TODAS as units — release A só atualiza a API (SUCCEEDED); release B, depois,
+// só o web (SUCCEEDED, mais recente que A). Um drift na API precisa continuar detectável,
+// mesmo que B (não a API) seja a release SUCCEEDED mais recente no geral.
+func TestUpdateMgr_GetMonitoringStatus_RuntimeDigestDrift_DetectsPartialWorkloadReleases(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	driveToSucceeded := func(runID, idemKey string, manifest []byte) {
+		t.Helper()
+		ledger, err := agent.OpenLedger(ledgerPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ledger.Close()
+		h, err := ledger.AcquireLock(w.ctx, "test-install-1", "test-direct-driver", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ledger.CreateRun(w.ctx, h, runID, idemKey, string(manifest), domain.StateLocked); err != nil {
+			t.Fatal(err)
+		}
+		for _, st := range []domain.RunState{
+			domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+			domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+			domain.StateObserving, domain.StateSucceeded,
+		} {
+			if err := ledger.TransitionRun(w.ctx, h, runID, st); err != nil {
+				t.Fatalf("transição para %s: %v", st, err)
+			}
+		}
+		if err := ledger.ReleaseLock(w.ctx, h); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	apiDigest := "ghcr.io/k3g/omnira-api@sha256:" + sha64("api-only")
+	driveToSucceeded("run-A", "idem-A", manifestJSONForUnit(t, "omnira-9.9.205", domain.UnitAPI, apiDigest, []string{"0.1.0"}))
+	webDigest := "ghcr.io/k3g/omnira-web@sha256:" + sha64("web-only")
+	driveToSucceeded("run-B", "idem-B", manifestJSONForUnit(t, "omnira-9.9.206", domain.UnitWeb, webDigest, []string{"0.1.0"}))
+
+	ledger, err := agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ambos observados EXATAMENTE como esperado — nenhuma divergência.
+	if err := ledger.RecordObservedDigests(w.ctx, "test-install-1", "test-daemon",
+		`{"api":"`+apiDigest+`","web":"`+webDigest+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+
+	status, err := svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (ambos corretos): %v", err)
+	}
+	if status.VersionDivergence {
+		t.Fatal("API e web observados exatamente como as releases A e B declararam nunca deveria reportar divergência")
+	}
+
+	// SÓ a API diverge agora — B (web, a release SUCCEEDED mais recente no GERAL) nunca
+	// tocou a API, então sem o achado corrigido este drift seria invisível.
+	ledger, err = agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	driftedAPIDigest := "ghcr.io/k3g/omnira-api@sha256:" + sha64("api-drifted")
+	if err := ledger.RecordObservedDigests(w.ctx, "test-install-1", "test-daemon",
+		`{"api":"`+driftedAPIDigest+`","web":"`+webDigest+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+
+	status, err = svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (API drifted): %v", err)
+	}
+	if !status.VersionDivergence {
+		t.Fatal("drift na API deveria ser detectado mesmo com B (web) sendo a release SUCCEEDED mais recente no geral")
+	}
+}
+
+// TestUpdateMgr_GetMonitoringStatus_RuntimeDigestDrift_DetectsRemovedContainer é a prova
+// central do achado Codex [P2] (rodada 2): um got="" é uma observação REAL e bem-sucedida de
+// "nenhum container rodando para esta unit" (CurrentSnapshot resolveu e não achou nada) —
+// quando uma release SUCCEEDED declara um digest esperado para essa unit, isso é divergência
+// de verdade (container removido/substituído por algo não-imutável), nunca "ainda não
+// confirmado".
+func TestUpdateMgr_GetMonitoringStatus_RuntimeDigestDrift_DetectsRemovedContainer(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	ledger, err := agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := ledger.AcquireLock(w.ctx, "test-install-1", "test-direct-driver", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseID := "omnira-9.9.207"
+	m := manifestJSONChannel(t, releaseID, domain.ChannelCandidate, []string{"0.1.0"})
+	if _, err := ledger.CreateRun(w.ctx, h, "run-removed", "idem-removed", string(m), domain.StateLocked); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []domain.RunState{
+		domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+		domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+		domain.StateObserving, domain.StateSucceeded,
+	} {
+		if err := ledger.TransitionRun(w.ctx, h, "run-removed", st); err != nil {
+			t.Fatalf("transição para %s: %v", st, err)
+		}
+	}
+	if err := ledger.ReleaseLock(w.ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	// CurrentSnapshot resolveu o container e não achou NADA para a API — uma observação real
+	// e bem-sucedida, nunca "nunca observado" (que seria a KEY ausente do JSON, não "").
+	if err := ledger.RecordObservedDigests(w.ctx, "test-install-1", "test-daemon", `{"api":""}`); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+
+	status, err := svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (container removido): %v", err)
+	}
+	if !status.VersionDivergence {
+		t.Fatal("um digest esperado com observação real de container AUSENTE deveria reportar divergência, nunca ser ignorado silenciosamente")
 	}
 }
