@@ -442,6 +442,23 @@ type RetentionCandidate struct {
 // platform_release_revocations todas referenciam platform_releases SEM CASCADE) — esta função
 // só torna essa restrição LEGÍVEL antes da tentativa, nunca a substitui.
 func (s *Service) ListRetentionCandidates(ctx context.Context, operator uuid.UUID) ([]RetentionCandidate, error) {
+	// Achado Codex [P1] (rodada 1 desta fatia): sem isto, platform_installations.
+	// current_release_id podia estar OBSOLETO (só é sincronizado por refreshPendingRun) —
+	// mesma razão de GetInstallation chamar isto primeiro.
+	if err := s.refreshPendingRun(ctx, operator); err != nil {
+		return nil, err
+	}
+	// Achado Codex [P1] (rodada 2 desta fatia): current_release_id sozinho só protege a
+	// release do run SUCCEEDED mais recente no GERAL — nunca uma release anterior que ainda
+	// é a proveniência REAL de alguma unit específica (rolloutUnits permite releases que
+	// tocam só um subconjunto dos workloads; mesmo problema de rollbackTargetReleaseIDs/
+	// expectedDigestsAcrossHistory, resolvido aqui com a MESMA ideia). O ledger LOCAL
+	// (nunca o Postgres) é a autoridade de execução — consultado aqui fora de qualquer
+	// transação do Postgres, exatamente como GetMonitoringStatus já faz.
+	protected, perr := s.protectedReleaseIDsFromLedger(ctx)
+	if perr != nil {
+		return nil, perr
+	}
 	var out []RetentionCandidate
 	err := s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
 		if err := authorize(c, q, operator); err != nil {
@@ -468,7 +485,7 @@ func (s *Service) ListRetentionCandidates(ctx context.Context, operator uuid.UUI
 			return err
 		}
 		for i := range out {
-			safe, reasons, rerr := releaseSafeToDelete(c, q, out[i].ReleaseID, out[i].PastRetention)
+			safe, reasons, rerr := releaseSafeToDelete(c, q, out[i].ReleaseID, out[i].PastRetention, protected[out[i].ReleaseID])
 			if rerr != nil {
 				return rerr
 			}
@@ -483,6 +500,55 @@ func (s *Service) ListRetentionCandidates(ctx context.Context, operator uuid.UUI
 	return out, err
 }
 
+// protectedReleaseIDsFromLedger (F9, achado Codex [P1] rodada 2 desta fatia) consulta o
+// ledger LOCAL — a autoridade de execução, ADR-0054 §2.4, nunca o Postgres — e devolve o
+// conjunto de release_id que ainda são a proveniência REAL de pelo menos uma unit: para cada
+// unit (rolloutUnits permite releases que tocam só um subconjunto dos workloads), usa o run
+// SUCCEEDED OU RECOVERY_REQUIRED mais recente que a declara (mesmo critério de
+// Executor.rollbackTargetReleaseIDs/expectedDigestsAcrossHistory — RECOVERY_REQUIRED entra
+// porque recover() só alcança esse estado com mutação real já acontecida, e
+// AcknowledgeRecovery nunca desfaz isso). Deliberadamente MAIS conservador do que
+// estritamente necessário (nunca confirma contra o digest real observado, como
+// expectedDigestsAcrossHistory faz para monitoramento) — para uma ação DESTRUTIVA como GC,
+// proteger demais é sempre seguro; proteger de menos nunca é.
+func (s *Service) protectedReleaseIDsFromLedger(ctx context.Context) (map[string]bool, error) {
+	ledger, err := agent.OpenLedger(s.ledgerPath)
+	if err != nil {
+		// Ambiente sem ledger ainda (nenhum run foi criado) — nada protegido por ele, mas
+		// nunca um erro fatal: as outras checagens de releaseSafeToDelete continuam valendo.
+		return map[string]bool{}, nil
+	}
+	defer ledger.Close()
+	all, err := ledger.AllRuns(ctx, s.installationID)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].UpdatedAt.After(all[j].UpdatedAt) })
+	protected := map[string]bool{}
+	resolvedUnits := map[string]bool{}
+	for i := range all {
+		r := &all[i]
+		if r.State != domain.StateSucceeded && r.State != domain.StateRecoveryRequired {
+			continue
+		}
+		m, perr := domain.ParseManifest([]byte(r.ManifestJSON))
+		if perr != nil {
+			continue
+		}
+		touchedAny := false
+		for unit := range agent.ExpectedDigests(m) {
+			if !resolvedUnits[unit] {
+				resolvedUnits[unit] = true
+				touchedAny = true
+			}
+		}
+		if touchedAny {
+			protected[m.ReleaseID] = true
+		}
+	}
+	return protected, nil
+}
+
 // releaseSafeToDelete (F9) é a ÚNICA fonte da decisão "é seguro excluir releaseID do
 // catálogo" — usada tanto pelo relatório (ListRetentionCandidates) quanto pela exclusão real
 // (DeleteReleaseCatalogEntry), nunca duplicada entre as duas. Checa, EXPLICITAMENTE e por
@@ -490,9 +556,16 @@ func (s *Service) ListRetentionCandidates(ctx context.Context, operator uuid.UUI
 // CASCADE (ingest_requests, plans, runs, revocação) — nunca para pular essas checagens, mas
 // para dar um motivo LEGÍVEL em vez de um erro genérico de constraint quando a exclusão real
 // for tentada, e para o relatório conseguir explicar "por quê não" antes de qualquer tentativa.
-func releaseSafeToDelete(ctx context.Context, q platformdb.Querier, releaseID string, pastRetention bool) (safe bool, reasons []string, err error) {
+func releaseSafeToDelete(ctx context.Context, q platformdb.Querier, releaseID string, pastRetention, protectedByLedger bool) (safe bool, reasons []string, err error) {
 	if !pastRetention {
 		reasons = append(reasons, "ainda dentro da janela de retenção do canal (release/policies/channels.yaml)")
+	}
+	// Achado Codex [P1] (rodada 2 desta fatia): ver protectedReleaseIDsFromLedger — o ledger
+	// LOCAL (autoridade de execução) pode saber que esta release ainda fornece alguma unit
+	// mesmo quando platform_installations.current_release_id (abaixo) só reflete a release
+	// SUCCEEDED mais recente no GERAL, nunca releases anteriores que tocaram outras units.
+	if protectedByLedger {
+		reasons = append(reasons, "o ledger local do agente ainda aponta esta release como a proveniência de ao menos uma unit (SUCCEEDED ou RECOVERY_REQUIRED mais recente) — nunca removida enquanto isso for verdade")
 	}
 	// Achado Codex [P1] (rodada 1 desta fatia): platform_installations.current_release_id
 	// NUNCA tem foreign key para platform_releases (de propósito — ver o comentário da
@@ -552,6 +625,18 @@ func (s *Service) DeleteReleaseCatalogEntry(ctx context.Context, operator uuid.U
 		return false, invalid("release_id é obrigatório")
 	}
 	hash := requestHashGC(operator, releaseID)
+	// Achado Codex [P1] (rodada 1 desta fatia): mesma razão de ListRetentionCandidates —
+	// current_release_id só é sincronizado por refreshPendingRun.
+	if err := s.refreshPendingRun(ctx, operator); err != nil {
+		return false, err
+	}
+	// Achado Codex [P1] (rodada 2 desta fatia): ver protectedReleaseIDsFromLedger — revalida
+	// o ledger LOCAL o mais perto possível da exclusão real, nunca a partir de um relatório
+	// antigo de ListRetentionCandidates.
+	protected, perr := s.protectedReleaseIDsFromLedger(ctx)
+	if perr != nil {
+		return false, perr
+	}
 	err = s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
 		if err := authorize(c, q, operator); err != nil {
 			return err
@@ -589,7 +674,7 @@ func (s *Service) DeleteReleaseCatalogEntry(ctx context.Context, operator uuid.U
 			return gerr
 		}
 		pastRetention := int(time.Since(ingestedAt).Hours()/24) >= channelRetentionDays[domain.Channel(channel)]
-		safe, reasons, serr := releaseSafeToDelete(c, q, releaseID, pastRetention)
+		safe, reasons, serr := releaseSafeToDelete(c, q, releaseID, pastRetention, protected[releaseID])
 		if serr != nil {
 			return serr
 		}

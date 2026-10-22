@@ -9,8 +9,11 @@ package updatemgr_test
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/omnira/omnira/internal/platformrelease/agent"
 	"github.com/omnira/omnira/internal/platformrelease/domain"
 	"github.com/omnira/omnira/internal/platformrelease/updatemgr"
 )
@@ -217,5 +220,86 @@ func TestUpdateMgr_DeleteReleaseCatalogEntry_RefusesWhenCurrentlyInstalled(t *te
 	}
 	if n := w.count(`SELECT count(*) FROM platform_releases WHERE release_id = $1`, "omnira-9.9.305"); n != 1 {
 		t.Errorf("a release atualmente instalada nunca deveria ser removida, achei %d linhas", n)
+	}
+}
+
+// TestUpdateMgr_DeleteReleaseCatalogEntry_RefusesWhenLedgerStillProvidesAUnit é a prova
+// central do achado Codex [P1] (rodada 2 desta fatia): current_release_id só reflete a
+// release SUCCEEDED mais recente no GERAL — mas release A (via updatectl, direto no ledger
+// LOCAL, SEM nenhum plano/run no Postgres) só atualiza a API; release B, depois, só o web.
+// current_release_id passa a ser B (sincronizado por refreshPendingRun), mas A AINDA é a
+// proveniência real da API. Sem a checagem por unit via o ledger, A seria removível mesmo
+// continuando a fornecer a API de verdade.
+func TestUpdateMgr_DeleteReleaseCatalogEntry_RefusesWhenLedgerStillProvidesAUnit(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	apiDigest := "ghcr.io/k3g/omnira-api@sha256:" + sha64("api-only-9.9.306")
+	mA := manifestJSONForUnit(t, "omnira-9.9.306", domain.UnitAPI, apiDigest, []string{"0.1.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0306", mA); err != nil {
+		t.Fatal(err)
+	}
+	webDigest := "ghcr.io/k3g/omnira-web@sha256:" + sha64("web-only-9.9.307")
+	mB := manifestJSONForUnit(t, "omnira-9.9.307", domain.UnitWeb, webDigest, []string{"0.1.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0307", mB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simula updatectl: cria e conclui os runs DIRETO no ledger local, nunca via
+	// CreatePlan/StartRun — nenhum plano/run correspondente existe no Postgres para A ou B.
+	driveToSucceeded := func(runID, manifestJSON string) {
+		t.Helper()
+		ledger, err := agent.OpenLedger(ledgerPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ledger.Close()
+		h, err := ledger.AcquireLock(w.ctx, "test-install-1", "test-updatectl", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ledger.CreateRun(w.ctx, h, runID, "idem-"+runID, manifestJSON, domain.StateLocked); err != nil {
+			t.Fatal(err)
+		}
+		for _, st := range []domain.RunState{
+			domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+			domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+			domain.StateObserving, domain.StateSucceeded,
+		} {
+			if err := ledger.TransitionRun(w.ctx, h, runID, st); err != nil {
+				t.Fatalf("transição para %s: %v", st, err)
+			}
+		}
+		if err := ledger.ReleaseLock(w.ctx, h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	driveToSucceeded("run-9.9.306-direct", string(mA))
+	driveToSucceeded("run-9.9.307-direct", string(mB))
+
+	w.exec(`UPDATE platform_releases SET ingested_at = now() - interval '400 days' WHERE release_id IN ($1, $2)`, "omnira-9.9.306", "omnira-9.9.307")
+
+	candidates, err := svc.ListRetentionCandidates(w.ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]updatemgr.RetentionCandidate{}
+	for _, c := range candidates {
+		byID[c.ReleaseID] = c
+	}
+	if byID["omnira-9.9.306"].SafeToDelete {
+		t.Error("omnira-9.9.306 (A, ainda a proveniência da API) nunca deveria ser safe_to_delete, mesmo com B sendo o SUCCEEDED mais recente no geral")
+	}
+	if byID["omnira-9.9.307"].SafeToDelete {
+		t.Error("omnira-9.9.307 (B, current_release_id) nunca deveria ser safe_to_delete")
+	}
+
+	if _, err := svc.DeleteReleaseCatalogEntry(w.ctx, op, "gc-key-f9-0306", "omnira-9.9.306"); !errors.Is(err, updatemgr.ErrInvalid) {
+		t.Errorf("esperava ErrInvalid (ainda fornece a API via o ledger local), veio %v", err)
+	}
+	if n := w.count(`SELECT count(*) FROM platform_releases WHERE release_id = $1`, "omnira-9.9.306"); n != 1 {
+		t.Errorf("omnira-9.9.306 nunca deveria ter sido removida, achei %d linhas", n)
 	}
 }
