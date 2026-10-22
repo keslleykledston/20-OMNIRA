@@ -10,6 +10,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/omnira/omnira/internal/platformrelease/domain"
 )
@@ -157,5 +158,73 @@ func TestExecute_RevokedRelease_AfterMutation_ForcesR4NeverAutoRollback(t *testi
 	}
 	if got.State != domain.StateRecoveryRequired {
 		t.Fatalf("release REVOGADA com mutação real nunca deveria reverter automaticamente (R4), mesmo com database_strategy=expand_only/R1 — esperava RECOVERY_REQUIRED, veio %s", got.State)
+	}
+}
+
+// TestExecute_RevokedDuringObserveWindow_NeverCommitsSucceeded é a prova central do achado
+// Codex [P1] (rodada 4): a checagem de revogação no TOPO do loop de Execute só roda UMA VEZ
+// por iteração, ANTES de actionFor/runStep — se a revogação chega ao ledger local DURANTE a
+// própria ação de OBSERVING (ObserveWindow real), a iteração em curso já passou pela checagem
+// e vai declarar SUCCEEDED sem nunca reconsultar. Mesma técnica de
+// TestExecute_ResumeAtObserving_RevalidatesHealthBeforeSucceeding: avança manualmente até
+// OBSERVING concluir seu checkpoint (saúde boa o tempo todo), revoga SÓ DEPOIS disso — ANTES
+// da transição para SUCCEEDED ser persistida — e confirma que a retomada (nova chamada de
+// Execute, como um "crash" simulado) classifica RECOVERY_REQUIRED, nunca SUCCEEDED.
+func TestExecute_RevokedDuringObserveWindow_NeverCommitsSucceeded(t *testing.T) {
+	ctx := context.Background()
+	manifest := testManifest("expand_only")
+	fr := fakeRunnerForManifest(manifest)
+	compose := &ComposeAdapter{r: fr, Project: "test", OverrideDir: t.TempDir()}
+	exec, ledger, h := testExecutor(t, &fakeMigrateRunner{}, &fakeBackupRunner{}, compose)
+	exec.ObserveWindow = 5 * time.Millisecond
+
+	run, err := ledger.CreateRun(ctx, h, "run-1", "idem-1", "{}", domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for _, target := range []domain.RunState{
+		domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+		domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+	} {
+		next, action := exec.actionFor(stateBefore(target), run.RunID, manifest)
+		if action != nil {
+			if err := exec.runStep(ctx, h, run.RunID, stepForState(next), action); err != nil {
+				t.Fatalf("runStep %s: %v", target, err)
+			}
+		}
+		if err := ledger.TransitionRun(ctx, h, run.RunID, target); err != nil {
+			t.Fatalf("TransitionRun %s: %v", target, err)
+		}
+	}
+	nextObs, actionObs := exec.actionFor(domain.StateHealthChecking, run.RunID, manifest)
+	if err := exec.runStep(ctx, h, run.RunID, stepForState(nextObs), actionObs); err != nil {
+		t.Fatalf("runStep (preparar Observing): %v", err)
+	}
+	if err := ledger.TransitionRun(ctx, h, run.RunID, domain.StateObserving); err != nil {
+		t.Fatalf("TransitionRun Observing: %v", err)
+	}
+	nextSucc, actionSucc := exec.actionFor(domain.StateObserving, run.RunID, manifest)
+	if nextSucc != domain.StateSucceeded {
+		t.Fatalf("esperava next=SUCCEEDED a partir de Observing, veio %s", nextSucc)
+	}
+	if err := exec.runStep(ctx, h, run.RunID, stepForState(nextSucc), actionSucc); err != nil {
+		t.Fatalf("runStep (ação de Observing): %v", err)
+	}
+	// CRASH simulado aqui: o checkpoint da ação de Observing já está "completed", mas a
+	// transição para SUCCEEDED NUNCA foi persistida — exatamente a janela em que a checagem
+	// de revogação do TOPO do loop (que já passou na "primeira vida") não cobriria mais nada.
+	if err := ledger.RevokeRelease(ctx, manifest.ReleaseID, "CVE crítico descoberto durante a janela de observação"); err != nil {
+		t.Fatalf("RevokeRelease: %v", err)
+	}
+
+	if err := exec.Execute(ctx, h, run.RunID, manifest); err != nil {
+		t.Fatalf("Execute (retomada) não deveria retornar erro quando a recuperação em si é bem-sucedida: %v", err)
+	}
+	got, err := ledger.GetRun(ctx, run.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.State != domain.StateRecoveryRequired {
+		t.Fatalf("uma revogação chegada durante a janela de observação final nunca deveria permitir SUCCEEDED — esperava RECOVERY_REQUIRED, veio %s", got.State)
 	}
 }

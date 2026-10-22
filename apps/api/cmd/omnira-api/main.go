@@ -221,11 +221,12 @@ func main() {
 	}
 	// F6 (ADR-0054 §2.1): Update Manager API. holder "omnira-api" distingue este processo do
 	// daemon no lock do ledger local (nunca retido entre chamadas — ver updatemgr.Service.writeLedgerRun).
+	var updateMgrSvc *updatemgr.Service
 	if cfg.PlatformReleaseAPIEnabled {
 		if cfg.PlatformReleaseInstallationID == "" {
 			log.Printf("platform release API: OMNIRA_PLATFORM_RELEASE_API_ENABLED=true mas OMNIRA_AGENT_INSTALLATION_ID está vazio — rotas não montadas")
 		} else {
-			updateMgrSvc := updatemgr.New(dbPool, cfg.PlatformReleaseLedgerPath, cfg.PlatformReleaseInstallationID, "omnira-api", cfg.PlatformReleaseLease)
+			updateMgrSvc = updatemgr.New(dbPool, cfg.PlatformReleaseLedgerPath, cfg.PlatformReleaseInstallationID, "omnira-api", cfg.PlatformReleaseLease)
 			srv.RegisterPlatformReleaseHandlers(dbPool, true, updateMgrSvc)
 		}
 	}
@@ -559,6 +560,15 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// F9 (ADR-0054 §2.1/§2.2, achado Codex [P1] rodada 4): reentrega periódica de revogações
+	// pendentes ao ledger local do agente — INDEPENDENTE de qualquer tráfego de operador (sem
+	// isto, um ambiente sem chamadas de operador nunca veria uma revogação cuja escrita
+	// síncrona ao ledger falhou, até o shutdown normal deste ctx via cancel() acima).
+	if updateMgrSvc != nil {
+		stopRevocationDelivery := updateMgrSvc.StartRevocationDeliveryLoop(ctx, 30*time.Second)
+		defer stopRevocationDelivery()
+	}
 
 	go func() {
 		log.Printf("API starting on %s (env: %s)\n", cfg.HTTPAddr, cfg.Env)

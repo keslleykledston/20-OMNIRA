@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -133,6 +134,47 @@ func New(pool *pgxpool.Pool, ledgerPath, installationID, holder string, lease ti
 // Nunca chamado por apps/api/cmd/omnira-api/main.go nesta fase — documentado como pendência
 // explícita até F9 (ver docs/release/IMPLEMENTATION-STATUS.md).
 func (s *Service) WithVerifier(v SignatureVerifier) *Service { s.verifier = v; return s }
+
+// StartRevocationDeliveryLoop (F9, achado Codex [P1] rodada 4): reentrega periodicamente
+// qualquer revogação ainda pendente (delivered_to_agent=false) ao ledger local —
+// INDEPENDENTE de qualquer tráfego de operador. redeliverPendingRevocations, chamada por
+// refreshPendingRun, já dava entrega eventual a cada CreatePlan/StartRun/GetInstallation/
+// ListRuns real — mas um ambiente sem NENHUMA chamada de operador nesse intervalo (ex. um
+// agente autônomo aplicando runs já despachados, sem qualquer `updatectl` ou UI sendo usados)
+// nunca veria uma revogação cuja escrita síncrona ao ledger local falhou. Chamado uma única
+// vez no startup do processo (apps/api/cmd/omnira-api), nunca por request — redeliverPendingRevocations
+// é idempotente e barata o suficiente (SELECT vazio na maioria dos ticks) para rodar num
+// intervalo curto sem custo real. Retorna uma stop() idempotente que bloqueia até o laço
+// encerrar; o chamador também pode só cancelar ctx (ex. no shutdown normal do processo).
+func (s *Service) StartRevocationDeliveryLoop(ctx context.Context, interval time.Duration) (stop func()) {
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-ticker.C:
+				err := s.tx(loopCtx, func(c context.Context, q platformdb.Querier) error {
+					return redeliverPendingRevocations(c, q, s.ledgerPath)
+				})
+				if err != nil && !errors.Is(err, context.Canceled) {
+					log.Printf("updatemgr: StartRevocationDeliveryLoop: %v", err)
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			cancel()
+			<-done
+		})
+	}
+}
 
 func (s *Service) tx(ctx context.Context, fn func(c context.Context, q platformdb.Querier) error) error {
 	return platformdb.WithTenantSession(ctx, s.pool, uuid.Nil, true, func(c context.Context) error {

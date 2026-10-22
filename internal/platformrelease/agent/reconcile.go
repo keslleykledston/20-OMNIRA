@@ -629,6 +629,19 @@ func (e *Executor) Execute(ctx context.Context, h *LockHandle, runID string, man
 			return nil // estado terminal alcançado sem mais transições (ex. já SUCCEEDED)
 		}
 		if next == domain.StateSucceeded {
+			// Achado Codex [P1], F9: a checagem de revogação no TOPO deste loop (acima) já
+			// passou quando esta iteração começou — mas a revogação pode chegar ao ledger
+			// local DURANTE a própria ação de OBSERVING (ObserveWindow real, não instantâneo).
+			// Sem esta segunda checagem, a próxima iteração do loop nunca existiria (o `return
+			// nil` logo abaixo, depois de TransitionRun, termina Execute) — uma release
+			// revogada exatamente nessa janela seria reportada como SUCCEEDED em vez de
+			// RECOVERY_REQUIRED (R4). Mesma classificação de recuperação de qualquer outra
+			// falha real (handleFailure -> recover), nunca uma lógica de bloqueio separada.
+			if revoked, reason, err := e.Ledger.IsReleaseRevoked(ctx, manifest.ReleaseID); err != nil {
+				return fmt.Errorf("agent: verificar revogação local antes de confirmar sucesso: %w", err)
+			} else if revoked {
+				return e.handleFailure(ctx, h, runID, run.State, manifest, fmt.Errorf("agent: release %s foi REVOGADA (%s) durante a janela de observação final — recusando confirmar sucesso", manifest.ReleaseID, reason))
+			}
 			// Achado Codex P2: a ação de OBSERVING (acima, via actionFor/runStep) é pulável
 			// por idempotência quando seu checkpoint já está "completed" — correto para a
 			// execução FRESCA (nunca repetir a espera inteira da janela de observação), mas

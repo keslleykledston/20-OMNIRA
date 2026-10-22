@@ -367,3 +367,60 @@ func TestUpdateMgr_RevokeRelease_RedeliversToLedgerAfterInitialFailure(t *testin
 		t.Error("o ledger local deveria ter recebido a revogação reentregue — o agente real a veria aqui")
 	}
 }
+
+// TestUpdateMgr_StartRevocationDeliveryLoop_DeliversWithoutAnyOperatorTraffic é a prova do
+// achado Codex [P1] (rodada 4): redeliverPendingRevocations só era chamada de dentro de
+// refreshPendingRun, que só roda quando um OPERADOR chama a API (CreatePlan, StartRun,
+// GetInstallation, ListRuns). Um ambiente sem nenhum tráfego de operador (ex. um agente
+// autônomo aplicando runs já despachados, sem ninguém usando `updatectl`/UI) nunca veria uma
+// revogação pendente ser entregue. Prova: revoga com um ledgerPath inválido (entrega síncrona
+// falha de propósito), NUNCA chama nenhuma outra operação da Service, só inicia o laço
+// autônomo — e espera a entrega acontecer por conta própria.
+func TestUpdateMgr_StartRevocationDeliveryLoop_DeliversWithoutAnyOperatorTraffic(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+
+	badLedgerPath := filepath.Join(t.TempDir(), "subdir-nao-existe", "ledger.db")
+	svcBad := updatemgr.New(w.app, badLedgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	w.exec(`UPDATE platform_installations SET current_version = '9.0.0'`)
+	m := manifestJSONChannel(t, "omnira-9.9.150", domain.ChannelCandidate, []string{"9.0.0"})
+	if _, _, err := svcBad.IngestRelease(w.ctx, op, "ingest-key-f9-0040", m); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svcBad.RevokeRelease(w.ctx, op, "revoke-key-f9-0040", "omnira-9.9.150", "teste do laço autônomo"); err == nil {
+		t.Fatal("esperava erro na entrega síncrona com ledgerPath inválido, mas não houve")
+	}
+
+	goodLedgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svcGood := updatemgr.New(w.app, goodLedgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+	stop := svcGood.StartRevocationDeliveryLoop(w.ctx, 20*time.Millisecond)
+	defer stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var delivered bool
+	for time.Now().Before(deadline) {
+		if err := w.owner.QueryRow(w.ctx, `SELECT delivered_to_agent FROM platform_release_revocation_delivery WHERE release_id = $1`, "omnira-9.9.150").Scan(&delivered); err != nil {
+			t.Fatal(err)
+		}
+		if delivered {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !delivered {
+		t.Fatal("delivered_to_agent deveria ter virado true pelo laço autônomo, sem nenhuma chamada de operador além da revogação inicial")
+	}
+	ledger, err := agent.OpenLedger(goodLedgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ledger.Close()
+	revoked, _, err := ledger.IsReleaseRevoked(w.ctx, "omnira-9.9.150")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !revoked {
+		t.Error("o ledger local deveria ter recebido a revogação entregue pelo laço autônomo")
+	}
+}
