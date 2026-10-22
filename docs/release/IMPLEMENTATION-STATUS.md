@@ -1249,3 +1249,227 @@ Próxima fase: F8 — Staging e testes realistas de atualização/falha
 **Veredito: PASS**
 
 ---
+
+## F8 — Staging e testes realistas de atualização/falha
+
+```
+Fase: F8
+Baseline SHA: b8976be (último commit de F7 nesta mesma branch)
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+Implementação:
+  Staging isolado + 6 cenários de fault injection reais contra os binários/código reais do
+  Update Agent (F5) e do backend (F6) — nunca reimplementados, nunca simulados "no papel".
+  - scripts/release/test-f8-staging.sh: topologia Docker Compose ISOLADA (registry OCI
+    descartável com 4 imagens de teste reais — v1/v2/broken/slow, cada uma com HEALTHCHECK
+    genuíno baseado em conteúdo; Postgres e NATS descartáveis; projeto/rede/nomes exclusivos
+    por PID, nunca colidindo com o stack real do host), aplica as migrations REAIS via
+    tools/migrate-sql.sh (incluindo uma migration extra de teste, só numa cópia isolada do
+    diretório, nunca commitada em migrations/), builda os binários reais (omnira-api,
+    omnira-update-agent, omnira-updatectl, f8harness) e sobe a API real com o MESMO ledger
+    SQLite que o agente usa.
+  - scripts/release/f8harness/main.go (novo, binário SOMENTE de staging — nunca buildado para
+    produção, nunca referenciado por nenhum cmd real): domain.ParseManifest exige literalmente
+    "ghcr.io/..." em artifacts[].image (internal/platformrelease/domain/manifest.go:88,
+    imageDigestRe) em QUALQUER entrada sancionada — API (IngestRelease), `updatectl start`
+    (mesmo com --approved-out-of-band) e `updatectl reconcile`/a reconciliação automática do
+    daemon (ReconcileOnce chama ParseManifest de novo em TODO run ativo lido do ledger). Além
+    disso, IngestRelease exige um SignatureVerifier real, que nesta instalação é
+    blockedExternalVerifier (internal/platformrelease/updatemgr/service.go — BLOCKED_EXTERNAL,
+    achado F0 §7: sem credenciais GHCR/gh CLI/Cosign). Os dois controles são CORRETOS em
+    produção (nunca devem ser afrouxados), mas tornam impossível testar um PULL REAL
+    bem-sucedido contra um registry que esta sessão controla sem publicar no GHCR real do
+    projeto ou alterar DNS/daemon Docker do host (proibido: afetaria a stack real). f8harness
+    desserializa o manifesto via json.Unmarshal DIRETO em *domain.ReleaseManifest (nunca via
+    ParseManifest) e constrói o Executor pela MESMA agentconfig.Build() que os dois binários
+    reais usam — nenhuma lógica de internal/platformrelease/agent/{reconcile,compose}.go é
+    reimplementada; só o gate de formato do manifesto na borda de ingestão é contornado,
+    exatamente como o comentário no topo do arquivo documenta.
+  Cenário 0 (fio condutor, usa o binário `updatectl` REAL e sem f8harness): como IngestRelease
+    está bloqueado (BLOCKED_EXTERNAL) e nenhum ponto de entrada aceita imagem fora de
+    "ghcr.io/...", usamos `updatectl start --approved-out-of-band` (o mecanismo real já
+    sancionado pela especificação para este caso) com um digest sintaticamente válido mas
+    inexistente. `updatectl reconcile` real executa um backup real (pg_dump via docker exec,
+    verificado) e então um `docker pull` real contra o ghcr.io REAL (este host tem egress de
+    rede real, confirmado) — rejeitado de verdade ("denied"/"manifest unknown"). O motor de
+    recuperação real (agent.Executor.recover) classifica corretamente como R0 (falha antes de
+    qualquer mutação, sem snapshot de PREPARING concluído) e transiciona para ROLLED_BACK.
+  Cenários 1-5 (usam f8harness contra o registry local, pull real bem-sucedido): baseline v1,
+    health timeout real -> rollback R1, incompatibilidade de banco declarada (R3) -> bloqueio
+    seguro, kill -9 real do processo do agente em pleno apply -> recuperação via lock/fencing
+    real, migration drift (checksum_bundle divergente) -> recusa real antes de rodar qualquer
+    SQL. Detalhes/evidência de cada um na tabela de "Testes executados" abaixo.
+  Cenários da especificação verificados por INSPEÇÃO DE CÓDIGO em vez de execução (ver
+    Pendências): NATS lag e API indisponível durante uma reconciliação.
+Arquivos:
+  scripts/release/f8harness/main.go (novo, ~170 linhas — binário de staging, nunca produção)
+  scripts/release/test-f8-staging.sh (novo, ~820 linhas)
+Migrations: nenhuma migration REAL nova (a migration de teste 000174_f8_staging_marker só
+  existe numa cópia isolada do diretório dentro de /tmp, nunca em migrations/ do repositório).
+Contratos: nenhum novo; nenhuma mudança no OpenAPI/AsyncAPI (fase é só staging/teste).
+Testes executados (execução real `scripts/release/test-f8-staging.sh`, rodada limpa confirmada
+  em 2026-10-22T11:04:17Z, execução `f8-2963183` — todas as 7 linhas PASS, a última de várias
+  rodadas idênticas após a convergência da revisão Codex):
+  | Linha | Classe de recuperação observada | RTO real medido | Evidência |
+  |---|---|---|---|
+  | 0b — API real autenticada (GetInstallation, ledger vazio) | — | — | GET real responde 200; PID que lançamos confirmado dono do socket LISTEN (ss -ltnp) |
+  | 0 — pull rejeitado pelo ghcr.io real (digest inexistente) | R0 | 3.06s | checkpoints do ledger: backup real completo+verificado, download `denied` real, recovery_decision "R0: falha antes de qualquer mutação" |
+  | 1 — baseline v1 (deploy real + migration 000174, genuinamente PENDENTE, aplicada pelo agente) | — (SUCCEEDED) | 132.73s | 3 units reais saudáveis = v1; tabela/linha f8_staging_marker confirmada no Postgres real |
+  | 2 — health check real nunca passa (imagem broken) | R1 | 149.91s | checkpoints reais `health...failed` + `recovery_decision completed rollback`; digest do container api confirmado de volta a v1 (docker inspect) |
+  | 3 — mesma falha de health + recovery_class=R3 declarado | R3 | 114.90s | checkpoints reais `health...failed` + `recovery_decision failed...recovery_class=R3`; digest do container api confirmado AINDA broken (nunca revertido) |
+  | 4 — kill -9 real do agente em pleno apply (worker=slow), após reparar o baseline deixado broken pelo Cenário 3 | crash-resume (SUCCEEDED) | 136.07s | processo A morto de verdade (árvore completa); retry imediata com holder diferente recusada por fencing real; processo B retoma após o lease expirar e conclui — checkpoints de backup/download/snapshot/migrate confirmados com a MESMA contagem antes/depois (nunca refeitos) |
+  | 5 — migration drift (checksum_bundle divergente) | R0/R1 (ROLLED_BACK) | 7.08s | checkpoint real `migrate failed`: "inventário de migrations ... não bate com migrations.checksum_bundle aprovado ... recusando aplicar", ANTES de qualquer SQL |
+  RPO: todo cenário com mutação real de dados (1, 2, 3, 4) passa por um backup real
+    (pg_dump -Fc via docker exec, igual a scripts/backup-omnira-db.sh, agora com EXTERNAL_MOUNT/
+    BACKUP_CLOUD_CONF isolados por um wrapper só de staging) ANTES de qualquer mutação — RPO =
+    tempo desde o último dump, consistente com o já documentado em F4/release/policies/
+    backup.yaml (backup lógico, não PITR; cron de agendamento não instalado neste host, achado
+    F0, fora do escopo deste programa).
+  go build ./... (apps/update-agent, apps/updatectl, scripts/release/f8harness, todo o resto do
+    monorepo) → limpo em toda rodada.
+Gates de segurança: nenhum controle real foi afrouxado para viabilizar este teste.
+  domain.ParseManifest continua exigindo "ghcr.io/..." e um SignatureVerifier real em TODO
+  ponto de entrada de produção (API, updatectl start/reconcile) — f8harness é um binário
+  SEPARADO, claramente documentado como staging-only no próprio cabeçalho do arquivo, nunca
+  referenciado por nenhum cmd de produção nem pela especificação de deploy. O agente real
+  nunca promete rollback automático de dados (Rollback só reaplica DIGESTS de código via
+  Compose, nunca `*.down.sql`/`make migrate-down` — confirmado pelo cenário 5, onde a
+  migration rejeitada nunca chega a rodar). R3/R4 nunca são autodestrutivos: o cenário 3
+  confirma `RECOVERY_REQUIRED` preservando evidência em vez de uma tentativa automática de
+  rollback só porque o código permitiria.
+Review Codex (evidência real): `codex exec review --base b8976be` executado 15 vezes contra o
+  diff acumulado de F8, seguindo o mesmo ciclo rigoroso fix→teste real→nova rodada das fases
+  anteriores. As duas ÚLTIMAS rodadas (14 e 15) convergiram consecutivamente em "No actionable
+  defects were identified". 22 achados reais corrigidos ao longo das 13 primeiras rodadas,
+  agrupados por tema:
+  - **Rigor das asserções de crash/recuperação** (rodadas 1, 2, 9): aceitar o estado final
+    (SUCCEEDED/ROLLED_BACK) sozinho nunca provava que o cenário pretendido de fato aconteceu —
+    corrigido exigindo, como condições OBRIGATÓRIAS (nunca um aviso): o processo A realmente
+    morreu via SIGKILL (não terminou sozinho antes); a retry imediata com holder diferente foi
+    recusada de verdade por fencing; os checkpoints de backup/download/snapshot/migrate têm a
+    MESMA contagem antes/depois do kill (nunca refeitos); o Cenário 4 sempre parte de um
+    baseline genuinamente SAUDÁVEL (reparado depois do Cenário 3, que deixa de propósito a
+    imagem broken implantada); e o momento do kill passou de aguardar 'deploy started'
+    (registrado ANTES do `docker compose up -d` real executar) para 'deploy completed'.
+  - **Verificação por checkpoint real, nunca só o estado final** (rodadas 1, 2): um
+    ROLLED_BACK/RECOVERY_REQUIRED pode vir de uma falha ANTERIOR à pretendida (ex. um backup
+    falho também produz R0) — corrigido confirmando, via os checkpoints reais do ledger, que o
+    Cenário 0 de fato chegou a 'download failed', o Cenário 2 a 'health...failed' +
+    'recovery_decision completed rollback' + o digest do container api de volta a v1 (via
+    `docker inspect --format '{{.Config.Image}}'`, depois que `docker ps --format '{{.Image}}'`
+    se mostrou truncar o digest numa rodada real), e o Cenário 3 a 'health...failed' +
+    'recovery_decision failed...recovery_class=R3' + o digest AINDA broken (nunca revertido).
+  - **Isolamento de concorrência/host compartilhado** (rodadas 8, 9, 10): holders com sufixo
+    de PID sem âncora de limite ("f8-1234" é PREFIXO de "f8-12345") podiam fazer o `pkill -f`
+    de uma execução matar o reconciliador de OUTRA execução concorrente desta suíte — corrigido
+    com um espaço no final de cada padrão. A porta da API escolhida por `$$ % 400` podia
+    colidir entre execuções (ou com qualquer serviço já na porta), e nem `kill -0` bastava para
+    provar que NOSSO processo era o dono real do socket — corrigido confirmando via `ss -ltnp`
+    real quem de fato detém o LISTEN. As 4 imagens de teste de cada execução nunca eram
+    removidas (acumularam 101 imagens órfãs ao longo desta sessão, já limpas manualmente) —
+    corrigido com um array LOCAL_IMAGES + `docker rmi -f` em cleanup().
+  - **Evidência que sobrevive à limpeza** (rodadas 3, 6): sem KEEP_WORK explícito, o trap de
+    EXIT apagava relatório/checkpoints/ledger mesmo numa rodada FALHA — corrigido copiando
+    report-final.md (e report.md como report-partial.md, se o script saísse antes da seção
+    final) + evidence/ + o ledger (com os sidecars -wal/-shm, já que a API ainda tem o SQLite
+    aberto em modo WAL — mata-la ANTES de copiar) para /tmp/omnira-f8-reports/$RUN,
+    incondicionalmente. LEDGER_PATH="" e LOCAL_IMAGES=() movidos para ANTES do `trap cleanup
+    EXIT` — sob `set -u`, uma falha de setup muito precoce expandiria essas variáveis
+    indefinidas e abortaria a limpeza inteira, deixando registry/Postgres/NATS órfãos.
+  - **Limpeza de subprocessos, não só do processo Go** (rodadas 3, 13): `kill -9 "$PID_A"`
+    sobre um `HARNESS ... &` matava só o SUBSHELL que bash cria para a função em segundo
+    plano (achado real: o binário f8harness, neto desse processo, ficava ÓRFÃO rodando sem
+    interrupção) — corrigido com `pkill` por padrão de linha de comando. Isso ainda só achava
+    o processo Go, nunca um subprocesso real que ele tivesse lançado (migrate/backup/compose,
+    com linha de comando diferente) — corrigido com `kill_tree()`, recursivo via `pgrep -P`,
+    com fallback `sudo -n kill -9` para descendentes root sob --compose-sudo.
+  - **Manifesto/API corretos** (rodadas 6, 7): o setup aplicava TUDO (incl. a migration de
+    teste) antes de qualquer run começar — nenhum cenário exercitava uma aplicação REAL de
+    migration pendente — corrigido migrando só até 000173 no setup, deixando 000174
+    genuinamente pendente para o Cenário 1 aplicar de verdade (confirmado consultando o
+    Postgres direto). Nenhum cenário exercitava a API HTTP real autenticada — a primeira
+    tentativa (GetInstallation após um run f8harness suceder) revelou, ao testar contra
+    evidência real, um beco sem saída arquitetural genuíno: a sincronização de
+    GetInstallation roda domain.ParseManifest no manifesto do run SUCCEEDED mais recente, e
+    TODO cenário via f8harness usa imagens do registry LOCAL (nunca ghcr.io) — ParseManifest
+    rejeita isso de verdade (500 real), e isso deixaria GetInstallation QUEBRADA PARA SEMPRE no
+    resto da suíte. Revertido; substituído por uma checagem segura com o ledger ainda vazio
+    (200 esperado), e por achar, nesse processo, que os release_id "f8-nome-$RUN" usados pelos
+    5 manifestos locais também eram rejeitados pelo mesmo ParseManifest.releaseIDRe em outros
+    caminhos — corrigido para o formato real "omnira-X.Y.Z[-sufixo]".
+  - **Higiene de credencial** (rodada 11): a resposta do dev-login (com o Bearer token do
+    operador) ia para um arquivo em /tmp com nome previsível ($$) — legível por outro usuário
+    sob o umask comum 022, e symlink-atacável — corrigido sem arquivo nenhum, body+status no
+    mesmo stdout do curl.
+  - **Isolamento de efeitos colaterais de backup** (rodada 9): scripts/backup-omnira-db.sh real
+    tem destinos de produção (EXTERNAL_MOUNT/USB, BACKUP_CLOUD_CONF/rclone) que `--backup-dir`
+    nunca isola — se este host tivesse qualquer um configurado de verdade, os dumps FALSOS
+    desta suíte seriam copiados para destinos REAIS. Corrigido com um wrapper SOMENTE de
+    staging que `export`a os dois para caminhos inexistentes antes de exec'ar o script real
+    (nunca alterado).
+Commits (nesta branch, nunca push):
+  0ae4e0c feat(release-staging): staging isolado + cenário 0 (pull real rejeitado -> R0) (F8)
+  3ced58a feat(release-staging): fault injection real (R0-R4) contra registry/Docker locais (F8)
+  8d565a4 fix(release-staging): asserções reais no fault injection, nunca estado final sozinho (F8)
+  5041af3 fix(release-staging): migration pendente real, timing de crash, evidência persistida (F8)
+  d4c9270 fix(release-staging): cleanup resiliente, ledger consistente, asserção real do R3 (F8)
+  32e4ef7 fix(release-staging): isola destinos externos de backup, prova idempotência real (F8)
+  9d830fd fix(release-staging): cleanup mata o reconciliador real de fundo, não um pid morto (F8)
+  706aed5 fix(release-staging): corrige release_id, exercita a API real com segurança (F8)
+  57cb917 fix(release-staging): checagem da API real autenticada vira gate de verdade (F8)
+  b029b10 fix(release-staging): confirma dono real da porta da API, ancora padrões de holder (F8)
+  6773180 fix(release-staging): repara baseline antes do kill-9, remove imagens de teste (F8)
+  2d940b6 fix(release-staging): confirma a posse real do socket LISTEN da API (F8)
+  a0c11b4 fix(release-staging): nunca escreve o token do operador em /tmp previsível (F8)
+  28233d3 fix(release-staging): cleanup mata a árvore completa de subprocessos (F8)
+Pendências/BLOCKED_EXTERNAL:
+  - NATS lag / API indisponível durante uma reconciliação: verificados por INSPEÇÃO DE CÓDIGO
+    (grep confirma ausência de qualquer import/chamada a um cliente NATS ou HTTP da API dentro
+    de internal/platformrelease/agent/ — o Update Agent só depende do seu ledger SQLite local
+    e do Docker real, por desenho, ADR-0054 §2.1/§6.1), não por execução de um cenário dedicado
+    de pausar/derrubar containers NATS/API durante um run real. Pausar o container NATS ou
+    parar a API durante um dos cenários 1-5 não teria, pelo desenho atual, nenhum efeito
+    observável diferente do já medido (o agente nunca os consulta) — repetir a bateria toda só
+    para confirmar isso teria custo de tempo real desproporcional ao valor da evidência
+    adicional; documentado aqui como limitação de profundidade, não como "no papel".
+  - A simulação ponta a ponta via API HTTP real (IngestRelease→CreatePlan→StartRun) está
+    BLOCKED_EXTERNAL de fato: IngestRelease exige um SignatureVerifier real
+    (blockedExternalVerifier nesta instalação — achado F0 §7, sem credenciais GHCR/gh
+    CLI/Cosign), confirmado na prática (503 real). O mecanismo real e já sancionado para este
+    caso (`updatectl start --approved-out-of-band`) foi usado no Cenário 0. GetInstallation
+    (leitura) foi exercitada contra a API real com segurança (ver Review Codex); as mutações
+    reais da API (IngestRelease/CreatePlan/StartRun) permanecem BLOCKED_EXTERNAL nesta sessão.
+  - GetInstallation não pode ser chamada depois de QUALQUER run f8harness bem-sucedido nesta
+    instalação sem quebrar PERMANENTEMENTE (500 real) — incompatibilidade arquitetural genuína
+    entre a sincronização real (que roda domain.ParseManifest no manifesto do run SUCCEEDED
+    mais recente) e o uso de imagens de registry local (nunca ghcr.io) por todo cenário
+    f8harness. Investigada, documentada e contornada com segurança (checagem só no ledger
+    vazio) — nunca fingida. Resolver de verdade exigiria credenciais de publish no GHCR real do
+    projeto (BLOCKED_EXTERNAL) ou alterar DNS/daemon Docker do host (proibido, afetaria a
+    stack real).
+  - Disco insuficiente dedicado (tmpfs/quota pequena forçando ENOSPC no backup): NÃO construído
+    como cenário próprio nesta rodada — mas o cenário 3 (R3) e rodadas anteriores desta mesma
+    sessão já produziram, de forma real e não planejada, uma falha de backup genuína (erro de
+    permissão real num arquivo temporário compartilhado do host, FATAL real, nunca mascarado) e
+    confirmaram o comportamento correto (R0, falha antes de qualquer mutação). Uma falha de
+    disco PROPOSITAL via tmpfs pequeno fica como extensão futura se o dono do repositório
+    pedir — o mecanismo (ENOSPC real do pg_dump) seria idêntico em espírito ao já observado.
+  - Deadlock/lock concorrente entre dois processos tentando reconciliar a MESMA instalação ao
+    mesmo tempo: parcialmente coberto pelo cenário 4 (a "retry imediata" É uma segunda tentativa
+    concorrente real, corretamente recusada por fencing) — um teste dedicado a dois processos
+    disputando o lock SIMULTANEAMENTE (não um depois do outro) não foi construído nesta rodada.
+  - "Verificar ingressos, UI, API, NATS, webhooks, CRM Headless e Hub" (texto da especificação):
+    a simulação ponta a ponta aqui cobre API (ledger real)/agente real/Docker real/Postgres
+    real; UI (F7), webhooks, CRM Headless e Hub não têm nenhuma dependência documentada do
+    platform release (grep confirma: nenhum desses módulos importa internal/platformrelease) —
+    não exercitados especificamente aqui por não haver acoplamento a exercitar; registrado como
+    limitação de cobertura, não como "verificado".
+  - Teste Playwright contra o staging: não construído nesta fase — a simulação real aqui é
+    toda backend/agente/Docker; a baseURL de produção já documentada como achado de F2
+    (`web/playwright.config.ts`) permanece corrigida para 127.0.0.1, confirmada mas não
+    exercitada contra ESTE staging especificamente.
+Próxima fase: F9 (gate de enforcement de backup-evidence e demais itens do roadmap)
+```
+
+**Veredito: PASS**
+
+---
