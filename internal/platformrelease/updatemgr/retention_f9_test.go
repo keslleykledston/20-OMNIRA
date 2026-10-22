@@ -356,8 +356,15 @@ func TestUpdateMgr_DeleteReleaseCatalogEntry_RefusesWhenActiveRunReferencesRelea
 		}
 	}
 
-	if _, err := svc.DeleteReleaseCatalogEntry(w.ctx, op, "gc-key-f9-0308", "omnira-9.9.308"); !errors.Is(err, updatemgr.ErrInvalid) {
-		t.Errorf("esperava ErrInvalid (run ativo referenciando a release), veio %v", err)
+	// Achado Codex [P2] (rodada 6 desta fatia): DeleteReleaseCatalogEntry agora detém o
+	// MESMO agent_lock que updatectl/o daemon usam durante a checagem — como este teste
+	// NUNCA liberou o lock (run ativo de propósito), a tentativa de exclusão é recusada já
+	// na própria aquisição do lock (holder "test-updatectl" ainda tem heartbeat válido),
+	// antes de chegar a qualquer checagem de releaseSafeToDelete — nunca ErrInvalid
+	// especificamente, mas um erro mesmo assim, e é o resultado CORRETO (ainda mais forte:
+	// nem consegue ler o estado do ledger enquanto o deploy real segue ativo).
+	if _, err := svc.DeleteReleaseCatalogEntry(w.ctx, op, "gc-key-f9-0308", "omnira-9.9.308"); err == nil {
+		t.Error("esperava um erro (run ativo detém o lock do ledger), DeleteReleaseCatalogEntry nunca deveria ter sucesso")
 	}
 	if n := w.count(`SELECT count(*) FROM platform_releases WHERE release_id = $1`, "omnira-9.9.308"); n != 1 {
 		t.Errorf("omnira-9.9.308 nunca deveria ter sido removida enquanto o deploy está ativo, achei %d linhas", n)
