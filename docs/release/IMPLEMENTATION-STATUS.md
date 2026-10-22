@@ -930,8 +930,22 @@ Testes executados (comandos, PASS/FAIL):
     (SetInstallationVersion) vencendo um histórico de ledger mais antigo; bloqueio de novo
     despacho enquanto há RECOVERY_REQUIRED não reconhecido (mesmo gate que Executor.Reconcile).
   go test ./internal/hub/adapters/... ./internal/hub/provisioning/... ./internal/platform/db/...
-    (regressão ampliada, mesma variante host) → PASS — confirma que as 12 tabelas novas e a
-    RLS/policies adicionadas não quebraram nenhum pacote existente de autorização/RLS.
+    (regressão ampliada, mesma variante host) → internal/hub/provisioning e internal/platform/db
+    PASS (confirma que as 12 tabelas novas e a RLS/policies adicionadas não quebraram nenhum
+    pacote existente de autorização/RLS). internal/hub/adapters: FAIL em 2 subtestes de
+    TestDelegatedRealtimeStreams ("a_contract_limited_to_some_queues..." e
+    "with_a_limited_contract_the_visibility_answer_is_reused_only_briefly...", ambos
+    serving_realtime_integration_test.go, falha "first event = \"\", want the one of the allowed
+    queue"/"inside the scope: \"\""). INVESTIGADO E CONFIRMADO PRÉ-EXISTENTE, NÃO É REGRESSÃO
+    DESTA FASE: reexecutado isoladamente duas vezes nesta branch (determinístico, mesmos 2
+    subtestes) E uma terceira vez em worktree temporário no commit BASE e0e560e (último commit de
+    F5, HEAD antes de qualquer alteração de F6) — falha idêntica, nos mesmos 2 subtestes, sem
+    nenhuma linha deste programa aplicada. Nada em F6 toca
+    internal/hub/adapters/serving_realtime*.go, autenticação delegada de Hub ou NATS/SSE; a causa
+    é sensibilidade a timing deste teste específico neste ambiente de execução (não investigada a
+    fundo — fora do escopo de correção desta fase), não as tabelas/migrations/handlers adicionados
+    aqui. Documentado para o dono do repositório decidir se investiga a parte; worktree temporário
+    de comparação removido (git worktree remove) após a verificação, nada residual.
 Gates de segurança / RLS: 12 tabelas novas, todas FORCE RLS + policy restrita a
   is_platform_operator() (ver Migrations acima). Defesa em profundidade dupla em toda rota HTTP
   (sessão de RLS do chamador + sessão de sistema do Service, cada uma recusando
@@ -1017,6 +1031,12 @@ Pendências/risco:
     aplicada ao script VERSIONADO nesta sessão — usei uma variante local descartável para
     verificação; recomendado ao dono do repositório decidir a estratégia de mount definitiva
     (fora do escopo de correção de F6).
+  - internal/hub/adapters.TestDelegatedRealtimeStreams: 2 subtestes falham por sensibilidade a
+    timing NESTE ambiente de execução — PRÉ-EXISTENTE, confirmado reproduzindo a falha idêntica
+    no commit base e0e560e (antes de qualquer linha de F6), ver "Testes executados" acima para o
+    detalhe da investigação. Não é um gate de F6 (nenhum arquivo tocado por esta fase participa
+    do caminho de streaming delegado), mas fica registrado para quem for investigar a causa raiz
+    do timing, possivelmente em fase futura ou fora deste programa.
 Próxima fase: F7 — Frontend real do OMNIRA (menu "Administração global → Plataforma → Versões e
   Atualizações", React/Vite existente, consumindo as 10 rotas desta fase)
 ```
