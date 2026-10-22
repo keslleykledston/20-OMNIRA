@@ -59,6 +59,11 @@ cleanup() {
   ARTIFACTS_DIR="/tmp/omnira-f8-reports/$RUN"
   mkdir -p "$ARTIFACTS_DIR"
   [ -f "$WORK/report-final.md" ] && cp "$WORK/report-final.md" "$ARTIFACTS_DIR/"
+  # achado Codex: se o script saísse ANTES da seção "relatório final" (um create-run que não
+  # devolve run_id, uma interrupção) report-final.md nunca chega a existir — mas $REPORT
+  # ($WORK/report.md) já tem as linhas dos cenários que JÁ terminaram, acumuladas por
+  # report_row() em tempo real. Copia como fallback incondicional, nunca só o relatório final.
+  [ -f "$REPORT" ] && cp "$REPORT" "$ARTIFACTS_DIR/report-partial.md"
   [ -d "$EVIDENCE" ] && cp -r "$EVIDENCE" "$ARTIFACTS_DIR/evidence"
   # achado Codex: a API real ainda tem o ledger SQLite aberto em modo WAL neste ponto — runs e
   # checkpoints recém-committed podem estar só em ledger.db-wal, nunca em ledger.db; copiar só
@@ -322,6 +327,25 @@ api() { # api <method> <path> [idem-key] [body]
 api_body() { echo "$1" | sed '$d'; }
 api_code() { echo "$1" | tail -1; }
 
+# achado Codex: nenhum cenário chamava de fato a API HTTP real autenticada (api()) — exercita
+# GetInstallation AGORA, antes de qualquer run existir no ledger. Depois do Cenário 1 (primeiro
+# run SUCCEEDED, manifesto com imagens do registry local — nunca ghcr.io, a única forma de ter
+# um pull real bem-sucedido sem credenciais GHCR) este MESMO endpoint ficaria PERMANENTEMENTE
+# quebrado: GetInstallation sincroniza do ledger via latestSucceededVersion, que roda
+# domain.ParseManifest no manifesto do run SUCCEEDED mais recente — e ParseManifest rejeita de
+# verdade um artifacts[].image que não seja ghcr.io (confirmado nesta sessão: 500 real,
+# "artifacts[].image ... não é uma referência ghcr.io"). Aqui, com o ledger ainda vazio,
+# GetInstallation não tem nenhum run para sincronizar (ok=false, sem erro) — prova que a rota
+# real está autenticada e funcional, mesmo não podendo provar (nesta sessão, sem credenciais
+# GHCR) que ela reflete um SUCESSO real do agente — ver Pendências no IMPLEMENTATION-STATUS.md.
+INST0_RESP=$(api GET /api/v1/platform/installation)
+INST0_CODE=$(api_code "$INST0_RESP")
+if [ "$INST0_CODE" = "200" ]; then
+  log "   API real (GET /api/v1/platform/installation) respondeu 200 com o ledger ainda vazio — rota autenticada e funcional"
+else
+  log "   ${RED}aviso${NC}: GET /api/v1/platform/installation devolveu $INST0_CODE (esperava 200): $(api_body "$INST0_RESP")"
+fi
+
 # achado Codex: scripts/backup-omnira-db.sh real tem efeitos colaterais de produção que
 # --backup-dir NUNCA isola — se este host tiver EXTERNAL_MOUNT (USB) montado ou
 # BACKUP_CLOUD_CONF (rclone/Google Drive) configurado de verdade, os dumps FALSOS desta
@@ -415,7 +439,7 @@ log "   estado final do run após reconcile real: $FINAL_STATE (RTO ${RTO0}s)"
 # fato tentado o pull contra o ghcr.io real. Confirma o checkpoint 'download failed' real.
 if [ "$FINAL_STATE" = "ROLLED_BACK" ] && echo "$CKPT0" | grep -q "download.*failed"; then
   log "   ${GRN}OK${NC}: pull real rejeitado (ghcr.io real, digest inexistente) classificado como R0 -> ROLLED_BACK, sem mutação"
-  report_row "0-fio-condutor (API real->ledger->agente, pull real rejeitado)" "R0" "$RTO0" "PASS" "cenario0-reconcile.log"
+  report_row "0-fio-condutor (updatectl real->ledger->agente, pull real rejeitado)" "R0" "$RTO0" "PASS" "cenario0-reconcile.log"
 else
   log "   ${RED}FALHA${NC}: esperava ROLLED_BACK (R0) com checkpoint 'download failed', obteve estado=$FINAL_STATE"
   cat "$EVIDENCE/cenario0-reconcile.log"; echo "$CKPT0"
@@ -476,7 +500,8 @@ wait_for_checkpoint() {
 section "Cenário 1: baseline v1 (todas as units) via agent.Executor real"
 T0=$(date +%s.%N)
 M1="$WORK/m-baseline.json"
-build_local_manifest "f8-baseline-$RUN" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M1"
+RELEASE1="omnira-9.9.$$-baseline"
+build_local_manifest "$RELEASE1" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M1"
 RUN1=$(HARNESS create-run --manifest="$M1" | grep -oE 'run_id=\S+' | cut -d= -f2)
 HARNESS reconcile > "$EVIDENCE/cenario1-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO1=$(echo "$T1 - $T0" | bc)
@@ -486,11 +511,25 @@ log "   run $RUN1 (baseline v1): estado=$ST1 (RTO ${RTO1}s)"
 # verdade (ex. um bug marcando "já aplicada" sem rodar o SQL) passaria batido — confirma a
 # tabela/linha REAIS no Postgres, não só que o run terminou em SUCCEEDED.
 MARKER_ROW=$(psql_o -c "SELECT note FROM f8_staging_marker WHERE id=1" 2>/dev/null)
+# achado Codex (tentativa revertida, documentada como limitação real — ver Pendências no
+# IMPLEMENTATION-STATUS.md): tentamos aqui chamar GET /api/v1/platform/installation real após
+# este run SUCCEEDED, já que GetInstallation sincroniza do ledger via
+# latestSucceededVersion/applyLatestSucceededRunToInstallation "inclusive um [run] iniciado por
+# updatectl" (comentário real em service.go). Corrigimos o release_id para o formato
+# omnira-X.Y.Z exigido — mas latestSucceededVersion TAMBÉM roda domain.ParseManifest no
+# manifesto deste run, cujos artifacts[].image são do registry LOCAL (nunca ghcr.io, a única
+# forma de ter um pull real bem-sucedido sem credenciais GHCR — ver f8harness), e ParseManifest
+# rejeita isso de verdade (confirmado: 500 real, "artifacts[].image ... não é uma referência
+# ghcr.io"). Pior: isso deixaria GetInstallation QUEBRADA PARA SEMPRE depois do primeiro run
+# f8harness bem-sucedido nesta instalação (latestSucceededVersion sempre escolhe o MAIS
+# recente). Chamar a API real aqui exigiria um run SUCCEEDED com manifesto ghcr.io-válido — a
+# MESMA limitação de credenciais GHCR do Cenário 0, que lá só precisa falhar (não pode haver um
+# pull ghcr.io de verdade sem publicar lá), nunca suceder. Nunca fingido; revertido.
 if [ "$ST1" = "SUCCEEDED" ] && [ -n "$MARKER_ROW" ]; then
   log "   ${GRN}OK${NC}: migration 000174 (pendente até aqui) aplicada de verdade pelo agente real — f8_staging_marker confirmada no Postgres: $MARKER_ROW"
   report_row "1-baseline-v1 (deploy real + migration pendente aplicada)" "-" "$RTO1" "PASS" "cenario1-reconcile.log"
 else
-  log "   ${RED}FALHA${NC}: f8_staging_marker ausente/vazia após o run (migration 000174 pode não ter sido de fato aplicada)"
+  log "   ${RED}FALHA${NC}: f8_staging_marker ausente/vazia (marker=$MARKER_ROW)"
   cat "$EVIDENCE/cenario1-reconcile.log"
   report_row "1-baseline-v1" "-" "$RTO1" "FAIL(estado=$ST1, marker ausente)" "cenario1-reconcile.log"; FAILS=$((FAILS+1))
 fi
@@ -498,7 +537,7 @@ fi
 section "Cenário 2: health timeout real -> rollback automático seguro (R1)"
 T0=$(date +%s.%N)
 M2="$WORK/m-broken-r1.json"
-build_local_manifest "f8-broken-r1-$RUN" "${DIGESTS[broken]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M2"
+build_local_manifest "omnira-9.9.$$-broken-r1" "${DIGESTS[broken]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M2"
 RUN2=$(HARNESS create-run --manifest="$M2" | grep -oE 'run_id=\S+' | cut -d= -f2)
 HARNESS reconcile > "$EVIDENCE/cenario2-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO2=$(echo "$T1 - $T0" | bc)
@@ -527,7 +566,7 @@ fi
 section "Cenário 3: incompatibilidade de banco (R3) -> bloqueio seguro, nunca rollback automático"
 T0=$(date +%s.%N)
 M3="$WORK/m-broken-r3.json"
-build_local_manifest "f8-broken-r3-$RUN" "${DIGESTS[broken]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R3" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M3"
+build_local_manifest "omnira-9.9.$$-broken-r3" "${DIGESTS[broken]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R3" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M3"
 RUN3=$(HARNESS create-run --manifest="$M3" | grep -oE 'run_id=\S+' | cut -d= -f2)
 HARNESS reconcile > "$EVIDENCE/cenario3-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO3=$(echo "$T1 - $T0" | bc)
@@ -555,7 +594,7 @@ fi
 section "Cenário 4: kill -9 real do agente em pleno apply -> recuperação via lock/fencing/heartbeat"
 T0=$(date +%s.%N)
 M4="$WORK/m-slow.json"
-build_local_manifest "f8-slow-$RUN" "${DIGESTS[v1]}" "${DIGESTS[slow]}" "${DIGESTS[v1]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M4"
+build_local_manifest "omnira-9.9.$$-slow" "${DIGESTS[v1]}" "${DIGESTS[slow]}" "${DIGESTS[v1]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M4"
 RUN4=$(HARNESS create-run --manifest="$M4" | grep -oE 'run_id=\S+' | cut -d= -f2)
 # holders ÚNICOS por invocação deste script (sufixo $RUN, já único por PID) — achado Codex:
 # um literal fixo "f8-agent-A" faria duas execuções CONCORRENTES desta suíte (dois PIDs
@@ -664,7 +703,7 @@ cat >> "$MIGRATIONS_DRIFT/000174_f8_staging_marker.up.sql" <<'SQLEOF'
 -- F8 drift de teste: arquivo alterado DEPOIS do checksum_bundle ter sido calculado.
 SQLEOF
 M5="$WORK/m-drift.json"
-build_local_manifest "f8-drift-$RUN" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M5"
+build_local_manifest "omnira-9.9.$$-drift" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M5"
 RUN5=$(HARNESS create-run --manifest="$M5" | grep -oE 'run_id=\S+' | cut -d= -f2)
 F8_MIGRATIONS_DIR="$MIGRATIONS_DRIFT" HARNESS reconcile > "$EVIDENCE/cenario5-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO5=$(echo "$T1 - $T0" | bc)
