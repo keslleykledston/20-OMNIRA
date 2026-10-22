@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -53,24 +54,48 @@ func main() {
 	log.Printf("omnira-update-agent: iniciado (installation_id=%s holder=%s ledger=%s poll_interval=%s)",
 		cfg.InstallationID, cfg.Holder, cfg.LedgerPath, cfg.PollInterval)
 
-	reconcile := func() {
-		// F9 (monitoramento "status do agente"): grava AQUI, nunca dentro de
-		// agentconfig.ReconcileOnce — essa função também é chamada por apps/updatectl sob
-		// demanda (uma invocação manual, nunca o daemon de longa duração), e misturar os
-		// dois faria uma chamada única de updatectl parecer "o daemon está vivo e fazendo
-		// poll". Grava a CADA ciclo, mesmo sem nenhum run ativo (ReconcileOnce pode retornar
-		// sem fazer nada) — o sinal de liveness nunca pode depender de haver trabalho.
+	// F9 (monitoramento "status do agente"), achado Codex [P2]: um heartbeat gravado só no
+	// INÍCIO de cada ciclo de reconcile pararia de avançar durante qualquer reconcile
+	// genuinamente longo (um --observe-window de 10 minutos, um backup grande) — marcando um
+	// daemon SAUDÁVEL e trabalhando como obsoleto. Por isso este ticker é INDEPENDENTE do
+	// ciclo de poll/reconcile, na sua própria goroutine, num intervalo bem menor que qualquer
+	// limiar de obsolescência razoável — nunca espera reconcile() terminar para avançar de
+	// novo. Nunca chamado de dentro de agentconfig.ReconcileOnce (que apps/updatectl também
+	// chama sob demanda): misturar os dois faria uma invocação manual parecer "o daemon está
+	// fazendo poll".
+	go runLoop(ctx, heartbeatInterval, func() {
 		if err := ledger.RecordAgentHeartbeat(ctx, cfg.InstallationID, cfg.Holder); err != nil {
 			log.Printf("omnira-update-agent: registrar heartbeat: %v", err)
 		}
+	})
+
+	reconcile := func() {
 		if err := agentconfig.ReconcileOnce(ctx, exec, ledger, cfg.InstallationID, cfg.Holder, cfg.Lease); err != nil {
 			log.Printf("omnira-update-agent: reconcile: %v", err)
+		}
+		// F9 (monitoramento "versão real/digest divergente"), achado Codex [P2]: nem o
+		// ledger (histórico de runs) nem o Postgres (platform_installations) observam
+		// containers de verdade por si só — sem isto, um container substituído manualmente,
+		// ou uma implantação que falhou deixando outra imagem rodando, nunca apareceria em
+		// nenhum sinal de monitoramento. Melhor esforço: um Docker indisponível não derruba
+		// o ciclo de reconcile (que já rodou, acima) nem o daemon.
+		if snap, serr := exec.Compose.CurrentSnapshot(ctx); serr != nil {
+			log.Printf("omnira-update-agent: observar digests reais: %v", serr)
+		} else if raw, merr := json.Marshal(snap.Digests); merr != nil {
+			log.Printf("omnira-update-agent: serializar digests observados: %v", merr)
+		} else if err := ledger.RecordObservedDigests(ctx, cfg.InstallationID, cfg.Holder, string(raw)); err != nil {
+			log.Printf("omnira-update-agent: registrar digests observados: %v", err)
 		}
 	}
 
 	runLoop(ctx, cfg.PollInterval, reconcile)
 	log.Printf("omnira-update-agent: sinal recebido, encerrando")
 }
+
+// heartbeatInterval é bem menor que qualquer limiar razoável de obsolescência de monitoramento
+// (minutos) — o ponto é só provar que o processo ainda está respondendo, nunca refletir
+// trabalho real (isso é o que --poll-interval e reconcile() fazem).
+const heartbeatInterval = 30 * time.Second
 
 // runLoop chama reconcile() uma vez imediatamente e depois a cada pollInterval, até ctx ser
 // cancelado (sinal recebido, ou — nos testes — um contexto com deadline/cancel explícito).

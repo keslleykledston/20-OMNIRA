@@ -103,14 +103,21 @@ CREATE TABLE IF NOT EXISTS revocation_sync (
 
 -- F9 (monitoramento, "status do agente"): o lock de agent_lock só existe ENQUANTO um run está
 -- ativamente sendo processado — entre runs ele é liberado, então seu heartbeat_at nunca indica
--- se o PROCESSO do agente ainda está vivo e fazendo polling. Esta linha única por instalação é
--- atualizada a CADA ciclo de agentconfig.ReconcileOnce (mesmo sem nenhum run ativo) —
--- independente de qualquer lock — dando um sinal real de liveness do daemon, nunca confundido
--- com "há um update em andamento".
+-- se o PROCESSO do agente ainda está vivo. Esta linha única por instalação é atualizada por um
+-- ticker INDEPENDENTE do ciclo de reconcile (achado Codex [P2]: gravar só no início de
+-- agentconfig.ReconcileOnce faria o relógio parar de avançar durante qualquer reconcile
+-- genuinamente longo — um ObserveWindow de 10 minutos, um backup grande — marcando um daemon
+-- SAUDÁVEL e trabalhando como obsoleto). observed_digests (achado Codex [P2]) é o snapshot
+-- REAL mais recente do Docker (ComposeAdapter.CurrentSnapshot), gravado a cada ciclo de
+-- reconcile — nem o ledger nem o Postgres observam containers de verdade por si só; sem isto,
+-- um container substituído manualmente (ou uma implantação que falhou deixando outra imagem
+-- rodando) nunca apareceria em nenhum sinal de monitoramento.
 CREATE TABLE IF NOT EXISTS agent_heartbeat (
-  installation_id TEXT PRIMARY KEY,
-  holder          TEXT NOT NULL,
-  last_poll_at    TEXT NOT NULL
+  installation_id   TEXT PRIMARY KEY,
+  holder            TEXT NOT NULL,
+  last_poll_at      TEXT NOT NULL,
+  observed_digests  TEXT NOT NULL DEFAULT '{}',
+  observed_at       TEXT
 );
 `
 
@@ -588,25 +595,65 @@ func (l *Ledger) RecordAgentHeartbeat(ctx context.Context, installationID, holde
 	return nil
 }
 
-// AgentHeartbeat (F9, monitoramento "status do agente") devolve o último poll registrado por
-// RecordAgentHeartbeat para installationID. found=false (sem erro) significa que este daemon
-// nunca completou um ciclo de poll para esta instalação — ou porque o processo nunca rodou,
-// ou porque está rodando uma versão anterior a esta funcionalidade; o chamador decide como
-// tratar isso (ex. "status desconhecido", nunca "daemon confirmado morto").
-func (l *Ledger) AgentHeartbeat(ctx context.Context, installationID string) (holder string, lastPollAt time.Time, found bool, err error) {
-	var raw string
-	err = l.db.QueryRowContext(ctx, `SELECT holder, last_poll_at FROM agent_heartbeat WHERE installation_id = ?`, installationID).Scan(&holder, &raw)
+// RecordObservedDigests (F9, monitoramento "versão real/digest divergente", achado Codex
+// [P2]) grava o snapshot REAL mais recente do Docker (ComposeAdapter.CurrentSnapshot,
+// serializado como JSON de map[Unit]string) — nem o ledger (histórico de runs) nem o Postgres
+// (platform_installations) observam containers de verdade por si só; sem isto, um container
+// substituído manualmente, ou uma implantação que falhou deixando outra imagem rodando, nunca
+// apareceria em nenhum sinal de monitoramento. Chamado a cada ciclo de reconcile — NUNCA
+// atualiza last_poll_at (responsabilidade exclusiva de RecordAgentHeartbeat, num ticker
+// independente — ver o comentário em agent_heartbeat): as duas escritas têm cadências
+// diferentes de propósito.
+func (l *Ledger) RecordObservedDigests(ctx context.Context, installationID, holder, digestsJSON string) error {
+	_, err := l.db.ExecContext(ctx,
+		`INSERT INTO agent_heartbeat (installation_id, holder, last_poll_at, observed_digests, observed_at) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(installation_id) DO UPDATE SET holder = excluded.holder, observed_digests = excluded.observed_digests, observed_at = excluded.observed_at`,
+		installationID, holder, nowRFC3339(), digestsJSON, nowRFC3339())
+	if err != nil {
+		return fmt.Errorf("agent: gravar digests observados do agente: %w", err)
+	}
+	return nil
+}
+
+// AgentHeartbeatInfo (F9, monitoramento "status do agente"/"versão real/digest divergente") é
+// o que AgentHeartbeat devolve — os dois sinais gravados por cadências independentes
+// (RecordAgentHeartbeat/RecordObservedDigests) sobre a MESMA linha por instalação.
+type AgentHeartbeatInfo struct {
+	Holder          string
+	LastPollAt      time.Time
+	ObservedDigests string // JSON de map[Unit]string — "{}" se nenhum snapshot foi gravado ainda
+	ObservedAt      time.Time
+}
+
+// AgentHeartbeat (F9) devolve o último estado registrado para installationID. found=false
+// (sem erro) significa que este daemon nunca completou um ciclo de poll para esta instalação —
+// ou porque o processo nunca rodou, ou porque está rodando uma versão anterior a esta
+// funcionalidade; o chamador decide como tratar isso (ex. "status desconhecido", nunca
+// "daemon confirmado morto"). ObservedAt pode ser zero mesmo com found=true: um heartbeat de
+// liveness já aconteceu, mas nenhum snapshot de Docker foi gravado ainda (cadências
+// independentes).
+func (l *Ledger) AgentHeartbeat(ctx context.Context, installationID string) (info AgentHeartbeatInfo, found bool, err error) {
+	var lastPollRaw string
+	var observedAtRaw *string
+	err = l.db.QueryRowContext(ctx, `SELECT holder, last_poll_at, observed_digests, observed_at FROM agent_heartbeat WHERE installation_id = ?`, installationID).
+		Scan(&info.Holder, &lastPollRaw, &info.ObservedDigests, &observedAtRaw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", time.Time{}, false, nil
+		return AgentHeartbeatInfo{}, false, nil
 	}
 	if err != nil {
-		return "", time.Time{}, false, fmt.Errorf("agent: ler heartbeat do agente: %w", err)
+		return AgentHeartbeatInfo{}, false, fmt.Errorf("agent: ler heartbeat do agente: %w", err)
 	}
-	lastPollAt, err = time.Parse(time.RFC3339Nano, raw)
+	info.LastPollAt, err = time.Parse(time.RFC3339Nano, lastPollRaw)
 	if err != nil {
-		return "", time.Time{}, false, fmt.Errorf("agent: heartbeat do agente com timestamp ilegível: %w", err)
+		return AgentHeartbeatInfo{}, false, fmt.Errorf("agent: heartbeat do agente com timestamp ilegível: %w", err)
 	}
-	return holder, lastPollAt, true, nil
+	if observedAtRaw != nil {
+		info.ObservedAt, err = time.Parse(time.RFC3339Nano, *observedAtRaw)
+		if err != nil {
+			return AgentHeartbeatInfo{}, false, fmt.Errorf("agent: observed_at do agente com timestamp ilegível: %w", err)
+		}
+	}
+	return info, true, nil
 }
 
 // RevokeRelease (F9) grava, no ledger LOCAL, que release_id nunca deve ser aplicado por este

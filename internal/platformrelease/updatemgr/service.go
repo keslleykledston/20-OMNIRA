@@ -532,18 +532,40 @@ func (s *Service) GetMonitoringStatus(ctx context.Context, operator uuid.UUID) (
 	}
 	defer ledger.Close()
 
-	if holder, lastPollAt, found, herr := ledger.AgentHeartbeat(ctx, s.installationID); herr == nil && found {
+	var heartbeat agent.AgentHeartbeatInfo
+	if info, found, herr := ledger.AgentHeartbeat(ctx, s.installationID); herr == nil && found {
+		heartbeat = info
 		out.AgentHeartbeatSeen = true
-		out.AgentHolder = holder
-		lp := lastPollAt
+		out.AgentHolder = info.Holder
+		lp := info.LastPollAt
 		out.AgentLastHeartbeat = &lp
-		out.AgentStale = time.Since(lastPollAt) > agentHeartbeatStaleAfter
+		out.AgentStale = time.Since(info.LastPollAt) > agentHeartbeatStaleAfter
 	}
 
 	if version, releaseID, _, _, found, verr := latestSucceededVersion(ctx, ledger, s.installationID); verr == nil && found {
 		out.LedgerVersion = version
 		out.LedgerReleaseID = releaseID
 		out.VersionDivergence = out.InstallationReleaseID != "" && releaseID != out.InstallationReleaseID
+	}
+
+	// Achado Codex [P2]: nem o ledger (histórico de runs) nem o Postgres observam containers
+	// de verdade — um container substituído manualmente, ou uma implantação que falhou
+	// deixando outra imagem rodando, nunca apareceria na comparação acima. Compara o que o
+	// daemon de fato observou no Docker (RecordObservedDigests) contra o que a release mais
+	// recente SUCCEEDED declara — só quando AMBOS existem; a ausência de qualquer um dos dois
+	// nunca é tratada como divergência (só como "ainda não é possível confirmar").
+	if heartbeat.ObservedDigests != "" && heartbeat.ObservedDigests != "{}" {
+		var observed map[string]string
+		if jerr := json.Unmarshal([]byte(heartbeat.ObservedDigests), &observed); jerr == nil {
+			if m, found, merr := latestSucceededManifest(ctx, ledger, s.installationID); merr == nil && found {
+				for unit, want := range agent.ExpectedDigests(m) {
+					if got, ok := observed[unit]; ok && got != "" && got != want {
+						out.VersionDivergence = true
+						break
+					}
+				}
+			}
+		}
 	}
 
 	if active, aerr := ledger.ActiveRuns(ctx, s.installationID); aerr == nil {
@@ -1734,10 +1756,13 @@ func (s *Service) writeLedgerRun(ctx context.Context, operator uuid.UUID, runID,
 // run jamais teve sucesso nesta instalação (ex. instalação recém-bootstrapada, antes de
 // qualquer SetInstallationVersion/primeiro deploy) — o chamador decide o que fazer nesse caso,
 // nunca tratado aqui como "qualquer versão serve".
-func latestSucceededVersion(ctx context.Context, ledger *agent.Ledger, installationID string) (version, releaseID, runID string, updatedAt time.Time, ok bool, err error) {
+// latestSucceededRun devolve o RunRecord SUCCEEDED mais recente desta instalação — a busca
+// bruta compartilhada por latestSucceededVersion e latestSucceededManifest, nunca duplicada
+// entre as duas (que só diferem no que extraem do manifesto depois de achá-lo).
+func latestSucceededRun(ctx context.Context, ledger *agent.Ledger, installationID string) (*agent.RunRecord, bool, error) {
 	all, err := ledger.AllRuns(ctx, installationID)
 	if err != nil {
-		return "", "", "", time.Time{}, false, err
+		return nil, false, err
 	}
 	var latest *agent.RunRecord
 	for i := range all {
@@ -1749,14 +1774,35 @@ func latestSucceededVersion(ctx context.Context, ledger *agent.Ledger, installat
 			latest = r
 		}
 	}
-	if latest == nil {
-		return "", "", "", time.Time{}, false, nil
+	return latest, latest != nil, nil
+}
+
+func latestSucceededVersion(ctx context.Context, ledger *agent.Ledger, installationID string) (version, releaseID, runID string, updatedAt time.Time, ok bool, err error) {
+	latest, found, err := latestSucceededRun(ctx, ledger, installationID)
+	if err != nil || !found {
+		return "", "", "", time.Time{}, false, err
 	}
 	m, err := domain.ParseManifest([]byte(latest.ManifestJSON))
 	if err != nil {
 		return "", "", "", time.Time{}, false, err
 	}
 	return m.PlatformVersion, m.ReleaseID, latest.RunID, latest.UpdatedAt, true, nil
+}
+
+// latestSucceededManifest (F9, monitoramento "versão real/digest divergente") devolve o
+// manifesto COMPLETO do run SUCCEEDED mais recente — latestSucceededVersion só extrai campos
+// escalares (version/releaseID), nunca o suficiente para saber o digest ESPERADO por unit
+// (agent.ExpectedDigests precisa do manifesto inteiro, Artifacts + Rollout.Workloads).
+func latestSucceededManifest(ctx context.Context, ledger *agent.Ledger, installationID string) (*domain.ReleaseManifest, bool, error) {
+	latest, found, err := latestSucceededRun(ctx, ledger, installationID)
+	if err != nil || !found {
+		return nil, false, err
+	}
+	m, err := domain.ParseManifest([]byte(latest.ManifestJSON))
+	if err != nil {
+		return nil, false, err
+	}
+	return m, true, nil
 }
 
 // refreshPendingRun sincroniza o run NÃO-TERMINAL mais recente (se existir) com o ledger local,

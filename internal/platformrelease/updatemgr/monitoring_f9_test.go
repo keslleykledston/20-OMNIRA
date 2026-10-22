@@ -272,3 +272,79 @@ func TestUpdateMgr_GetMonitoringStatus_UnresolvedRecoveryRequired_Detected(t *te
 		t.Error("com um run em RECOVERY_REQUIRED nunca reconhecido, UnresolvedRecoveryRequired deveria ser true")
 	}
 }
+
+// TestUpdateMgr_GetMonitoringStatus_RuntimeDigestDrift_DetectedEvenWhenLedgerMatchesPostgres é
+// a prova central do achado Codex [P2]: nem o ledger (histórico de runs) nem o Postgres
+// (platform_installations) observam containers de verdade por si só — um container
+// substituído manualmente, ou uma implantação que falhou deixando outra imagem rodando, nunca
+// apareceria na comparação ledger-vs-Postgres (que, aqui, está perfeitamente sincronizada).
+// Só o digest REAL observado pelo daemon (RecordObservedDigests) detecta esse drift.
+func TestUpdateMgr_GetMonitoringStatus_RuntimeDigestDrift_DetectedEvenWhenLedgerMatchesPostgres(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	ledger, err := agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := ledger.AcquireLock(w.ctx, "test-install-1", "test-direct-driver", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseID := "omnira-9.9.204"
+	m := manifestJSONChannel(t, releaseID, domain.ChannelCandidate, []string{"0.1.0"})
+	if _, err := ledger.CreateRun(w.ctx, h, "run-drift", "idem-drift", string(m), domain.StateLocked); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []domain.RunState{
+		domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+		domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+		domain.StateObserving, domain.StateSucceeded,
+	} {
+		if err := ledger.TransitionRun(w.ctx, h, "run-drift", st); err != nil {
+			t.Fatalf("transição para %s: %v", st, err)
+		}
+	}
+	if err := ledger.ReleaseLock(w.ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	expectedAPIDigest := "ghcr.io/k3g/omnira-api@sha256:" + sha64("api-"+releaseID)
+
+	// Observa o digest EXATO que a release declara — ledger, Postgres (depois de
+	// refreshPendingRun) e o Docker real concordam. Nenhuma divergência.
+	if err := ledger.RecordObservedDigests(w.ctx, "test-install-1", "test-daemon", `{"api":"`+expectedAPIDigest+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+
+	status, err := svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (digest observado bate): %v", err)
+	}
+	if status.VersionDivergence {
+		t.Fatal("digest observado idêntico ao esperado nunca deveria reportar divergência")
+	}
+
+	// Agora o Docker real reporta OUTRO digest para a API (ex. substituição manual de
+	// container, ou uma implantação que falhou deixando uma imagem diferente rodando) — o
+	// ledger e o Postgres continuam IDÊNTICOS entre si, mas o host real diverge de ambos.
+	ledger, err = agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	driftedDigest := "ghcr.io/k3g/omnira-api@sha256:" + sha64("drift-"+releaseID)
+	if err := ledger.RecordObservedDigests(w.ctx, "test-install-1", "test-daemon", `{"api":"`+driftedDigest+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+
+	status, err = svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (digest observado diverge): %v", err)
+	}
+	if !status.VersionDivergence {
+		t.Fatal("um digest REAL observado diferente do esperado deveria reportar divergência, mesmo com ledger e Postgres idênticos entre si")
+	}
+}

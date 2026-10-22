@@ -151,7 +151,7 @@ func TestLedger_AgentHeartbeat_LifecycleAcrossRecordAndRead(t *testing.T) {
 	defer ledger.Close()
 
 	// Nenhum heartbeat registrado ainda.
-	_, _, found, err := ledger.AgentHeartbeat(ctx, "inst-1")
+	_, found, err := ledger.AgentHeartbeat(ctx, "inst-1")
 	if err != nil {
 		t.Fatalf("AgentHeartbeat (antes de qualquer registro): %v", err)
 	}
@@ -163,18 +163,21 @@ func TestLedger_AgentHeartbeat_LifecycleAcrossRecordAndRead(t *testing.T) {
 	if err := ledger.RecordAgentHeartbeat(ctx, "inst-1", "holder-a"); err != nil {
 		t.Fatalf("RecordAgentHeartbeat: %v", err)
 	}
-	holder, lastPollAt, found, err := ledger.AgentHeartbeat(ctx, "inst-1")
+	info, found, err := ledger.AgentHeartbeat(ctx, "inst-1")
 	if err != nil {
 		t.Fatalf("AgentHeartbeat: %v", err)
 	}
 	if !found {
 		t.Fatal("deveria ter encontrado o heartbeat recém-registrado")
 	}
-	if holder != "holder-a" {
-		t.Errorf("holder = %q, esperava holder-a", holder)
+	if info.Holder != "holder-a" {
+		t.Errorf("holder = %q, esperava holder-a", info.Holder)
 	}
-	if lastPollAt.Before(before) {
-		t.Errorf("lastPollAt (%s) deveria ser >= o instante antes do registro (%s)", lastPollAt, before)
+	if info.LastPollAt.Before(before) {
+		t.Errorf("lastPollAt (%s) deveria ser >= o instante antes do registro (%s)", info.LastPollAt, before)
+	}
+	if info.ObservedDigests != "{}" {
+		t.Errorf("ObservedDigests deveria ser '{}' (nenhum snapshot gravado ainda), veio %q", info.ObservedDigests)
 	}
 
 	// Registrar de novo (ciclo seguinte do daemon) atualiza a MESMA linha, nunca cria outra.
@@ -189,8 +192,27 @@ func TestLedger_AgentHeartbeat_LifecycleAcrossRecordAndRead(t *testing.T) {
 		t.Errorf("esperava exatamente 1 linha de heartbeat para inst-1, achei %d", n)
 	}
 
+	// RecordObservedDigests (cadência independente) nunca sobrescreve last_poll_at.
+	beforeObserve, _, _ := ledger.AgentHeartbeat(ctx, "inst-1")
+	if err := ledger.RecordObservedDigests(ctx, "inst-1", "holder-a", `{"api":"ghcr.io/omnira/omnira-api@sha256:abc"}`); err != nil {
+		t.Fatalf("RecordObservedDigests: %v", err)
+	}
+	afterObserve, _, err := ledger.AgentHeartbeat(ctx, "inst-1")
+	if err != nil {
+		t.Fatalf("AgentHeartbeat (depois de RecordObservedDigests): %v", err)
+	}
+	if !afterObserve.LastPollAt.Equal(beforeObserve.LastPollAt) {
+		t.Errorf("RecordObservedDigests nunca deveria alterar last_poll_at: antes=%s depois=%s", beforeObserve.LastPollAt, afterObserve.LastPollAt)
+	}
+	if afterObserve.ObservedDigests != `{"api":"ghcr.io/omnira/omnira-api@sha256:abc"}` {
+		t.Errorf("ObservedDigests = %q, não refletiu RecordObservedDigests", afterObserve.ObservedDigests)
+	}
+	if afterObserve.ObservedAt.IsZero() {
+		t.Error("ObservedAt deveria ter sido gravado por RecordObservedDigests")
+	}
+
 	// Uma instalação DIFERENTE nunca é afetada.
-	_, _, found, err = ledger.AgentHeartbeat(ctx, "inst-2")
+	_, found, err = ledger.AgentHeartbeat(ctx, "inst-2")
 	if err != nil {
 		t.Fatalf("AgentHeartbeat (inst-2): %v", err)
 	}

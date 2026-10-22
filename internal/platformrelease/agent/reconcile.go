@@ -862,6 +862,21 @@ func rolloutUnits(manifest *domain.ReleaseManifest) (digests map[Unit]string, un
 	return digests, units
 }
 
+// ExpectedDigests (F9, monitoramento "versão real/digest divergente") devolve o digest
+// esperado por unit (chave = nome do serviço Docker Compose, ex. "api") que `manifest`
+// declara — a MESMA lógica de rolloutUnits, exposta para quem monitora de fora deste pacote
+// (updatemgr) comparar contra o que foi de fato observado no host
+// (Ledger.RecordObservedDigests/ComposeAdapter.CurrentSnapshot), sem precisar reimplementar
+// o mapeamento domain.BuildUnit -> nome do serviço nem expor o tipo Unit em si.
+func ExpectedDigests(manifest *domain.ReleaseManifest) map[string]string {
+	digests, _ := rolloutUnits(manifest)
+	out := make(map[string]string, len(digests))
+	for u, d := range digests {
+		out[string(u)] = d
+	}
+	return out
+}
+
 // unitFromBuildUnit traduz o nome de build_unit do domínio (ex. "omnira-api") para o nome do
 // serviço Docker Compose real (ex. "api") — ver release/components.yaml deploy_units.
 func unitFromBuildUnit(b domain.BuildUnit) string {
