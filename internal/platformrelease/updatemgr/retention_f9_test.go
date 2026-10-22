@@ -395,3 +395,121 @@ func TestUpdateMgr_DeleteReleaseCatalogEntry_FailsClosedWhenLedgerUnreadable(t *
 		t.Errorf("omnira-9.9.309 nunca deveria ter sido removida com o ledger ilegível, achei %d linhas", n)
 	}
 }
+
+// TestUpdateMgr_DeleteReleaseCatalogEntry_PreservesOlderProviderAfterIncompleteRecovery é a
+// prova central do achado Codex [P1] (rodada 4 desta fatia): RECOVERY_REQUIRED NUNCA prova
+// que o digest declarado substituiu o anterior de verdade — recover() pode falhar durante a
+// migração, ANTES de DEPLOYING sequer começar, ou um operador pode ter restaurado os digests
+// anteriores manualmente antes de reconhecer a recuperação. Cenário exato: release A (API,
+// SUCCEEDED); release B (API, tenta de novo, cai em RECOVERY_REQUIRED — nunca prova que
+// substituiu A); release C (web, SUCCEEDED, mais recente que A e B). current_release_id
+// passa a ser C; sem preservar A como possível proveniência da API, A seria removível mesmo
+// podendo ainda ser o que está genuinamente rodando.
+func TestUpdateMgr_DeleteReleaseCatalogEntry_PreservesOlderProviderAfterIncompleteRecovery(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	apiDigestA := "ghcr.io/k3g/omnira-api@sha256:" + sha64("api-A-9.9.310")
+	mA := manifestJSONForUnit(t, "omnira-9.9.310", domain.UnitAPI, apiDigestA, []string{"0.1.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0310", mA); err != nil {
+		t.Fatal(err)
+	}
+	apiDigestB := "ghcr.io/k3g/omnira-api@sha256:" + sha64("api-B-9.9.311")
+	mB := manifestJSONForUnit(t, "omnira-9.9.311", domain.UnitAPI, apiDigestB, []string{"0.1.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0311", mB); err != nil {
+		t.Fatal(err)
+	}
+	webDigestC := "ghcr.io/k3g/omnira-web@sha256:" + sha64("web-C-9.9.312")
+	mC := manifestJSONForUnit(t, "omnira-9.9.312", domain.UnitWeb, webDigestC, []string{"0.1.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0312", mC); err != nil {
+		t.Fatal(err)
+	}
+
+	ledger, err := agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A: SUCCEEDED normalmente.
+	h, err := ledger.AcquireLock(w.ctx, "test-install-1", "test-updatectl", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.CreateRun(w.ctx, h, "run-9.9.310", "idem-9.9.310", string(mA), domain.StateLocked); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []domain.RunState{
+		domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+		domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+		domain.StateObserving, domain.StateSucceeded,
+	} {
+		if err := ledger.TransitionRun(w.ctx, h, "run-9.9.310", st); err != nil {
+			t.Fatalf("transição A para %s: %v", st, err)
+		}
+	}
+	if err := ledger.ReleaseLock(w.ctx, h); err != nil {
+		t.Fatal(err)
+	}
+
+	// B: tenta atualizar a API de novo, mas cai em RECOVERY_REQUIRED — NUNCA prova que
+	// substituiu A (poderia ter falhado antes de DEPLOYING, ou o digest anterior ter sido
+	// restaurado manualmente).
+	h, err = ledger.AcquireLock(w.ctx, "test-install-1", "test-updatectl", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.CreateRun(w.ctx, h, "run-9.9.311", "idem-9.9.311", string(mB), domain.StateLocked); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []domain.RunState{domain.StateFailed, domain.StateRecovering, domain.StateRecoveryRequired} {
+		if err := ledger.TransitionRun(w.ctx, h, "run-9.9.311", st); err != nil {
+			t.Fatalf("transição B para %s: %v", st, err)
+		}
+	}
+	if err := ledger.ReleaseLock(w.ctx, h); err != nil {
+		t.Fatal(err)
+	}
+
+	// C: atualiza só o web, mais recente que A e B, SUCCEEDED — vira current_release_id.
+	h, err = ledger.AcquireLock(w.ctx, "test-install-1", "test-updatectl", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.CreateRun(w.ctx, h, "run-9.9.312", "idem-9.9.312", string(mC), domain.StateLocked); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []domain.RunState{
+		domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+		domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+		domain.StateObserving, domain.StateSucceeded,
+	} {
+		if err := ledger.TransitionRun(w.ctx, h, "run-9.9.312", st); err != nil {
+			t.Fatalf("transição C para %s: %v", st, err)
+		}
+	}
+	if err := ledger.ReleaseLock(w.ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+
+	w.exec(`UPDATE platform_releases SET ingested_at = now() - interval '400 days' WHERE release_id = $1`, "omnira-9.9.310")
+
+	candidates, err := svc.ListRetentionCandidates(w.ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range candidates {
+		if c.ReleaseID == "omnira-9.9.310" && c.SafeToDelete {
+			t.Error("omnira-9.9.310 (A) nunca deveria ser safe_to_delete — B (RECOVERY_REQUIRED) nunca prova que substituiu A de verdade")
+		}
+	}
+
+	if _, err := svc.DeleteReleaseCatalogEntry(w.ctx, op, "gc-key-f9-0310", "omnira-9.9.310"); !errors.Is(err, updatemgr.ErrInvalid) {
+		t.Errorf("esperava ErrInvalid (A ainda é possível proveniência da API), veio %v", err)
+	}
+	if n := w.count(`SELECT count(*) FROM platform_releases WHERE release_id = $1`, "omnira-9.9.310"); n != 1 {
+		t.Errorf("omnira-9.9.310 nunca deveria ter sido removida, achei %d linhas", n)
+	}
+}

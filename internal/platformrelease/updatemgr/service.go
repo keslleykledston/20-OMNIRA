@@ -560,8 +560,25 @@ func (s *Service) protectedReleaseIDsFromLedger(ctx context.Context) (map[string
 		if perr != nil {
 			return nil, fmt.Errorf("parsear manifesto do run histórico %s antes de permitir GC: %w", r.RunID, perr)
 		}
+		touched := agent.ExpectedDigests(m)
+		// Achado Codex [P1] (rodada 4 desta fatia): RECOVERY_REQUIRED NUNCA prova que o
+		// digest declarado por essa release de fato substituiu o anterior — recover() pode
+		// ter falhado durante a migração, ANTES de DEPLOYING sequer começar, ou um operador
+		// pode ter restaurado manualmente os digests anteriores antes de reconhecer a
+		// recuperação. Protege a release RECOVERY_REQUIRED em si (pode genuinamente estar
+		// rodando) mas NUNCA fecha a busca por nenhuma unit — só uma release SUCCEEDED
+		// (prova real de que o deploy completou) pode fazer isso. Sem esta distinção, uma
+		// release A (API, SUCCEEDED) ficava desprotegida sempre que uma release B (API,
+		// RECOVERY_REQUIRED, mais recente, mas cujo deploy pode nunca ter de fato
+		// acontecido) existisse entre A e o presente.
+		if r.State == domain.StateRecoveryRequired {
+			if len(touched) > 0 {
+				protected[m.ReleaseID] = true
+			}
+			continue
+		}
 		touchedAny := false
-		for unit := range agent.ExpectedDigests(m) {
+		for unit := range touched {
 			if !resolvedUnits[unit] {
 				resolvedUnits[unit] = true
 				touchedAny = true
