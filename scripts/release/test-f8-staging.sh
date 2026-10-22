@@ -346,16 +346,21 @@ log "   run $RUN_ID criado via updatectl real (ledger local)"
 
 RECONCILE > "$EVIDENCE/cenario0-reconcile.log" 2>&1
 T1=$(date +%s.%N)
-FINAL_STATE=$("$WORK/bin/updatectl" status --installation-id="$INSTALLATION_ID" --ledger-path="$LEDGER_PATH" --run="$RUN_ID" 2>&1 | grep '^state:' | awk '{print $2}')
+CKPT0=$("$WORK/bin/updatectl" status --installation-id="$INSTALLATION_ID" --ledger-path="$LEDGER_PATH" --run="$RUN_ID" 2>&1)
+echo "$CKPT0" > "$EVIDENCE/cenario0-checkpoints.log"
+FINAL_STATE=$(echo "$CKPT0" | grep '^state:' | awk '{print $2}')
 RTO0=$(echo "$T1 - $T0" | bc)
 log "   estado final do run após reconcile real: $FINAL_STATE (RTO ${RTO0}s)"
-if [ "$FINAL_STATE" = "ROLLED_BACK" ]; then
+# achado Codex: aceitar qualquer ROLLED_BACK como prova deste cenário é insuficiente — um
+# backup/outra falha ANTERIOR ao pull também termina em ROLLED_BACK (R0) sem nunca ter de
+# fato tentado o pull contra o ghcr.io real. Confirma o checkpoint 'download failed' real.
+if [ "$FINAL_STATE" = "ROLLED_BACK" ] && echo "$CKPT0" | grep -q "download.*failed"; then
   log "   ${GRN}OK${NC}: pull real rejeitado (ghcr.io real, digest inexistente) classificado como R0 -> ROLLED_BACK, sem mutação"
   report_row "0-fio-condutor (API real->ledger->agente, pull real rejeitado)" "R0" "$RTO0" "PASS" "cenario0-reconcile.log"
 else
-  log "   ${RED}FALHA${NC}: esperava ROLLED_BACK (R0), obteve $FINAL_STATE"
-  cat "$EVIDENCE/cenario0-reconcile.log"
-  report_row "0-fio-condutor" "-" "$RTO0" "FAIL(esperava ROLLED_BACK, obteve $FINAL_STATE)" "cenario0-reconcile.log"
+  log "   ${RED}FALHA${NC}: esperava ROLLED_BACK (R0) com checkpoint 'download failed', obteve estado=$FINAL_STATE"
+  cat "$EVIDENCE/cenario0-reconcile.log"; echo "$CKPT0"
+  report_row "0-fio-condutor" "-" "$RTO0" "FAIL(estado=$FINAL_STATE, sem checkpoint download-failed)" "cenario0-reconcile.log"
   FAILS=$((FAILS+1))
 fi
 
@@ -393,6 +398,21 @@ build_local_manifest() { # $1=release_id $2=api_ref $3=worker_ref $4=web_ref $5=
 JSON
 }
 harness_run_state() { "$WORK/bin/f8harness" status --ledger-path="$LEDGER_PATH" --run="$1" | head -1 | cut -d= -f2; }
+harness_checkpoints() { "$WORK/bin/f8harness" status --ledger-path="$LEDGER_PATH" --run="$1"; }
+# espera até `pattern` aparecer nos checkpoints reais do run, ou até `timeout_s` esgotar —
+# usado para injetar uma falha EXATAMENTE na janela certa (ex. logo após o deploy real
+# aplicar, antes do health check terminar), nunca um `sleep` fixo que pode ou acertar a
+# janela ou deixar o run inteiro correr sem nenhuma falha de verdade ser exercitada.
+wait_for_checkpoint() {
+  local run_id="$1" pattern="$2" timeout_s="${3:-20}"
+  local tries=$((timeout_s * 10 / 3))
+  local i=0
+  while [ "$i" -lt "$tries" ]; do
+    harness_checkpoints "$run_id" 2>/dev/null | grep -q -- "$pattern" && return 0
+    sleep 0.3; i=$((i+1))
+  done
+  return 1
+}
 
 section "Cenário 1: baseline v1 (todas as units) via agent.Executor real"
 T0=$(date +%s.%N)
@@ -418,13 +438,25 @@ RUN2=$(HARNESS create-run --manifest="$M2" | grep -oE 'run_id=\S+' | cut -d= -f2
 HARNESS reconcile > "$EVIDENCE/cenario2-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO2=$(echo "$T1 - $T0" | bc)
 ST2=$(harness_run_state "$RUN2")
+CKPT2=$(harness_checkpoints "$RUN2"); echo "$CKPT2" > "$EVIDENCE/cenario2-checkpoints.log"
 log "   run $RUN2 (api quebrada, R1): estado=$ST2 (RTO ${RTO2}s)"
-if [ "$ST2" = "ROLLED_BACK" ]; then
-  log "   ${GRN}OK${NC}: health check real nunca passou (imagem broken) -> WaitHealthy expirou -> recover() classificou R1 -> rollback real para v1 -> saudável de novo"
+# achado Codex: ROLLED_BACK sozinho não prova que a imagem broken foi de fato implantada e o
+# health check real falhou nela — um backup/download falho ANTES do deploy também termina em
+# ROLLED_BACK (R0), sem nunca exercitar o cenário pretendido. Confirma 'health...failed' +
+# a decisão de recuperação real, e o digest do container api VOLTOU a ser v1.
+# achado real: `docker ps --format '{{.Image}}'` normaliza/trunca a referência (mostrou o
+# repositório SEM o "@sha256:..." numa rodada real desta sessão) — `docker inspect
+# --format '{{.Config.Image}}'` preserva a referência EXATA usada para criar o container,
+# igual ao que compose.go's resolveContainerID já resolve por labels (nunca nome adivinhado).
+API_CID_AFTER=$("${DOCKER[@]}" ps -q --filter "label=com.docker.compose.project=${PROJECT}" --filter "label=com.docker.compose.service=api" --filter "label=com.docker.compose.oneoff=False" | head -1)
+API_DIGEST_AFTER=$("${DOCKER[@]}" inspect --format '{{.Config.Image}}' "$API_CID_AFTER" 2>/dev/null)
+if [ "$ST2" = "ROLLED_BACK" ] && echo "$CKPT2" | grep -q "health.*failed" && echo "$CKPT2" | grep -q "recovery_decision completed rollback" && [ "$API_DIGEST_AFTER" = "${DIGESTS[v1]}" ]; then
+  log "   ${GRN}OK${NC}: health check real nunca passou (imagem broken) -> WaitHealthy expirou -> recover() classificou R1 -> rollback real para v1 (digest confirmado) -> saudável de novo"
   report_row "2-health-timeout (imagem broken, health check real)" "R1" "$RTO2" "PASS" "cenario2-reconcile.log"
 else
-  cat "$EVIDENCE/cenario2-reconcile.log"
-  report_row "2-health-timeout" "-" "$RTO2" "FAIL(estado=$ST2, esperava ROLLED_BACK)" "cenario2-reconcile.log"; FAILS=$((FAILS+1))
+  cat "$EVIDENCE/cenario2-reconcile.log"; echo "$CKPT2"
+  log "   digest atual do unit api: $API_DIGEST_AFTER (esperava ${DIGESTS[v1]})"
+  report_row "2-health-timeout" "-" "$RTO2" "FAIL(estado=$ST2, checkpoints/digest não confirmam)" "cenario2-reconcile.log"; FAILS=$((FAILS+1))
 fi
 
 section "Cenário 3: incompatibilidade de banco (R3) -> bloqueio seguro, nunca rollback automático"
@@ -451,58 +483,78 @@ T0=$(date +%s.%N)
 M4="$WORK/m-slow.json"
 build_local_manifest "f8-slow-$RUN" "${DIGESTS[v1]}" "${DIGESTS[slow]}" "${DIGESTS[v1]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M4"
 RUN4=$(HARNESS create-run --manifest="$M4" | grep -oE 'run_id=\S+' | cut -d= -f2)
+# holders ÚNICOS por invocação deste script (sufixo $RUN, já único por PID) — achado Codex:
+# um literal fixo "f8-agent-A" faria duas execuções CONCORRENTES desta suíte (dois PIDs
+# diferentes, projetos/ledgers isolados) se matarem uma à outra via `pkill -f`, já que o
+# padrão de busca bateria no processo da OUTRA execução também.
+HOLDER_A="f8-agent-A-$RUN"; HOLDER_IMMEDIATE="f8-agent-immediate-$RUN"; HOLDER_B="f8-harness-B-$RUN"
 # holder DISTINTO de qualquer tentativa de retry — achado real da primeira rodada deste
 # script: AcquireLock trata o MESMO holder reconectando como uma renovação legítima (correto
 # para o daemon se re-chamando a cada poll), então usar o holder default para "processo A" E
 # para a "retry imediata" fazia a retry imediata roubar silenciosamente o próprio lock de A
 # (sem precisar esperar o lease), derrubando A por perda de fencing ANTES do kill -9 real
 # sequer ser necessário — nunca exercitando o cenário pretendido.
-F8_HOLDER="f8-agent-A" F8_LEASE=5s F8_HEALTH_TIMEOUT=25s HARNESS reconcile > "$EVIDENCE/cenario4-reconcile-A.log" 2>&1 &
+F8_HOLDER="$HOLDER_A" F8_LEASE=5s F8_HEALTH_TIMEOUT=25s HARNESS reconcile > "$EVIDENCE/cenario4-reconcile-A.log" 2>&1 &
 PID_A=$!
-sleep 2
+# espera um checkpoint REAL de que o deploy começou (nunca um `sleep` fixo — achado Codex: um
+# tempo fixo pode cair ANTES de qualquer mutação real acontecer, nunca exercitando um kill
+# "em pleno apply" de verdade, ou poderia deixar o run inteiro terminar sozinho antes do kill).
+# 180s: o passo `migrate` real roda `tools/migrate-sql.sh up`, que verifica o checksum das
+# 162 migrations JÁ aplicadas (real, não um no-op barato) antes de confirmar que não há nada
+# pendente — leva ~100s de verdade nesta topologia, confirmado nas rodadas anteriores.
+wait_for_checkpoint "$RUN4" "deploy started" 180 || { echo "FATAL: run $RUN4 nunca chegou a 'deploy started' — ver cenario4-reconcile-A.log"; cat "$EVIDENCE/cenario4-reconcile-A.log"; FAILS=$((FAILS+1)); }
 # Achado real desta sessão: PID_A é o PID do SUBSHELL que bash cria para a invocação da
 # função em segundo plano — o binário f8harness real é um NETO desse processo (HARNESS não
 # usa `exec` na última linha), então `kill -9 "$PID_A"` matava só o subshell, deixando o
 # f8harness real (com o lock/heartbeat de verdade) ÓRFÃO e rodando sem interrupção — a
 # reconciliação terminava sozinha minutos depois, nunca exercitando o cenário pretendido.
-# pkill por padrão de linha de comando (--holder=f8-agent-A é único desta chamada) encontra e
+# pkill por padrão de linha de comando (--holder=$HOLDER_A é único desta chamada) encontra e
 # mata o processo REAL, em qualquer profundidade.
-if pgrep -f -- "--holder=f8-agent-A" >/dev/null 2>&1; then
+CRASH_OK=1
+if pgrep -f -- "--holder=$HOLDER_A" >/dev/null 2>&1; then
   KILL_T=$(date +%s.%N)
-  pkill -9 -f -- "--holder=f8-agent-A" 2>/dev/null
+  pkill -9 -f -- "--holder=$HOLDER_A" 2>/dev/null
   sleep 0.3
-  pkill -9 -f -- "--holder=f8-agent-A" 2>/dev/null  # garante que não sobrou nenhum, mesmo reparented
+  pkill -9 -f -- "--holder=$HOLDER_A" 2>/dev/null  # garante que não sobrou nenhum, mesmo reparented
   wait "$PID_A" 2>/dev/null
-  log "   processo A (holder=f8-agent-A) morto com SIGKILL real em $(date -d @${KILL_T%.*} +%T 2>/dev/null || echo "$KILL_T") (durante apply/health do unit worker=slow)"
+  log "   processo A (holder=$HOLDER_A) morto com SIGKILL real em $(date -d @${KILL_T%.*} +%T 2>/dev/null || echo "$KILL_T") (durante apply/health do unit worker=slow)"
 else
-  log "   ${YEL}aviso${NC}: processo A já tinha terminado antes do kill -9 (ajuste de timing) — reconciliação pode ter corrido inteira na primeira chamada"
+  log "   ${RED}FALHA${NC}: processo A já tinha terminado antes do kill -9 — este cenário NÃO exercitou um crash real"
+  CRASH_OK=0
 fi
-pgrep -f -- "--holder=f8-agent-A" >/dev/null 2>&1 && log "   ${RED}ATENÇÃO${NC}: ainda há processo(s) com holder=f8-agent-A viv(os) após o kill -9 — ver evidência"
+if pgrep -f -- "--holder=$HOLDER_A" >/dev/null 2>&1; then
+  log "   ${RED}FALHA${NC}: ainda há processo(s) com holder=$HOLDER_A viv(os) após o kill -9"
+  CRASH_OK=0
+fi
 # tenta reconciliar de novo IMEDIATAMENTE, com um holder DIFERENTE de A (simula um segundo
-# processo tentando assumir enquanto o lease de A ainda não expirou) — deve falhar com lock
-# ocupado; e só depois de esperar o lease expirar de verdade é que deve ter sucesso, retomando
-# sem redigitar o backup/download já concluídos (evidência de idempotência via checkpoints).
-IMMEDIATE_OUT=$(F8_HOLDER="f8-agent-immediate" F8_LEASE=5s HARNESS reconcile 2>&1); IMMEDIATE_RC=$?
+# processo tentando assumir enquanto o lease de A ainda não expirou) — DEVE falhar com lock
+# ocupado (prova real de fencing); e só depois de esperar o lease expirar de verdade é que
+# deve ter sucesso, retomando sem redigitar o backup/download já concluídos.
+IMMEDIATE_OUT=$(F8_HOLDER="$HOLDER_IMMEDIATE" F8_LEASE=5s HARNESS reconcile 2>&1); IMMEDIATE_RC=$?
 echo "rc=$IMMEDIATE_RC"$'\n'"$IMMEDIATE_OUT" > "$EVIDENCE/cenario4-immediate-retry.log"
 if [ "$IMMEDIATE_RC" -ne 0 ] && echo "$IMMEDIATE_OUT" | grep -qi "lock\|fencing\|detém"; then
   log "   ${GRN}OK${NC}: retry imediata (holder diferente, lease de A ainda não expirado) recusada de verdade: lock ainda pertence a A"
 else
-  log "   ${YEL}aviso${NC}: retry imediata não foi recusada como esperado (rc=$IMMEDIATE_RC) — ver cenario4-immediate-retry.log"
+  log "   ${RED}FALHA${NC}: retry imediata deveria ter sido recusada por fencing (rc=$IMMEDIATE_RC) — ver cenario4-immediate-retry.log"
+  CRASH_OK=0
 fi
 sleep 6
-F8_HOLDER="f8-harness-B" F8_LEASE=1m F8_HEALTH_TIMEOUT=25s HARNESS reconcile > "$EVIDENCE/cenario4-reconcile-B.log" 2>&1
+F8_HOLDER="$HOLDER_B" F8_LEASE=1m F8_HEALTH_TIMEOUT=25s HARNESS reconcile > "$EVIDENCE/cenario4-reconcile-B.log" 2>&1
 T1=$(date +%s.%N); RTO4=$(echo "$T1 - $T0" | bc)
 ST4=$(harness_run_state "$RUN4")
 log "   estado final após retomada (processo B) real: $ST4 (RTO ${RTO4}s)"
 if [ "$ST4" = "RECOVERY_REQUIRED" ]; then
   "$WORK/bin/updatectl" acknowledge-recovery --installation-id="$INSTALLATION_ID" --ledger-path="$LEDGER_PATH" --run="$RUN4" >/dev/null 2>&1
 fi
-if [ "$ST4" = "SUCCEEDED" ] || [ "$ST4" = "ROLLED_BACK" ]; then
+# achado Codex: só aceitar o estado final sem exigir que o crash/fencing REALMENTE tenham
+# acontecido deixaria uma regressão de fencing (ou uma execução sem crash nenhum) passar por
+# este gate de recuperação igualmente — CRASH_OK=1 é obrigatório, não apenas um aviso.
+if [ "$CRASH_OK" = 1 ] && { [ "$ST4" = "SUCCEEDED" ] || [ "$ST4" = "ROLLED_BACK" ]; }; then
   log "   ${GRN}OK${NC}: lock sobreviveu ao processo morto (lease real expirou), processo B retomou e concluiu de forma consistente (nunca refez passos já concluídos — ver checkpoints)"
   report_row "4-kill-9-mid-apply (fencing/heartbeat real)" "crash-resume" "$RTO4" "PASS" "cenario4-reconcile-B.log"
 else
   cat "$EVIDENCE/cenario4-reconcile-B.log"
-  report_row "4-kill-9-mid-apply" "-" "$RTO4" "FAIL(estado=$ST4)" "cenario4-reconcile-B.log"; FAILS=$((FAILS+1))
+  report_row "4-kill-9-mid-apply" "-" "$RTO4" "FAIL(estado=$ST4, crash_ok=$CRASH_OK)" "cenario4-reconcile-B.log"; FAILS=$((FAILS+1))
 fi
 
 section "Cenário 5: migration drift (checksum_bundle não bate) -> recusa real antes de rodar qualquer SQL"
