@@ -471,6 +471,44 @@ describe('PlatformReleasesPage — terminal transition (Codex round 2)', () => {
     await screen.findByText('Acompanhando run-1')
     await waitFor(() => expect(installCalls).toBeGreaterThanOrEqual(2))
   })
+
+  it('invalidates installation when a run succeeds WITHOUT ever opening RunTracking (Codex round 16)', async () => {
+    // Starts without any run, then the history poll (10s, independent of any tab/panel)
+    // discovers a SUCCEEDED run the page never tracked — RunTracking's own success effect
+    // (inside a component nobody opened) can never be the thing that notices this.
+    runs = []
+    let installCalls = 0
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) {
+        installCalls += 1
+        return { data: installation(installCalls === 1 ? '2026.09.0' : '2026.10.0') }
+      }
+      if (u.endsWith('/platform/releases')) return { data: { items: releases } }
+      if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route element={<FakeShell />}>
+              <Route path="*" element={<PlatformReleasesPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await screen.findByText('2026.09.0')
+    expect(installCalls).toBe(1)
+
+    // The run history "arrives" at a SUCCEEDED run via the page's own 10s poll — simulated
+    // deterministically by changing the data and invalidating, never by opening any tracking UI.
+    runs = [run('SUCCEEDED')]
+    await act(async () => { await qc.invalidateQueries({ queryKey: ['platform-runs'] }) })
+    await waitFor(() => expect(installCalls).toBeGreaterThanOrEqual(2))
+  })
 })
 
 describe('PlatformReleasesPage — retry dispatch for a stuck REQUESTED run (Codex round 11)', () => {

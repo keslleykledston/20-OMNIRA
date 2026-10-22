@@ -98,6 +98,25 @@ export default function PlatformReleasesPage() {
   const releases = useQuery({ queryKey: ['platform-releases'], queryFn: () => platformReleasesAPI.list(), enabled: installation.isSuccess, retry: false })
   const runs = useQuery({ queryKey: ['platform-runs'], queryFn: () => platformRunsAPI.list(), enabled: installation.isSuccess, retry: false, refetchInterval: 10_000 })
 
+  // Achado Codex [P2] (16a rodada): o invalidate de platform-installation ao suceder (round 2)
+  // vivia DENTRO de RunTracking — se a pessoa fechasse o acompanhamento ou trocasse de aba
+  // ANTES do run suceder, o componente desmontava e aquele efeito nunca disparava. O histórico
+  // (esta query, sempre com polling de 10s, independente de aba/RunTracking) continuava
+  // mostrando SUCCEEDED, mas "Versão instalada" ficava parada na versão ANTERIOR
+  // indefinidamente (nada mais refaz essa consulta). Corrigido aqui, no nível da página: toda
+  // vez que um run aparece SUCCEEDED pela PRIMEIRA vez (nunca visto como tal antes), invalida a
+  // instalação — funciona independente de qual aba ou painel está aberto.
+  const handledSucceededRunsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!runs.data) return
+    for (const r of runs.data) {
+      if (r.state === 'SUCCEEDED' && !handledSucceededRunsRef.current.has(r.id)) {
+        handledSucceededRunsRef.current.add(r.id)
+        void qc.invalidateQueries({ queryKey: ['platform-installation'] })
+      }
+    }
+  }, [runs.data, qc])
+
   // Achado Codex [P2]: as duas listas só mostravam a primeira página (50), sem nenhum jeito de
   // ver releases/runs mais antigos — o cursor `before` já existe no cliente e no servidor, só
   // não era usado. "Carregar mais" ACRESCENTA à primeira página (releases/runs acima), nunca a
