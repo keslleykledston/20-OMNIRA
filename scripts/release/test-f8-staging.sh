@@ -313,6 +313,23 @@ api() { # api <method> <path> [idem-key] [body]
 api_body() { echo "$1" | sed '$d'; }
 api_code() { echo "$1" | tail -1; }
 
+# achado Codex: scripts/backup-omnira-db.sh real tem efeitos colaterais de produção que
+# --backup-dir NUNCA isola — se este host tiver EXTERNAL_MOUNT (USB) montado ou
+# BACKUP_CLOUD_CONF (rclone/Google Drive) configurado de verdade, os dumps FALSOS desta
+# suíte de staging seriam copiados para destinos de backup REAIS (retenção real incluída).
+# sudo com env_reset descarta qualquer `export` feito ANTES do sudo (mesma razão de
+# BACKUP_DIR/DB_NAME precisarem ir como argumento de `env`) — mas um wrapper que faz o
+# `export` DENTRO do processo que o `env`/sudo já invocou, antes de chamar o script real,
+# nunca passa pelo sudo de novo, então funciona. Nunca toca o script de produção.
+BACKUP_WRAPPER="$WORK/backup-wrapper.sh"
+cat > "$BACKUP_WRAPPER" <<WRAPEOF
+#!/bin/sh
+export EXTERNAL_MOUNT="/tmp/omnira-f8-disabled-external-mount-$RUN"
+export BACKUP_CLOUD_CONF="/tmp/omnira-f8-disabled-cloud-conf-$RUN"
+exec "$REPO_ROOT/scripts/backup-omnira-db.sh" "\$@"
+WRAPEOF
+chmod +x "$BACKUP_WRAPPER"
+
 # updatectl reconcile single-shot, com as MESMAS flags que o daemon real usaria nesta topologia
 # de staging — nunca o agent.Executor/ComposeAdapter reimplementado, sempre o binário real.
 RECONCILE() {
@@ -322,7 +339,7 @@ RECONCILE() {
     --lease=1m --health-timeout=15s --observe-window=3s \
     --compose-base-files="$BASE_FILES" --compose-override-dir="/tmp/omnira-f8-override-${PROJECT}" --compose-project="$PROJECT" --compose-sudo=true \
     --migrate-script=tools/migrate-sql.sh --migrations-dir="$extra_migrations_dir" --database-url="$OWNER_URL" \
-    --backup-script=scripts/backup-omnira-db.sh --backup-dir="${BACKUP_DIR_OVERRIDE:-$WORK/backups}" --db-name="$DB_NAME" --pg-container="$PG_NAME" --pg-owner=omnira
+    --backup-script="$BACKUP_WRAPPER" --backup-dir="${BACKUP_DIR_OVERRIDE:-$WORK/backups}" --db-name="$DB_NAME" --pg-container="$PG_NAME" --pg-owner=omnira
 }
 
 run_state() { # run_state <run_id> -> estado atual (via API real)
@@ -410,7 +427,7 @@ HARNESS() {
     --health-timeout="${F8_HEALTH_TIMEOUT:-6s}" --observe-window="${F8_OBSERVE_WINDOW:-2s}" \
     --compose-base-files="$BASE_FILES" --compose-override-dir="/tmp/omnira-f8-override-${PROJECT}" --compose-project="$PROJECT" --compose-sudo=true \
     --migrate-script=tools/migrate-sql.sh --migrations-dir="${F8_MIGRATIONS_DIR:-$MIGRATIONS_GOOD}" --database-url="$OWNER_URL" \
-    --backup-script=scripts/backup-omnira-db.sh --backup-dir="$WORK/backups" --db-name="$DB_NAME" --pg-container="$PG_NAME" --pg-owner=omnira
+    --backup-script="$BACKUP_WRAPPER" --backup-dir="$WORK/backups" --db-name="$DB_NAME" --pg-container="$PG_NAME" --pg-owner=omnira
 }
 build_local_manifest() { # $1=release_id $2=api_ref $3=worker_ref $4=web_ref $5=recovery_class $6=db_strategy $7=target_migration $8=checksum
   cat <<JSON
@@ -556,6 +573,12 @@ PID_A=$!
 # 'deploy completed' só é registrado DEPOIS do Apply real retornar — ainda dentro da janela
 # de health check real (a imagem "slow" leva ~8s para reportar saudável).
 wait_for_checkpoint "$RUN4" "deploy completed" 180 || { echo "FATAL: run $RUN4 nunca chegou a 'deploy completed' — ver cenario4-reconcile-A.log"; cat "$EVIDENCE/cenario4-reconcile-A.log"; FAILS=$((FAILS+1)); }
+# achado Codex: captura os checkpoints JÁ concluídos (backup/download/snapshot/migrate) ANTES
+# do kill, para provar DEPOIS que o processo B realmente os RETOMOU sem refazer nenhum deles —
+# aceitar só o estado final (SUCCEEDED/ROLLED_BACK) nunca provava a idempotência que o log
+# já afirmava; uma regressão que refizesse esses passos passaria por este gate igualmente.
+CKPT_BEFORE_KILL=$(harness_checkpoints "$RUN4")
+echo "$CKPT_BEFORE_KILL" > "$EVIDENCE/cenario4-checkpoints-before-kill.log"
 # Achado real desta sessão: PID_A é o PID do SUBSHELL que bash cria para a invocação da
 # função em segundo plano — o binário f8harness real é um NETO desse processo (HARNESS não
 # usa `exec` na última linha), então `kill -9 "$PID_A"` matava só o subshell, deixando o
@@ -595,19 +618,33 @@ sleep 6
 F8_HOLDER="$HOLDER_B" F8_LEASE=1m F8_HEALTH_TIMEOUT=25s HARNESS reconcile > "$EVIDENCE/cenario4-reconcile-B.log" 2>&1
 T1=$(date +%s.%N); RTO4=$(echo "$T1 - $T0" | bc)
 ST4=$(harness_run_state "$RUN4")
+CKPT_AFTER=$(harness_checkpoints "$RUN4"); echo "$CKPT_AFTER" > "$EVIDENCE/cenario4-checkpoints-after.log"
 log "   estado final após retomada (processo B) real: $ST4 (RTO ${RTO4}s)"
 if [ "$ST4" = "RECOVERY_REQUIRED" ]; then
   "$WORK/bin/updatectl" acknowledge-recovery --installation-id="$INSTALLATION_ID" --ledger-path="$LEDGER_PATH" --run="$RUN4" >/dev/null 2>&1
 fi
+# achado Codex: compara os checkpoints 'started' de backup/download/snapshot/migrate antes vs.
+# depois do kill — cada um precisa aparecer o MESMO número de vezes (nunca re-executado pelo
+# processo B; uma linha 'started' DUPLICADA denunciaria um passo já concluído sendo refeito).
+IDEMPOTENT_OK=1
+for step in backup download snapshot migrate; do
+  before_n=$(echo "$CKPT_BEFORE_KILL" | grep -c "$step *started")
+  after_n=$(echo "$CKPT_AFTER" | grep -c "$step *started")
+  if [ "$before_n" != "$after_n" ]; then
+    log "   ${RED}FALHA${NC}: checkpoint '$step started' aparecia $before_n vez(es) antes do kill e $after_n depois — passo pode ter sido refeito"
+    IDEMPOTENT_OK=0
+  fi
+done
 # achado Codex: só aceitar o estado final sem exigir que o crash/fencing REALMENTE tenham
-# acontecido deixaria uma regressão de fencing (ou uma execução sem crash nenhum) passar por
-# este gate de recuperação igualmente — CRASH_OK=1 é obrigatório, não apenas um aviso.
-if [ "$CRASH_OK" = 1 ] && { [ "$ST4" = "SUCCEEDED" ] || [ "$ST4" = "ROLLED_BACK" ]; }; then
-  log "   ${GRN}OK${NC}: lock sobreviveu ao processo morto (lease real expirou), processo B retomou e concluiu de forma consistente (nunca refez passos já concluídos — ver checkpoints)"
+# acontecido, E sem confirmar a idempotência real dos checkpoints, deixaria uma regressão de
+# fencing ou de re-execução de passos já concluídos passar por este gate igualmente —
+# CRASH_OK=1 e IDEMPOTENT_OK=1 são obrigatórios, não apenas um aviso no log.
+if [ "$CRASH_OK" = 1 ] && [ "$IDEMPOTENT_OK" = 1 ] && { [ "$ST4" = "SUCCEEDED" ] || [ "$ST4" = "ROLLED_BACK" ]; }; then
+  log "   ${GRN}OK${NC}: lock sobreviveu ao processo morto (lease real expirou), processo B retomou e concluiu de forma consistente (checkpoints confirmam: backup/download/snapshot/migrate nunca refeitos)"
   report_row "4-kill-9-mid-apply (fencing/heartbeat real)" "crash-resume" "$RTO4" "PASS" "cenario4-reconcile-B.log"
 else
   cat "$EVIDENCE/cenario4-reconcile-B.log"
-  report_row "4-kill-9-mid-apply" "-" "$RTO4" "FAIL(estado=$ST4, crash_ok=$CRASH_OK)" "cenario4-reconcile-B.log"; FAILS=$((FAILS+1))
+  report_row "4-kill-9-mid-apply" "-" "$RTO4" "FAIL(estado=$ST4, crash_ok=$CRASH_OK, idempotent_ok=$IDEMPOTENT_OK)" "cenario4-reconcile-B.log"; FAILS=$((FAILS+1))
 fi
 
 section "Cenário 5: migration drift (checksum_bundle não bate) -> recusa real antes de rodar qualquer SQL"
