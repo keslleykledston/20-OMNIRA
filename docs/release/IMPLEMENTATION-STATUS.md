@@ -1671,3 +1671,130 @@ Próxima fase: F10 (operacionalização e documentação — runbooks, Makefile,
 **Veredito: PASS**
 
 ---
+
+## F10 — Operacionalização e documentação
+
+```
+Fase: F10
+Baseline SHA: 25f0ebc (último commit de F9 nesta mesma branch)
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+HEAD ao final: e06705d (4 commits desde o baseline)
+Implementação:
+  Fase majoritariamente documental (nenhuma mudança ao domínio/backend Go), em 4 fatias
+  verticais reais, cada uma verificada contra o código/CLI real ANTES de ser escrita (todo
+  comando documentado foi de fato executado, ou lido byte a byte no código que o implementa)
+  e levada à revisão Codex até convergir em duas rodadas consecutivas sem achado acionável.
+
+  1) Makefile — alvos seguros de dry-run/status/test para o fluxo de update (F5-F9), nunca
+     mutando uma instalação real: `release-validate-manifest` (releasectl validate-manifest),
+     `update-status` (updatectl status, read-only), `update-test` (go test
+     ./internal/platformrelease/...), `update-test-staging` (suíte F8 completa). Guarda
+     migrate-up/migrate-down: recusam execução quando OMNIRA_RELEASE_FLOW=1 (o fluxo de
+     release real deve usar updatectl, que aplica lock/backup/revogação — down.sql nunca
+     autoriza rollback de dados), sem apagar os targets legados (continuam servindo o reset
+     de banco de dev). A guarda foi corrigida para checar ANTES do pré-requisito `docker-up`
+     (achado real ao testar: a ordem original deixava `docker-up` rodar mesmo com a flag
+     setada, antes da guarda ter chance de recusar).
+  2) Runbooks (docs/release/runbooks/, 9 arquivos): primeira instalação do agente, release e
+     promoção, rollback e recuperação sem API (incluindo modo standalone e seu risco real),
+     restore/PITR com os limites reais desta instalação (RPO = tempo desde o último pg_dump,
+     sem PITR — release/policies/backup.yaml) e o RTO medido em F8, CI/GHCR com o estado
+     BLOCKED_EXTERNAL exato e a exceção real de workflow_dispatch não verificar CI, aprovação
+     de produção (platform_operator via ADR-0038, nunca autopromoção), revogação (incluindo o
+     caso real de uma release já SUCCEEDED, que a revogação por si só NUNCA isola — Execute
+     retorna imediatamente para um run terminal), e troubleshooting com os 5 sinais de
+     monitoramento do F9.
+  3) Exemplos de configuração sem segredos: docs/release/examples/update-agent.env.example
+     (todas as OMNIRA_AGENT_* de agentconfig.FlagSet) e alinhamento do .env.example canônico
+     com OMNIRA_PLATFORM_RELEASE_*/OMNIRA_AGENT_LEDGER_PATH/INSTALLATION_ID/LEASE, que o
+     backend (F6-F9) já lia mas nunca estava documentado fora do código.
+  4) Changelog (entrada F0-F10 em CHANGELOG.md) e dev onboarding
+     (docs/release/DEV-ONBOARDING.md: testes rápidos sem Docker, ledger local descartável,
+     validação de manifesto, como rodar a suíte F8 localmente e suas limitações reais de
+     KEEP_WORK).
+Arquivos:
+  Makefile (+59 linhas)
+  docs/release/runbooks/{00-indice,01-primeira-instalacao-agente,02-release-e-promocao,
+    03-rollback-e-recovery,04-restore-e-pitr,05-ci-ghcr,06-aprovacao-producao,07-revogacao,
+    08-troubleshooting}.md (novos, ~500 linhas)
+  docs/release/examples/update-agent.env.example (novo)
+  docs/release/DEV-ONBOARDING.md (novo)
+  .env.example (+10 linhas), CHANGELOG.md (+8 linhas)
+Migrations: nenhuma (fase documental/Makefile).
+Contratos: nenhum novo (OpenAPI já alinhado em F9); nenhuma mudança ao domínio público.
+Testes executados (todo comando documentado, executado de verdade antes de ir para o
+  runbook/exemplo, nunca assumido a partir da leitura do código isolada):
+  - `make help`/`make release-help`: saída confirmada.
+  - `make release-validate-manifest` sem MANIFEST (exit 2, mensagem de uso) e com
+    release/fixtures/manifest-good.json (exit 0).
+  - `make update-status` sem INSTALLATION_ID (exit 2) e com um ledger novo/descartável
+    (`nenhum run registrado para esta instalação`, exit 0).
+  - Guarda de migrate-up/migrate-down: `OMNIRA_RELEASE_FLOW=1 make migrate-up|migrate-down`
+    recusa ANTES de chamar docker-up (confirmado checando que a mensagem de bloqueio aparece
+    sem nenhuma tentativa de pull/conexão Docker); sem a flag, o fluxo de dev chega ao mesmo
+    ponto de falha de antes (permissão de Docker neste sandbox), nunca bloqueado pela guarda.
+  - `make update-test`: `go test ./internal/platformrelease/...` verde (os testes de
+    integração que exigem Postgres real são SKIP nesta sessão, documentado como esperado no
+    dev onboarding, nunca tratado como PASS).
+  - `go run ./apps/releasectl/cmd/releasectl build-manifest` com os mesmos argumentos do
+    teste real de `apps/releasectl/cmd/releasectl/main_test.go` (`validArgs()`) — manifesto
+    construído com sucesso, usado como exemplo real no runbook 02 (nunca um placeholder
+    inventado).
+  - `go run .../releasectl validate-manifest` contra manifest-good.json (exit 0) e
+    manifest-tampered-movable-tag.json (exit 1, mensagem real de tag móvel rejeitada).
+  - `go run .../omnira-updatectl status -h`/`omnira-hubctl platform-operator list` (confirmado
+    que falha sem `--operator`, usado para corrigir o runbook 06) executados de verdade.
+  - Consulta real à tabela `agent_heartbeat` via `python3 -c "import sqlite3..."` contra um
+    ledger criado por `updatectl status --ledger-path=...` — confirmado que a tabela existe e
+    a consulta roda sem erro antes de documentar como o jeito real de verificar o heartbeat
+    sem a API (updatectl status nunca mostra isso, achado corrigido no runbook 01).
+Rodadas de revisão (Codex, por fatia, `codex exec review --uncommitted`):
+  1) Makefile: 2 rodadas, 0 achados — convergência imediata.
+  2) Runbooks: 16 rodadas, 14 achados reais corrigidos antes de convergir (rodadas 15-16
+     limpas). Achados: exemplo de compatibility.from_versions usando um padrão "2.3.x" que o
+     comparador real (slices.Contains, nunca wildcard) rejeitaria; --database-url exposto em
+     texto plano na linha de comando em dois runbooks (deveria usar a env var, como o próprio
+     comentário de agentconfig.FlagSet já exige); reconcile/rollback manuais documentados sem
+     carregar o EnvironmentFile real do daemon (usariam os defaults de agentconfig.FlagSet,
+     divergentes da config real); validação de restore testando só a fixture, nunca o dump
+     real que seria de fato restaurado (e, numa segunda rodada, a mesma checagem rejeitando
+     incorretamente um dump histórico legítimo mais antigo pela paridade de schema/contagem
+     exigir o estado ATUAL); comandos hubctl sem a flag --operator obrigatória; verificação de
+     bootstrap que não provava heartbeat algum (status não mostra isso); garantia overstated
+     de que workflow_dispatch nunca publica um candidate com CI falho (é uma exceção
+     deliberada do próprio workflow); lista de compose files de exemplo colidindo com a
+     config real deste host (mock auth, bind/mounts trocados); runbooks usando `go run`
+     para operações que deveriam usar o binário já instalado pelo bootstrap; reconcile/rollback
+     manuais sem `cd` para o WorkingDirectory real do daemon (compose/migrate usam caminhos
+     relativos); sudoers documentado cobrindo só docker exec/ps, nunca a forma real (sh -c +
+     env + bash) que o backup usa sob sudo, nem docker inspect/pull que o ComposeAdapter
+     também invoca; garantia de que revogar isola automaticamente uma release já SUCCEEDED
+     (Execute retorna imediatamente para um run terminal — revogar uma release já instalada
+     exige uma ação humana de contenção, documentada à parte); `start` documentado sem
+     carregar o ambiente do daemon antes de criar o run (grava no ledger default, não no
+     configurado).
+  3) Exemplos de configuração: 2 rodadas, 0 achados.
+  4) Changelog/dev onboarding: 3 rodadas, 1 achado corrigido (KEEP_WORK documentado como
+     preservando containers/binários; na real, containers/rede/imagens são SEMPRE removidos
+     na limpeza — só o diretório de trabalho/binários sobrevivem).
+  Total: 23 rodadas, 15 achados reais corrigidos. Nenhum achado foi descartado sem correção;
+  nenhuma correção foi assumida sem reexecutar o comando real documentado.
+Pendências/limitações (documentadas, nunca escondidas):
+  - CI/GHCR real (publicação/assinatura) continua BLOCKED_EXTERNAL — mesma causa desde F0
+    (sem `gh` CLI/credenciais GHCR/Cosign confirmadas nesta sessão). Os runbooks documentam o
+    passo exato que um operador com essas credenciais precisaria seguir (05-ci-ghcr.md §3),
+    sem fingir que foi executado.
+  - Sudoers para o backup real sob `--compose-sudo` é documentado com a forma EXATA do comando
+    invocado (sh -c + env + bash <script>), mas a regra de sudoers em si não foi testada
+    contra um sudo/visudo real neste sandbox (sem acesso a sudoers aqui) — o runbook instrui
+    explicitamente o operador a validar com `sudo -n -l` antes de confiar nela em produção.
+  - Nenhum release-promote.yml/gate automatizado consome os runbooks ou os targets novos do
+    Makefile ainda — eles existem para um operador humano seguir manualmente; automatizar o
+    fluxo de promoção fica fora do escopo de F10 (que entrega o procedimento documentado e
+    testável, nunca a orquestração automática de produção).
+Próxima fase: F11 (aceitação e entrega — bateria final, ACCEPTANCE-REPORT.md, preparar PR)
+```
+
+**Veredito: PASS**
+
+---
