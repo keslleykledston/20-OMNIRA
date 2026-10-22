@@ -340,10 +340,16 @@ api_code() { echo "$1" | tail -1; }
 # GHCR) que ela reflete um SUCESSO real do agente — ver Pendências no IMPLEMENTATION-STATUS.md.
 INST0_RESP=$(api GET /api/v1/platform/installation)
 INST0_CODE=$(api_code "$INST0_RESP")
+# achado Codex: um 401/403/500 real aqui só gerava um aviso no log — todos os cenários
+# seguintes usam o CLI/harness, nunca a API, então uma regressão real na rota autenticada
+# passaria batido e a suíte ainda terminaria em "TODOS OS CENÁRIOS PASSARAM". Vira um
+# report_row real, com FAILS incrementado como qualquer outro cenário.
 if [ "$INST0_CODE" = "200" ]; then
-  log "   API real (GET /api/v1/platform/installation) respondeu 200 com o ledger ainda vazio — rota autenticada e funcional"
+  log "   ${GRN}OK${NC}: API real (GET /api/v1/platform/installation) respondeu 200 com o ledger ainda vazio — rota autenticada e funcional"
+  report_row "0b-api-real-autenticada (GetInstallation, ledger vazio)" "-" "-" "PASS" "-"
 else
-  log "   ${RED}aviso${NC}: GET /api/v1/platform/installation devolveu $INST0_CODE (esperava 200): $(api_body "$INST0_RESP")"
+  log "   ${RED}FALHA${NC}: GET /api/v1/platform/installation devolveu $INST0_CODE (esperava 200): $(api_body "$INST0_RESP")"
+  report_row "0b-api-real-autenticada" "-" "-" "FAIL(http=$INST0_CODE)" "-"; FAILS=$((FAILS+1))
 fi
 
 # achado Codex: scripts/backup-omnira-db.sh real tem efeitos colaterais de produção que
