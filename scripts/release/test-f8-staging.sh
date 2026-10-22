@@ -45,6 +45,19 @@ LOCAL_IMAGES=()  # mesma razão de LEDGER_PATH="" acima — declarado cedo para 
 # expandir um array indefinido sob `set -u` se o setup falhar antes da seção 1 (registry).
 
 log() { echo "$*"; }
+# mata um PID e TODA sua árvore de descendentes (achado Codex: pkill -f por padrão de linha
+# de comando só acha o processo Go (f8harness/updatectl) — um subprocesso real que ele tenha
+# lançado no momento da interrupção (tools/migrate-sql.sh, scripts/backup-omnira-db.sh/o
+# wrapper, `docker compose up -d`) tem uma linha de comando DIFERENTE, nunca contendo
+# "$WORK/bin/", e sobrevive ao SIGKILL do pai — podendo continuar mutando Docker/Postgres
+# DEPOIS da limpeza já ter removido containers/rede, ou recriar o que a limpeza já apagou.
+kill_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null); do kill_tree "$child"; done
+  # --compose-sudo roda subprocessos reais (migrate/backup/compose) como root via sudo -n —
+  # kill comum falha nesses; sudo -n kill cobre os dois casos sem precisar saber qual é qual.
+  kill -9 "$pid" 2>/dev/null || sudo -n kill -9 "$pid" 2>/dev/null
+}
 section() { echo; echo "== $* =="; }
 report_row() {
   # report_row <cenario> <classe> <rto_segundos|-> <veredito> <evidencia>
@@ -79,9 +92,9 @@ cleanup() {
   # até recriar recursos. $WORK/bin/ é um caminho ÚNICO desta invocação (mktemp -d) — matar
   # por ele, nunca por holder específico de um cenário, cobre QUALQUER binário real desta
   # execução ainda vivo, em qualquer ponto do script.
-  pkill -9 -f -- "$WORK/bin/" 2>/dev/null
+  for p in $(pgrep -f -- "$WORK/bin/" 2>/dev/null); do kill_tree "$p"; done
   sleep 0.3
-  pkill -9 -f -- "$WORK/bin/" 2>/dev/null
+  for p in $(pgrep -f -- "$WORK/bin/" 2>/dev/null); do kill_tree "$p"; done
   if [ -n "$LEDGER_PATH" ] && [ -f "$LEDGER_PATH" ]; then
     cp "$LEDGER_PATH" "$ARTIFACTS_DIR/ledger.db"
     [ -f "$LEDGER_PATH-wal" ] && cp "$LEDGER_PATH-wal" "$ARTIFACTS_DIR/ledger.db-wal"
