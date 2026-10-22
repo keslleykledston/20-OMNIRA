@@ -137,3 +137,64 @@ func TestLedger_RevocationSyncFresh_ReopeningExistingFileNeverResetsAnAlreadySyn
 		t.Error("reabrir um ledger com um relógio JÁ sincronizado (mesmo obsoleto) nunca deveria resetá-lo para fresco")
 	}
 }
+
+// F9 (monitoramento "status do agente"): prova direta de Ledger.RecordAgentHeartbeat/
+// AgentHeartbeat — o sinal de liveness do daemon, independente de agent_lock (que só existe
+// ENQUANTO um run está ativo).
+func TestLedger_AgentHeartbeat_LifecycleAcrossRecordAndRead(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ledger.db")
+	ledger, err := OpenLedger(path)
+	if err != nil {
+		t.Fatalf("OpenLedger: %v", err)
+	}
+	defer ledger.Close()
+
+	// Nenhum heartbeat registrado ainda.
+	_, _, found, err := ledger.AgentHeartbeat(ctx, "inst-1")
+	if err != nil {
+		t.Fatalf("AgentHeartbeat (antes de qualquer registro): %v", err)
+	}
+	if found {
+		t.Error("nenhum heartbeat deveria ter sido encontrado antes de RecordAgentHeartbeat")
+	}
+
+	before := time.Now().UTC()
+	if err := ledger.RecordAgentHeartbeat(ctx, "inst-1", "holder-a"); err != nil {
+		t.Fatalf("RecordAgentHeartbeat: %v", err)
+	}
+	holder, lastPollAt, found, err := ledger.AgentHeartbeat(ctx, "inst-1")
+	if err != nil {
+		t.Fatalf("AgentHeartbeat: %v", err)
+	}
+	if !found {
+		t.Fatal("deveria ter encontrado o heartbeat recém-registrado")
+	}
+	if holder != "holder-a" {
+		t.Errorf("holder = %q, esperava holder-a", holder)
+	}
+	if lastPollAt.Before(before) {
+		t.Errorf("lastPollAt (%s) deveria ser >= o instante antes do registro (%s)", lastPollAt, before)
+	}
+
+	// Registrar de novo (ciclo seguinte do daemon) atualiza a MESMA linha, nunca cria outra.
+	if err := ledger.RecordAgentHeartbeat(ctx, "inst-1", "holder-a"); err != nil {
+		t.Fatalf("RecordAgentHeartbeat (segunda vez): %v", err)
+	}
+	var n int
+	if err := ledger.db.QueryRow(`SELECT count(*) FROM agent_heartbeat WHERE installation_id = ?`, "inst-1").Scan(&n); err != nil {
+		t.Fatalf("contar linhas de agent_heartbeat: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("esperava exatamente 1 linha de heartbeat para inst-1, achei %d", n)
+	}
+
+	// Uma instalação DIFERENTE nunca é afetada.
+	_, _, found, err = ledger.AgentHeartbeat(ctx, "inst-2")
+	if err != nil {
+		t.Fatalf("AgentHeartbeat (inst-2): %v", err)
+	}
+	if found {
+		t.Error("inst-2 nunca deveria ter um heartbeat registrado")
+	}
+}

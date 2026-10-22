@@ -191,6 +191,22 @@ func (h *HTTPHandler) GetInstallation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, inst)
 }
 
+// GetMonitoringStatus (F9, spec "Monitoramento") expõe Service.GetMonitoringStatus — os cinco
+// sinais (status do agente, falhas de backup, versão/digest divergente, update estagnado,
+// erros após release) num único read-only para um operador ou uma sonda externa.
+func (h *HTTPHandler) GetMonitoringStatus(w http.ResponseWriter, r *http.Request) {
+	operator, ok := h.scope(w, r)
+	if !ok {
+		return
+	}
+	status, err := h.svc.GetMonitoringStatus(r.Context(), operator)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 type setInstallationVersionRequest struct {
 	Version   string `json:"version"`
 	ReleaseID string `json:"release_id"`

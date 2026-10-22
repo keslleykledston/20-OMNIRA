@@ -54,6 +54,15 @@ func main() {
 		cfg.InstallationID, cfg.Holder, cfg.LedgerPath, cfg.PollInterval)
 
 	reconcile := func() {
+		// F9 (monitoramento "status do agente"): grava AQUI, nunca dentro de
+		// agentconfig.ReconcileOnce — essa função também é chamada por apps/updatectl sob
+		// demanda (uma invocação manual, nunca o daemon de longa duração), e misturar os
+		// dois faria uma chamada única de updatectl parecer "o daemon está vivo e fazendo
+		// poll". Grava a CADA ciclo, mesmo sem nenhum run ativo (ReconcileOnce pode retornar
+		// sem fazer nada) — o sinal de liveness nunca pode depender de haver trabalho.
+		if err := ledger.RecordAgentHeartbeat(ctx, cfg.InstallationID, cfg.Holder); err != nil {
+			log.Printf("omnira-update-agent: registrar heartbeat: %v", err)
+		}
 		if err := agentconfig.ReconcileOnce(ctx, exec, ledger, cfg.InstallationID, cfg.Holder, cfg.Lease); err != nil {
 			log.Printf("omnira-update-agent: reconcile: %v", err)
 		}

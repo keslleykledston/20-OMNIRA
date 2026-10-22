@@ -85,6 +85,19 @@ const backupEvidenceRestoreVerifiedKind = "restore_verified"
 // nunca para implementar um cache que ainda não existe.
 const revocationMaxCacheAgeSeconds = 300
 
+// agentHeartbeatStaleAfter (F9, monitoramento "status do agente") — generoso em relação a
+// qualquer --poll-interval real do daemon (segundos a poucos minutos): um gap maior que isto
+// sem nenhum heartbeat novo significa o processo morreu ou está preso num único ciclo de
+// reconcile por tempo desproporcional, nunca uma variação normal de carga. Julgamento
+// operacional, não uma política externa documentada — ajustável sem quebrar nenhum contrato.
+const agentHeartbeatStaleAfter = 5 * time.Minute
+
+// stalledRunThreshold (F9, monitoramento "update estagnado") — um run ATIVO (não-terminal)
+// sem nenhuma transição de estado por mais tempo que isto é tratado como estagnado. Generoso
+// em relação ao tempo real de qualquer step individual (backup/migração/deploy/observação)
+// nesta base de código; julgamento operacional, ajustável sem quebrar nenhum contrato.
+const stalledRunThreshold = 15 * time.Minute
+
 // Service é o Update Manager API. Mantém também o acesso ao ledger LOCAL do Update Agent
 // (mesmo arquivo, mesmo host) para StartRun — ver comentário do pacote.
 // SignatureVerifier decide se um manifesto cru é autêntico (assinatura, proveniência,
@@ -421,6 +434,136 @@ func (s *Service) GetInstallation(ctx context.Context, operator uuid.UUID) (Inst
 		out.CurrentReleaseID = *releaseID
 	}
 	return out, err
+}
+
+// MonitoringStatus (F9, spec "F9 — ... hardening e revisão independente", item "Monitoramento:
+// status do agente, falhas de backup, versão real/digest divergente, update estagnado, erros
+// após release") agrega os cinco sinais num único read-only, pensado para um operador ou uma
+// sonda externa consultar periodicamente. Nenhum campo aqui aciona nada por si só (sem
+// alerta/e-mail/fila — CLAUDE.md proíbe segredo em fila e este pacote nunca ganhou essa
+// dependência) — é só a VERDADE observável, exposta para quem for decidir o que fazer com ela.
+type MonitoringStatus struct {
+	// Agente: heartbeat gravado a cada ciclo de poll do daemon (RecordAgentHeartbeat),
+	// independente de agent_lock (que só existe enquanto um run está ativo).
+	AgentHeartbeatSeen bool       `json:"agent_heartbeat_seen"`
+	AgentLastHeartbeat *time.Time `json:"agent_last_heartbeat,omitempty"`
+	AgentHolder        string     `json:"agent_holder,omitempty"`
+	AgentStale         bool       `json:"agent_stale"`
+
+	// Backup: a MESMA evidência real de platform_backup_records que CreatePlan já usa (nunca
+	// uma fonte nova/reinventada) — qualquer kind, visão de monitoramento (nunca o gate
+	// restrito a restore_verified do canal stable).
+	BackupEvidencePresent  bool     `json:"backup_evidence_present"`
+	BackupEvidenceAgeHours *float64 `json:"backup_evidence_age_hours,omitempty"`
+	BackupEvidenceVerified bool     `json:"backup_evidence_verified"`
+	BackupEvidenceStale    bool     `json:"backup_evidence_stale"`
+
+	// Versão/digest divergente: o que o ledger LOCAL do agente diz ter concluído com sucesso
+	// por último, contra o que platform_installations (Postgres) pensa que está instalado —
+	// depois de uma tentativa de sincronização real (refreshPendingRun), nunca antes.
+	LedgerVersion         string `json:"ledger_version,omitempty"`
+	LedgerReleaseID       string `json:"ledger_release_id,omitempty"`
+	InstallationVersion   string `json:"installation_version,omitempty"`
+	InstallationReleaseID string `json:"installation_release_id,omitempty"`
+	VersionDivergence     bool   `json:"version_divergence"`
+
+	// Update estagnado: um run ATIVO (não-terminal) sem nenhuma transição de estado há mais
+	// tempo que stalledRunThreshold.
+	StalledRunID    string     `json:"stalled_run_id,omitempty"`
+	StalledRunState string     `json:"stalled_run_state,omitempty"`
+	StalledSince    *time.Time `json:"stalled_since,omitempty"`
+
+	// Erros após release: a MESMA checagem que já bloqueia CreatePlan/StartRun
+	// (ledgerHasUnresolvedRecovery) — um RECOVERY_REQUIRED nunca reconhecido é, por
+	// definição, um erro real acontecido depois de uma release ter sido aplicada.
+	UnresolvedRecoveryRequired bool `json:"unresolved_recovery_required"`
+}
+
+// GetMonitoringStatus agrega os cinco sinais de monitoramento do F9 — ver MonitoringStatus.
+// Read-only: nunca muta nada, só observa o ledger local e o Postgres. authorize() é o MESMO
+// gate de qualquer outra leitura desta API (platform operator ativo).
+func (s *Service) GetMonitoringStatus(ctx context.Context, operator uuid.UUID) (MonitoringStatus, error) {
+	// Mesma razão de GetInstallation (achado Codex [P2] original): sem isto, a comparação de
+	// versão/digest abaixo compararia contra um valor potencialmente obsoleto no Postgres.
+	if err := s.refreshPendingRun(ctx, operator); err != nil {
+		return MonitoringStatus{}, err
+	}
+
+	var out MonitoringStatus
+	var instVersion, instReleaseID *string
+	err := s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := authorize(c, q, operator); err != nil {
+			return err
+		}
+		if err := q.QueryRow(c, `SELECT current_version, current_release_id FROM platform_installations`).
+			Scan(&instVersion, &instReleaseID); err != nil {
+			return err
+		}
+		var lastEvidence *time.Time
+		var verified bool
+		_ = q.QueryRow(c, `SELECT taken_at, verified FROM platform_backup_records ORDER BY taken_at DESC LIMIT 1`).Scan(&lastEvidence, &verified)
+		if lastEvidence != nil {
+			out.BackupEvidencePresent = true
+			ageHours := time.Since(*lastEvidence).Hours()
+			out.BackupEvidenceAgeHours = &ageHours
+			out.BackupEvidenceVerified = verified
+			out.BackupEvidenceStale = ageHours > backupEvidenceMaxAgeHours || !verified
+		} else {
+			out.BackupEvidenceStale = true
+		}
+		return nil
+	})
+	if err != nil {
+		return MonitoringStatus{}, err
+	}
+	if instVersion != nil {
+		out.InstallationVersion = *instVersion
+	}
+	if instReleaseID != nil {
+		out.InstallationReleaseID = *instReleaseID
+	}
+
+	ledger, lerr := agent.OpenLedger(s.ledgerPath)
+	if lerr != nil {
+		// Ambiente sem ledger (ex. nenhum run foi criado ainda, ou este processo nunca
+		// escreveu nele) — melhor esforço, nunca falha a chamada inteira por isto: os sinais
+		// derivados do Postgres acima continuam válidos e são devolvidos normalmente.
+		return out, nil
+	}
+	defer ledger.Close()
+
+	if holder, lastPollAt, found, herr := ledger.AgentHeartbeat(ctx, s.installationID); herr == nil && found {
+		out.AgentHeartbeatSeen = true
+		out.AgentHolder = holder
+		lp := lastPollAt
+		out.AgentLastHeartbeat = &lp
+		out.AgentStale = time.Since(lastPollAt) > agentHeartbeatStaleAfter
+	}
+
+	if version, releaseID, _, _, found, verr := latestSucceededVersion(ctx, ledger, s.installationID); verr == nil && found {
+		out.LedgerVersion = version
+		out.LedgerReleaseID = releaseID
+		out.VersionDivergence = out.InstallationReleaseID != "" && releaseID != out.InstallationReleaseID
+	}
+
+	if active, aerr := ledger.ActiveRuns(ctx, s.installationID); aerr == nil {
+		for i := range active {
+			r := &active[i]
+			if time.Since(r.UpdatedAt) > stalledRunThreshold {
+				out.StalledRunID = r.RunID
+				out.StalledRunState = string(r.State)
+				since := r.UpdatedAt
+				out.StalledSince = &since
+				break
+			}
+		}
+	}
+
+	if pending, perr := ledger.HasUnresolvedRecoveryRequired(ctx, s.installationID); perr == nil {
+		out.UnresolvedRecoveryRequired = pending
+	}
+
+	return out, nil
 }
 
 // SetInstallationVersion registra explicitamente a versão/release ATUALMENTE instalada. Nada

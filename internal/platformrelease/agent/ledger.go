@@ -92,12 +92,25 @@ CREATE TABLE IF NOT EXISTS revoked_releases (
 -- confirmar com sucesso o estado ATUAL do Postgres. RevocationSyncFresh compara contra
 -- signing.yaml anti_replay.revocation.max_cache_age_seconds (300s) — "nunca revogada" só é
 -- confiável enquanto esta marca for recente; mais antiga que isso é fail-closed, nunca
--- "presumo que está tudo bem". Inicializada em OpenLedger (nunca aqui, que só roda uma vez)
--- com o momento da criação do ARQUIVO — um ledger recém-criado não tem nenhuma revogação para
--- ter perdido ainda, então começa "fresco" em vez de bloquear a própria primeira execução.
+-- "presumo que está tudo bem". NENHUMA linha (achado Codex [P1] rodada 9) é tratada como
+-- "nunca sincronizado" — nunca "obsoleto" — para nunca bloquear permanentemente uma
+-- instalação standalone (OMNIRA_PLATFORM_RELEASE_API_ENABLED=false, ADR-0054) onde nenhum
+-- processo jamais chama MarkRevocationSynced.
 CREATE TABLE IF NOT EXISTS revocation_sync (
   id        INTEGER PRIMARY KEY CHECK (id = 1),
   synced_at TEXT NOT NULL
+);
+
+-- F9 (monitoramento, "status do agente"): o lock de agent_lock só existe ENQUANTO um run está
+-- ativamente sendo processado — entre runs ele é liberado, então seu heartbeat_at nunca indica
+-- se o PROCESSO do agente ainda está vivo e fazendo polling. Esta linha única por instalação é
+-- atualizada a CADA ciclo de agentconfig.ReconcileOnce (mesmo sem nenhum run ativo) —
+-- independente de qualquer lock — dando um sinal real de liveness do daemon, nunca confundido
+-- com "há um update em andamento".
+CREATE TABLE IF NOT EXISTS agent_heartbeat (
+  installation_id TEXT PRIMARY KEY,
+  holder          TEXT NOT NULL,
+  last_poll_at    TEXT NOT NULL
 );
 `
 
@@ -556,6 +569,44 @@ func (l *Ledger) HasUnresolvedRecoveryRequired(ctx context.Context, installation
 		return false, fmt.Errorf("agent: verificar recuperação pendente: %w", err)
 	}
 	return n > 0, nil
+}
+
+// RecordAgentHeartbeat (F9, monitoramento "status do agente") grava que o daemon acabou de
+// completar um ciclo de poll — chamado por agentconfig.ReconcileOnce a CADA ciclo, mesmo sem
+// nenhum run ativo (nunca só quando há trabalho a fazer, ou o sinal deixaria de distinguir
+// "nada a fazer" de "processo morto"). Idempotente/UPSERT: nunca falha numa segunda chamada
+// para a mesma instalação. Nunca exige um LockHandle: não compete pelo recurso que agent_lock
+// protege, só registra um fato de liveness independente.
+func (l *Ledger) RecordAgentHeartbeat(ctx context.Context, installationID, holder string) error {
+	_, err := l.db.ExecContext(ctx,
+		`INSERT INTO agent_heartbeat (installation_id, holder, last_poll_at) VALUES (?, ?, ?)
+		 ON CONFLICT(installation_id) DO UPDATE SET holder = excluded.holder, last_poll_at = excluded.last_poll_at`,
+		installationID, holder, nowRFC3339())
+	if err != nil {
+		return fmt.Errorf("agent: gravar heartbeat do agente: %w", err)
+	}
+	return nil
+}
+
+// AgentHeartbeat (F9, monitoramento "status do agente") devolve o último poll registrado por
+// RecordAgentHeartbeat para installationID. found=false (sem erro) significa que este daemon
+// nunca completou um ciclo de poll para esta instalação — ou porque o processo nunca rodou,
+// ou porque está rodando uma versão anterior a esta funcionalidade; o chamador decide como
+// tratar isso (ex. "status desconhecido", nunca "daemon confirmado morto").
+func (l *Ledger) AgentHeartbeat(ctx context.Context, installationID string) (holder string, lastPollAt time.Time, found bool, err error) {
+	var raw string
+	err = l.db.QueryRowContext(ctx, `SELECT holder, last_poll_at FROM agent_heartbeat WHERE installation_id = ?`, installationID).Scan(&holder, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, false, nil
+	}
+	if err != nil {
+		return "", time.Time{}, false, fmt.Errorf("agent: ler heartbeat do agente: %w", err)
+	}
+	lastPollAt, err = time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return "", time.Time{}, false, fmt.Errorf("agent: heartbeat do agente com timestamp ilegível: %w", err)
+	}
+	return holder, lastPollAt, true, nil
 }
 
 // RevokeRelease (F9) grava, no ledger LOCAL, que release_id nunca deve ser aplicado por este
