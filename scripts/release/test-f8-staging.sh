@@ -46,6 +46,17 @@ report_row() {
 
 cleanup() {
   section "limpeza (containers/rede por label, registry, binários, diretórios temporários)"
+  # achado Codex: o trap de EXIT apagava $WORK (relatório, TODO checkpoint, o ledger) mesmo
+  # numa rodada FALHA, apesar do cabeçalho do script prometer um relatório "completo" — sem
+  # KEEP_WORK explícito, toda evidência de uma rodada (passou ou falhou) desaparecia assim
+  # que o script terminava. Persiste relatório+evidência+ledger (nunca os binários, grandes e
+  # reconstruíveis) num diretório FORA de $WORK, incondicionalmente, antes de qualquer rm -rf.
+  ARTIFACTS_DIR="/tmp/omnira-f8-reports/$RUN"
+  mkdir -p "$ARTIFACTS_DIR"
+  [ -f "$WORK/report-final.md" ] && cp "$WORK/report-final.md" "$ARTIFACTS_DIR/"
+  [ -d "$EVIDENCE" ] && cp -r "$EVIDENCE" "$ARTIFACTS_DIR/evidence"
+  [ -f "$LEDGER_PATH" ] && cp "$LEDGER_PATH" "$ARTIFACTS_DIR/ledger.db"
+  echo "evidência persistida em $ARTIFACTS_DIR (fora de \$WORK, sobrevive a esta limpeza)"
   "${DOCKER[@]}" ps -aq --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null | xargs -r "${DOCKER[@]}" rm -fv >/dev/null 2>&1
   "${DOCKER[@]}" network ls -q --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null | xargs -r "${DOCKER[@]}" network rm >/dev/null 2>&1
   "${DOCKER[@]}" rm -fv "$REGISTRY_NAME" "$PG_NAME" "$NATS_NAME" >/dev/null 2>&1
@@ -55,7 +66,11 @@ cleanup() {
   if [ -n "${KEEP_WORK:-}" ]; then
     echo "KEEP_WORK definido — mantendo $WORK para inspeção"
   else
-    rm -rf "$WORK"
+    # --compose-sudo=true (necessário para os comandos docker) também roda
+    # scripts/backup-omnira-db.sh como root — os dumps reais dentro de $WORK/backups ficam
+    # donos de root, e um `rm -rf` sem privilégio deixa esses arquivos órfãos em /tmp a cada
+    # rodada. sudo -n garante a limpeza completa de verdade.
+    sudo -n rm -rf "$WORK" 2>/dev/null || rm -rf "$WORK"
   fi
 }
 trap cleanup EXIT
@@ -160,13 +175,18 @@ OWNER_URL="postgres://omnira:pw@127.0.0.1:${PG_PORT}/${DB_NAME}?sslmode=disable"
 APP_URL="postgres://omnira_app:omnira_app@127.0.0.1:${PG_PORT}/${DB_NAME}?sslmode=disable"
 SESSION_CTX_KEY="c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
 
-section "2b. aplicando migrations reais (incl. a marker 000174) via tools/migrate-sql.sh"
+section "2b. aplicando migrations reais SÓ até 000173 (deixa 000174 pendente para o agente real aplicar)"
 MIGRATE() {
   PGHOST=127.0.0.1 PGPORT="$PG_PORT" PGUSER=omnira PGPASSWORD=pw PGDATABASE="$DB_NAME" \
     OMNIRA_SESSION_CTX_KEY="$SESSION_CTX_KEY" SESSION_CTX_MODE=enforce MIGRATIONS_DIR="$MIGRATIONS_GOOD" \
     bash tools/migrate-sql.sh "$@"
 }
-MIGRATE up >"$EVIDENCE/migrate-up.log" 2>&1 || { echo "FATAL: migrate up (ver $EVIDENCE/migrate-up.log)"; cat "$EVIDENCE/migrate-up.log"; exit 1; }
+# achado Codex: aplicar TUDO aqui (incl. 000174) antes de qualquer run começar faz todo
+# cenário exercitar só a VERIFICAÇÃO de checksum e uma aplicação no-op — uma regressão que
+# pulasse aplicar migrations pendentes de verdade passaria batido. Deixa 000174 (a marker de
+# teste) genuinamente PENDENTE; o Cenário 1 (baseline) é quem primeiro a aplica de verdade,
+# via o agent.Executor real, e sua asserção confirma a tabela/linha reais no Postgres.
+MIGRATE_TARGET=000173 MIGRATE up >"$EVIDENCE/migrate-up.log" 2>&1 || { echo "FATAL: migrate up (ver $EVIDENCE/migrate-up.log)"; cat "$EVIDENCE/migrate-up.log"; exit 1; }
 tail -5 "$EVIDENCE/migrate-up.log"
 
 # ---------------------------------------------------------------------------------------------
@@ -391,7 +411,7 @@ build_local_manifest() { # $1=release_id $2=api_ref $3=worker_ref $4=web_ref $5=
   ],
   "modules_changed": ["platform_release"],
   "compatibility": {"from_versions":["x"],"min_agent_protocol":1,"database_strategy":"$6"},
-  "migrations": {"start_after":"000174","target":"$7","checksum_bundle":"$8"},
+  "migrations": {"start_after":"000173","target":"$7","checksum_bundle":"$8"},
   "rollout": {"workloads":["omnira-api","omnira-worker","omnira-web"],"preflight_policy":"strict","recovery_class":"$5"},
   "approved_by": "release-policy-stable-v1"
 }
@@ -423,11 +443,17 @@ HARNESS reconcile > "$EVIDENCE/cenario1-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO1=$(echo "$T1 - $T0" | bc)
 ST1=$(harness_run_state "$RUN1")
 log "   run $RUN1 (baseline v1): estado=$ST1 (RTO ${RTO1}s)"
-if [ "$ST1" = "SUCCEEDED" ]; then
-  report_row "1-baseline-v1 (deploy real bem-sucedido)" "-" "$RTO1" "PASS" "cenario1-reconcile.log"
+# achado Codex: sem isto, um regressão que pulasse aplicar a migration 000174 PENDENTE de
+# verdade (ex. um bug marcando "já aplicada" sem rodar o SQL) passaria batido — confirma a
+# tabela/linha REAIS no Postgres, não só que o run terminou em SUCCEEDED.
+MARKER_ROW=$(psql_o -c "SELECT note FROM f8_staging_marker WHERE id=1" 2>/dev/null)
+if [ "$ST1" = "SUCCEEDED" ] && [ -n "$MARKER_ROW" ]; then
+  log "   ${GRN}OK${NC}: migration 000174 (pendente até aqui) aplicada de verdade pelo agente real — f8_staging_marker confirmada no Postgres: $MARKER_ROW"
+  report_row "1-baseline-v1 (deploy real + migration pendente aplicada)" "-" "$RTO1" "PASS" "cenario1-reconcile.log"
 else
+  log "   ${RED}FALHA${NC}: f8_staging_marker ausente/vazia após o run (migration 000174 pode não ter sido de fato aplicada)"
   cat "$EVIDENCE/cenario1-reconcile.log"
-  report_row "1-baseline-v1" "-" "$RTO1" "FAIL(estado=$ST1)" "cenario1-reconcile.log"; FAILS=$((FAILS+1))
+  report_row "1-baseline-v1" "-" "$RTO1" "FAIL(estado=$ST1, marker ausente)" "cenario1-reconcile.log"; FAILS=$((FAILS+1))
 fi
 
 section "Cenário 2: health timeout real -> rollback automático seguro (R1)"
@@ -500,9 +526,14 @@ PID_A=$!
 # tempo fixo pode cair ANTES de qualquer mutação real acontecer, nunca exercitando um kill
 # "em pleno apply" de verdade, ou poderia deixar o run inteiro terminar sozinho antes do kill).
 # 180s: o passo `migrate` real roda `tools/migrate-sql.sh up`, que verifica o checksum das
-# 162 migrations JÁ aplicadas (real, não um no-op barato) antes de confirmar que não há nada
+# migrations JÁ aplicadas (real, não um no-op barato) antes de confirmar que não há nada
 # pendente — leva ~100s de verdade nesta topologia, confirmado nas rodadas anteriores.
-wait_for_checkpoint "$RUN4" "deploy started" 180 || { echo "FATAL: run $RUN4 nunca chegou a 'deploy started' — ver cenario4-reconcile-A.log"; cat "$EVIDENCE/cenario4-reconcile-A.log"; FAILS=$((FAILS+1)); }
+# achado Codex: 'deploy started' é registrado ANTES do `docker compose up -d` real executar —
+# observá-lo não prova que o Docker mutou nada; matar aqui podia interromper o agente ANTES
+# de qualquer deploy real, e o cenário ainda passaria depois de um deploy normal no retry.
+# 'deploy completed' só é registrado DEPOIS do Apply real retornar — ainda dentro da janela
+# de health check real (a imagem "slow" leva ~8s para reportar saudável).
+wait_for_checkpoint "$RUN4" "deploy completed" 180 || { echo "FATAL: run $RUN4 nunca chegou a 'deploy completed' — ver cenario4-reconcile-A.log"; cat "$EVIDENCE/cenario4-reconcile-A.log"; FAILS=$((FAILS+1)); }
 # Achado real desta sessão: PID_A é o PID do SUBSHELL que bash cria para a invocação da
 # função em segundo plano — o binário f8harness real é um NETO desse processo (HARNESS não
 # usa `exec` na última linha), então `kill -9 "$PID_A"` matava só o subshell, deixando o
@@ -595,7 +626,7 @@ section "relatório final"
   echo "|---|---|---|---|---|"
   cat "$REPORT"
 } | tee "$WORK/report-final.md"
-log "   relatório completo em $WORK/report-final.md (use KEEP_WORK=1 para inspecionar após o fim; evidência bruta em $EVIDENCE)"
+log "   relatório + evidência + ledger persistidos em /tmp/omnira-f8-reports/$RUN (sobrevive à limpeza; use KEEP_WORK=1 para manter também os binários/containers)"
 
 if [ "$FAILS" -gt 0 ]; then
   log "${RED}$FAILS cenário(s) falharam${NC}"
