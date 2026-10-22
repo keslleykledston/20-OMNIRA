@@ -742,6 +742,31 @@ func (l *Ledger) MarkStandalone(ctx context.Context) error {
 	return nil
 }
 
+// ClearStandalone (F9, achado Codex [P2] rodada 15) desfaz uma marca standalone residual —
+// chamada por agentconfig.Build() toda vez que a instalação sobe SEM --standalone/
+// OMNIRA_AGENT_STANDALONE=true, para uma instalação que já rodou standalone antes (flag
+// removida, Update Manager API agora habilitada) nunca depender de uma PRIMEIRA
+// sincronização real (updatemgr.MarkRevocationSynced) para sair do modo isento — se a API
+// estiver fora do ar, ou sua primeira sincronização simplesmente ainda não aconteceu, a
+// instalação não pode continuar confiável INDEFINIDAMENTE só porque uma marca antiga nunca
+// foi removida. Deliberadamente um UPDATE simples (nunca um UPSERT como MarkStandalone/
+// MarkRevocationSynced, e nunca um DELETE): sem nenhuma linha ainda, não há standalone=1
+// para limpar (o comportamento correto para "nenhuma linha" já é fail-closed, ver
+// RevocationSyncFresh); e uma linha com synced_at de uma sincronização REAL anterior (uma
+// instalação que nunca foi standalone, Build() chamado de novo pela CLI) precisa continuar
+// exatamente como estava — limpar só a flag standalone, nunca o relógio de sincronização em
+// si, preserva esse caso comum sem regressão. O efeito prático: ao sair de standalone, o
+// relógio residual de MarkStandalone (seu próprio synced_at, nunca uma sincronização real)
+// volta a envelhecer normalmente contra signing.yaml max_cache_age_seconds — uma janela
+// LIMITADA (nunca indefinida) de até esse tempo, nunca mais.
+func (l *Ledger) ClearStandalone(ctx context.Context) error {
+	_, err := l.db.ExecContext(ctx, `UPDATE revocation_sync SET standalone = 0 WHERE id = 1`)
+	if err != nil {
+		return fmt.Errorf("agent: limpar marca standalone: %w", err)
+	}
+	return nil
+}
+
 // RevocationSyncFresh (F9, achados Codex [P1] rodadas 7 e 10) responde se a última
 // sincronização bem-sucedida com o Postgres (MarkRevocationSynced) é mais recente que
 // maxAge — signing.yaml anti_replay.revocation.max_cache_age_seconds (300s) — OU se esta

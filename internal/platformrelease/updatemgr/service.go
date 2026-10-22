@@ -730,15 +730,24 @@ func (s *Service) deleteReleaseCatalogEntryTx(c context.Context, q platformdb.Qu
 	if err := authorize(c, q, operator); err != nil {
 		return err
 	}
-	if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, operator.String()+"/"+idempotencyKey); err != nil {
+	// Achado Codex [P2] (rodada 15): o lock de instalação (platform-installation-runs:*)
+	// precisa vir ANTES do lock de operador/idempotency-key, mesma ordem de StartRun — as
+	// duas chamadas tomam os DOIS mesmos locks, e StartRun já os adquiria nesta ordem antes
+	// deste GC existir. Ordens invertidas entre chamadores concorrentes dos MESMOS dois
+	// locks é a receita clássica de deadlock do Postgres (cada transação detém um e espera
+	// o outro) — abortando uma delas com erro real, nunca travando para sempre, mas um erro
+	// evitável que a ordem consistente simplesmente elimina.
+	//
+	// Achado Codex [P1] (rodada anterior desta fatia): o lock de instalação é o MESMO que
+	// SetInstallationVersion/refreshPendingRun usam para serializar escritas em
+	// platform_installations — sem ele, uma chamada concorrente podia marcar ESTA release
+	// como current_release_id depois da checagem de releaseSafeToDelete abaixo, mas antes
+	// do DELETE comitar, deixando a instalação apontar para uma release que já não existe
+	// mais no catálogo.
+	if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "platform-installation-runs:"+s.installationID); err != nil {
 		return err
 	}
-	// Achado Codex [P1]: o MESMO lock que SetInstallationVersion/refreshPendingRun usam
-	// para serializar escritas em platform_installations — sem isto, uma chamada
-	// concorrente podia marcar ESTA release como current_release_id depois da checagem
-	// de releaseSafeToDelete abaixo, mas antes do DELETE comitar, deixando a instalação
-	// apontar para uma release que já não existe mais no catálogo.
-	if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "platform-installation-runs:"+s.installationID); err != nil {
+	if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, operator.String()+"/"+idempotencyKey); err != nil {
 		return err
 	}
 	var prevHash, prevReleaseID string

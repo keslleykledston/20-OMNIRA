@@ -256,11 +256,21 @@ func (c *Config) Build() (*agent.Executor, *agent.Ledger, error) {
 	// marcado standalone — o novo gate de frescor (fail-closed por padrão) recusaria TODO
 	// run. Idempotente (Ledger.MarkStandalone/revocation_sync são UPSERT) — chamar isto em
 	// toda montagem nunca é um problema, mesmo repetido a cada invocação da CLI.
+	//
+	// Achado Codex [P2] (rodada 15): o CAMINHO INVERSO precisa ser igualmente explícito —
+	// uma instalação que já rodou standalone e agora sobe SEM a flag (API habilitada) não
+	// pode depender de uma PRIMEIRA sincronização real futura para sair do modo isento; se
+	// a API estiver fora do ar logo no boot, ela ficaria "confiável" indefinidamente com uma
+	// marca antiga nunca removida. ClearStandalone é um UPDATE simples (nunca cria uma
+	// linha "fresca" do nada) — sem nenhuma marca para limpar, não muda nada.
 	if c.Standalone {
 		if err := ledger.MarkStandalone(context.Background()); err != nil {
 			ledger.Close()
 			return nil, nil, fmt.Errorf("agentconfig: marcar instalação standalone: %w", err)
 		}
+	} else if err := ledger.ClearStandalone(context.Background()); err != nil {
+		ledger.Close()
+		return nil, nil, fmt.Errorf("agentconfig: limpar marca standalone residual: %w", err)
 	}
 	// Achado Codex P1 (duas rodadas): --compose-sudo nunca pode se propagar para
 	// tools/migrate-sql.sh — ele fala com o Postgres via TCP/DATABASE_URL, nunca precisando

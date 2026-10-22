@@ -122,6 +122,74 @@ func TestLedger_MarkRevocationSynced_ClearsLingeringStandaloneMarker(t *testing.
 	}
 }
 
+// TestLedger_ClearStandalone é a prova do achado Codex [P2] (rodada 15): a transição INVERSA
+// (standalone -> gerenciada) precisa ser igualmente explícita, nunca depender de uma PRIMEIRA
+// sincronização real futura que pode nunca acontecer (API fora do ar logo no boot).
+func TestLedger_ClearStandalone(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ledger.db")
+	ledger, err := OpenLedger(path)
+	if err != nil {
+		t.Fatalf("OpenLedger: %v", err)
+	}
+	defer ledger.Close()
+
+	// Sem nenhuma linha ainda, ClearStandalone nunca cria uma "fresca do nada" — nunca
+	// precisa (o caso "nenhuma linha" já é fail-closed por si só).
+	if err := ledger.ClearStandalone(ctx); err != nil {
+		t.Fatalf("ClearStandalone (sem nenhuma linha): %v", err)
+	}
+	fresh, _, err := ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	if err != nil {
+		t.Fatalf("RevocationSyncFresh (depois de ClearStandalone sem nenhuma linha): %v", err)
+	}
+	if fresh {
+		t.Error("ClearStandalone nunca deveria tornar um ledger sem nenhuma linha fresco")
+	}
+
+	// Marca standalone, depois volta a ser gerenciada SEM nenhuma sincronização real ainda
+	// ter acontecido: o relógio residual de MarkStandalone (nunca uma sincronização de
+	// verdade) volta a envelhecer normalmente — backdatado o suficiente, fica obsoleto.
+	if err := ledger.MarkStandalone(ctx); err != nil {
+		t.Fatalf("MarkStandalone: %v", err)
+	}
+	backdateRevocationSync(t, ledger, maxRevocationSyncAge+time.Minute)
+	if _, err := ledger.db.Exec(`UPDATE revocation_sync SET standalone = 1 WHERE id = 1`); err != nil {
+		t.Fatalf("restaurar standalone=1 após backdate: %v", err)
+	}
+	fresh, _, err = ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	if err != nil || !fresh {
+		t.Fatalf("premissa do teste: standalone com relógio antigo deveria ainda ser fresco, fresh=%v err=%v", fresh, err)
+	}
+	if err := ledger.ClearStandalone(ctx); err != nil {
+		t.Fatalf("ClearStandalone: %v", err)
+	}
+	fresh, _, err = ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	if err != nil {
+		t.Fatalf("RevocationSyncFresh (depois de ClearStandalone sobre standalone com relógio antigo): %v", err)
+	}
+	if fresh {
+		t.Error("ClearStandalone deveria ter removido a isenção — um relógio obsoleto deixado por MarkStandalone nunca deveria continuar fresco")
+	}
+
+	// ClearStandalone NUNCA afeta uma sincronização real já existente (standalone já era 0):
+	// uma instalação gerenciada que nunca foi standalone não pode perder seu relógio
+	// genuinamente fresco só porque Build() chama ClearStandalone em toda montagem.
+	if err := ledger.MarkRevocationSynced(ctx); err != nil {
+		t.Fatalf("MarkRevocationSynced: %v", err)
+	}
+	if err := ledger.ClearStandalone(ctx); err != nil {
+		t.Fatalf("ClearStandalone (sobre sincronização real): %v", err)
+	}
+	fresh, _, err = ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	if err != nil {
+		t.Fatalf("RevocationSyncFresh (depois de ClearStandalone sobre sincronização real): %v", err)
+	}
+	if !fresh {
+		t.Error("ClearStandalone nunca deveria invalidar uma sincronização real genuinamente fresca")
+	}
+}
+
 func TestLedger_RevocationSyncFresh_LifecycleAcrossMarkBackdateMark(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "ledger.db")

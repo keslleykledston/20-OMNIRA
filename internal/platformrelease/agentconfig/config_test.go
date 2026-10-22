@@ -223,6 +223,48 @@ func TestConfig_Build_StandaloneMarksLedger(t *testing.T) {
 	}
 }
 
+// TestConfig_Build_RestartWithoutStandaloneClearsExemption é a prova do achado Codex [P2]
+// (rodada 15): uma instalação que já rodou --standalone e sobe de novo SEM a flag (API agora
+// habilitada) não pode continuar isenta do gate de frescor indefinidamente só porque nenhuma
+// sincronização real aconteceu ainda — Build() precisa limpar a marca standalone residual
+// toda vez que Standalone=false, nunca depender de uma primeira sincronização futura.
+func TestConfig_Build_RestartWithoutStandaloneClearsExemption(t *testing.T) {
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	base := func(standalone bool) *Config {
+		return &Config{
+			InstallationID:   "inst-1",
+			ComposeBaseFiles: []string{"docker-compose.yml"},
+			PollInterval:     15 * time.Second,
+			Lease:            time.Minute,
+			LedgerPath:       ledgerPath,
+			Standalone:       standalone,
+		}
+	}
+
+	_, ledger, err := base(true).Build()
+	if err != nil {
+		t.Fatalf("Build (standalone): %v", err)
+	}
+	ledger.Close()
+
+	// "Restart" sem a flag, no MESMO arquivo de ledger — nenhuma sincronização real
+	// aconteceu entre as duas chamadas, de propósito (é exatamente a janela que o achado
+	// Codex descreve: API habilitada, mas ainda não alcançada com sucesso).
+	_, ledger, err = base(false).Build()
+	if err != nil {
+		t.Fatalf("Build (gerenciada, depois de standalone): %v", err)
+	}
+	defer ledger.Close()
+
+	fresh, _, err := ledger.RevocationSyncFresh(context.Background(), -time.Nanosecond)
+	if err != nil {
+		t.Fatalf("RevocationSyncFresh: %v", err)
+	}
+	if fresh {
+		t.Error("Build com Standalone=false deveria ter limpado a isenção standalone residual — com maxAge negativo (qualquer relógio é obsoleto), deveria ser fail-closed")
+	}
+}
+
 // TestConfig_Build_PropagatesPGContainerAndOwnerToBackupRunner: achado Codex P1 — sem expor
 // PGContainer/PGOwner e propagá-los para o BackupRunner, o script sempre usaria seus
 // defaults ("omnira-postgres"/"omnira"), mesmo numa instalação configurada com nomes
