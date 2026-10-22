@@ -51,15 +51,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// F9, achado Codex [P1] (rodada 10 da fatia de retenção/GC): só grava esta marca quando
-	// o operador CONFIRMOU explicitamente --standalone/OMNIRA_AGENT_STANDALONE=true — nunca
-	// por padrão. Sem ela, "nenhuma sincronização de revogação ainda" (Ledger.RevocationSyncFresh)
-	// é fail-closed por padrão, exatamente o que uma instalação GERENCIADA (API ligada em
-	// algum lugar) cuja primeira sincronização ainda não aconteceu precisa.
+	// F9, achado Codex [P1] rodada 10 / [P1] rodada 12: a marca standalone em si é gravada
+	// dentro de cfg.Build() (agentconfig), o ÚNICO ponto que monta um Executor/Ledger reais
+	// tanto para este daemon quanto para apps/updatectl (CLI sem daemon algum) — só loga
+	// aqui, para observabilidade do processo de longa duração.
 	if cfg.Standalone {
-		if err := ledger.MarkStandalone(ctx); err != nil {
-			log.Fatalf("omnira-update-agent: marcar instalação standalone: %v", err)
-		}
 		log.Printf("omnira-update-agent: instalação marcada standalone (OMNIRA_AGENT_STANDALONE=true) — revogação de releases nunca será sincronizada com o Postgres")
 	}
 

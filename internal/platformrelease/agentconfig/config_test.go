@@ -193,6 +193,36 @@ func TestConfig_Build_RejectsInvalidConfigBeforeOpeningLedger(t *testing.T) {
 	}
 }
 
+// TestConfig_Build_StandaloneMarksLedger é a prova do achado Codex [P1] (rodada 12): marcar
+// standalone só no startup de apps/update-agent deixava apps/updatectl (que NUNCA passa por
+// esse main.go — roda reconcile/rollback sob demanda, muitas vezes sem o daemon rodando)
+// com um ledger nunca sincronizado E nunca marcado standalone, e o novo gate de frescor
+// (fail-closed por padrão) recusaria todo run. Build() precisa ser o ÚNICO ponto que marca
+// standalone, para os dois binários por igual.
+func TestConfig_Build_StandaloneMarksLedger(t *testing.T) {
+	c := &Config{
+		InstallationID:   "inst-1",
+		ComposeBaseFiles: []string{"docker-compose.yml"},
+		PollInterval:     15 * time.Second,
+		Lease:            time.Minute,
+		LedgerPath:       filepath.Join(t.TempDir(), "ledger.db"),
+		Standalone:       true,
+	}
+	_, ledger, err := c.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer ledger.Close()
+
+	fresh, _, err := ledger.RevocationSyncFresh(context.Background(), time.Minute)
+	if err != nil {
+		t.Fatalf("RevocationSyncFresh: %v", err)
+	}
+	if !fresh {
+		t.Error("Build com Standalone=true deveria marcar o ledger standalone (fresco mesmo sem nenhuma sincronização real)")
+	}
+}
+
 // TestConfig_Build_PropagatesPGContainerAndOwnerToBackupRunner: achado Codex P1 — sem expor
 // PGContainer/PGOwner e propagá-los para o BackupRunner, o script sempre usaria seus
 // defaults ("omnira-postgres"/"omnira"), mesmo numa instalação configurada com nomes

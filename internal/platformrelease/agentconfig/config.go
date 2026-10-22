@@ -248,6 +248,20 @@ func (c *Config) Build() (*agent.Executor, *agent.Ledger, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("agentconfig: abrir ledger: %w", err)
 	}
+	// Achado Codex [P1] (rodada 12): Build() é o ÚNICO ponto que monta um Executor/Ledger
+	// reais para OS DOIS binários — apps/update-agent (daemon) E apps/updatectl (CLI, sem
+	// daemon algum). Marcar standalone só no startup do daemon (como a rodada 10 fez)
+	// deixava `updatectl reconcile --standalone`/`rollback --standalone`, usado numa
+	// instalação standalone SEM o daemon rodando, com um ledger nunca sincronizado E nunca
+	// marcado standalone — o novo gate de frescor (fail-closed por padrão) recusaria TODO
+	// run. Idempotente (Ledger.MarkStandalone/revocation_sync são UPSERT) — chamar isto em
+	// toda montagem nunca é um problema, mesmo repetido a cada invocação da CLI.
+	if c.Standalone {
+		if err := ledger.MarkStandalone(context.Background()); err != nil {
+			ledger.Close()
+			return nil, nil, fmt.Errorf("agentconfig: marcar instalação standalone: %w", err)
+		}
+	}
 	// Achado Codex P1 (duas rodadas): --compose-sudo nunca pode se propagar para
 	// tools/migrate-sql.sh — ele fala com o Postgres via TCP/DATABASE_URL, nunca precisando
 	// de privilégio para o socket Docker, e `sudo -n` sob a política padrão `env_reset`
