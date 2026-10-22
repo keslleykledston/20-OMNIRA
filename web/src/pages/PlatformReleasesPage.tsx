@@ -67,11 +67,20 @@ const TAB_ITEMS: TabItem<SectionId>[] = [
 // recuperação nesta tela. A mesma chave precisa sobreviver a um retry da MESMA ação; só depois
 // de um SUCESSO (ou de a pessoa desistir e fechar) é que a próxima tentativa é, de verdade, um
 // pedido novo e merece uma chave nova.
+// Achado Codex [P2] (10a rodada): reter a chave entre tentativas (acima) resolve o retry da
+// MESMA requisição, mas StartRun especificamente pode legitimamente mudar de ALVO entre
+// tentativas — uma primeira tentativa falha, a pessoa roda o preflight de novo e recebe um
+// plano NOVO (plan_id diferente); reusar a chave antiga (presa ao plano antigo) faz o servidor
+// devolver ErrKeyMismatch (StartRun compara a chave contra o request_hash gravado, que inclui o
+// plan_id) para TODA tentativa seguinte, travado até o componente desmontar. `scope` (aqui, o
+// próprio plan_id) faz a chave acompanhar o alvo real: muda de plano, muda de chave; mesmo
+// plano, mesma chave.
+const DEFAULT_SCOPE = '_default'
 function useStableIdempotencyKey() {
-  const ref = useRef<string | null>(null)
-  const get = () => {
-    if (!ref.current) ref.current = crypto.randomUUID()
-    return ref.current
+  const ref = useRef<{ scope: string; key: string } | null>(null)
+  const get = (scope: string = DEFAULT_SCOPE) => {
+    if (!ref.current || ref.current.scope !== scope) ref.current = { scope, key: crypto.randomUUID() }
+    return ref.current.key
   }
   const spend = () => { ref.current = null }
   return { get, spend }
@@ -469,7 +478,7 @@ function ReleaseDetail({ release, installedVersion, onRunStarted }: { release: P
   })
   const startKey = useStableIdempotencyKey()
   const startMutation = useMutation({
-    mutationFn: () => platformRunsAPI.start(plan!.id, startKey.get()),
+    mutationFn: () => platformRunsAPI.start(plan!.id, startKey.get(plan!.id)),
     onSuccess: (run) => {
       startKey.spend()
       setConfirmOpen(false)
@@ -698,10 +707,18 @@ function RunTracking({ runId, onClose }: { runId: string; onClose: () => void })
     })
   }, [events.data])
 
+  // Achado Codex [P2] (10a rodada): dependia do objeto `run` INTEIRO — o react-query devolve
+  // uma referência NOVA a cada render (inclusive os causados pela query de eventos, que chega
+  // separada e mais frequente), então este efeito limpava e recriava o intervalo em TODO
+  // render. Com eventos chegando mais rápido que 4s, o intervalo nunca sobrevivia os 4s
+  // inteiros e run.refetch() nunca era chamado — o estado do run ficava parado mesmo com a
+  // tela dizendo "atualizando…". `run.refetch` é estável entre renders (método do MESMO
+  // observador da query); só ele (e `terminal`) precisam disparar o efeito de novo.
   useEffect(() => {
     const id = terminal ? undefined : setInterval(() => void run.refetch(), 4_000)
     return () => { if (id) clearInterval(id) }
-  }, [terminal, run])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminal, run.refetch])
 
   // Achado Codex [P2]: o run pode virar terminal bem entre uma consulta de eventos e a
   // próxima — como refetchInterval para assim que `terminal` é verdade, o checkpoint final

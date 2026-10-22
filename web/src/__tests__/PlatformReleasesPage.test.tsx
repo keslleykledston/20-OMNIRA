@@ -257,6 +257,54 @@ describe('PlatformReleasesPage — golden path', () => {
     expect(startKeys[0]).toBe(startKeys[1])
     expect(startKeys[0]).toBeTruthy()
   })
+
+  it('generates a NEW Idempotency-Key for StartRun when the submitted plan changed after a failed attempt (Codex round 10)', async () => {
+    const user = userEvent.setup()
+    const startKeysByPlan: Record<string, string> = {}
+    let planCount = 0
+    vi.mocked(axios.post).mockImplementation(async (url: string, _body: unknown, config?: any) => {
+      const u = String(url)
+      if (u.endsWith('/platform/updates/plans')) {
+        planCount += 1
+        return {
+          data: {
+            id: `plan-${planCount}`, release_id: 'rel-2026.10.0', preflight_status: 'PASS',
+            preflight_detail: { version_known: true, version_compatible: true, agent_protocol_ok: true, reasons: [] },
+            created_by: 'op-1', created_at: '2026-10-20T10:04:00Z', expires_at: '2026-10-20T10:19:00Z',
+          },
+        }
+      }
+      if (u.endsWith('/platform/updates/runs')) {
+        const body = _body as { plan_id: string }
+        startKeysByPlan[body.plan_id] = config?.headers?.['Idempotency-Key']
+        // plan-1's start always fails (e.g. the plan went stale); plan-2 succeeds.
+        if (body.plan_id === 'plan-1') return Promise.reject({ response: { status: 422, data: 'plano expirado' } })
+        return { data: run('LOCKED') }
+      }
+      throw new Error(`unexpected POST ${u}`)
+    })
+
+    renderAt(<PlatformReleasesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Detalhes' }))
+    await user.click(screen.getByRole('button', { name: 'Rodar preflight' }))
+    await screen.findByText('PASS')
+    await user.click(screen.getByRole('button', { name: 'Iniciar atualização (escopo global)' }))
+    let dialog = await screen.findByRole('dialog', { name: 'Confirmar atualização de escopo global' })
+    await user.click(within(dialog).getByRole('button', { name: 'Iniciar atualização' }))
+    await waitFor(() => expect(startKeysByPlan['plan-1']).toBeTruthy())
+
+    // Re-run preflight: a NEW plan (plan-2) replaces the stale one in the UI.
+    await user.click(screen.getByRole('button', { name: 'Rodar preflight' }))
+    await screen.findByText('PASS')
+    await user.click(screen.getByRole('button', { name: 'Iniciar atualização (escopo global)' }))
+    dialog = await screen.findByRole('dialog', { name: 'Confirmar atualização de escopo global' })
+    await user.click(within(dialog).getByRole('button', { name: 'Iniciar atualização' }))
+    await waitFor(() => expect(startKeysByPlan['plan-2']).toBeTruthy())
+
+    // Different plans must never share a key — reusing plan-1's key for plan-2 would hit the
+    // server's ErrKeyMismatch (the stored request_hash includes the plan_id).
+    expect(startKeysByPlan['plan-1']).not.toBe(startKeysByPlan['plan-2'])
+  })
 })
 
 describe('PlatformReleasesPage — reentry with a run in progress', () => {
