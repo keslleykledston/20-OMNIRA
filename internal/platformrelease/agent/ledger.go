@@ -82,6 +82,23 @@ CREATE TABLE IF NOT EXISTS revoked_releases (
   reason     TEXT NOT NULL,
   revoked_at TEXT NOT NULL
 );
+
+-- F9, achado Codex [P1] rodada 7: "nenhuma revogação pendente" (entrega eventual, achado
+-- anterior) só prova que CADA revogação que o agente conseguiu enxergar foi entregue — nunca
+-- que o Postgres não tem uma revogação NOVA que simplesmente nunca chegou a ser verificada,
+-- porque a API inteira ficou fora do ar por mais tempo do que qualquer retry individual
+-- cobre. Esta linha única (id=1) é o relógio dessa garantia: só
+-- updatemgr.deliverRevocationToLedger/redeliverPendingRevocations a atualizam, e só depois de
+-- confirmar com sucesso o estado ATUAL do Postgres. RevocationSyncFresh compara contra
+-- signing.yaml anti_replay.revocation.max_cache_age_seconds (300s) — "nunca revogada" só é
+-- confiável enquanto esta marca for recente; mais antiga que isso é fail-closed, nunca
+-- "presumo que está tudo bem". Inicializada em OpenLedger (nunca aqui, que só roda uma vez)
+-- com o momento da criação do ARQUIVO — um ledger recém-criado não tem nenhuma revogação para
+-- ter perdido ainda, então começa "fresco" em vez de bloquear a própria primeira execução.
+CREATE TABLE IF NOT EXISTS revocation_sync (
+  id        INTEGER PRIMARY KEY CHECK (id = 1),
+  synced_at TEXT NOT NULL
+);
 `
 
 // Ledger é o estado durável do agente para UMA instalação (há uma só instalação real hoje,
@@ -128,6 +145,21 @@ func OpenLedger(path string) (*Ledger, error) {
 	if err := retryOnBusy(func() error { return migrateSchema(db) }); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("agent: migrar schema do ledger: %w", err)
+	}
+	// F9, achado Codex [P1] rodada 7: só define o relógio de revocation_sync se a linha AINDA
+	// NÃO existir (ON CONFLICT DO NOTHING) — OpenLedger é chamado com MUITA frequência em
+	// produção (o processo da API abre/fecha o ledger por chamada, ver
+	// updatemgr.deliverRevocationToLedger/redeliverPendingRevocations), e "resetar" o relógio
+	// a cada abertura tornaria a checagem de frescor inútil (sempre pareceria recém-sincronizado
+	// mesmo que o Postgres nunca tenha sido consultado de fato). Só a PRIMEIRA abertura de um
+	// arquivo .db novo grava este baseline — correto, porque um ledger recém-criado não tem
+	// nenhuma revogação para ter perdido ainda.
+	if err := retryOnBusy(func() error {
+		_, err := db.Exec(`INSERT INTO revocation_sync (id, synced_at) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, time.Now().UTC().Format(time.RFC3339Nano))
+		return err
+	}); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("agent: inicializar relógio de sincronização de revogação: %w", err)
 	}
 	return &Ledger{db: db}, nil
 }
@@ -567,6 +599,50 @@ func (l *Ledger) IsReleaseRevoked(ctx context.Context, releaseID string) (revoke
 		return false, "", fmt.Errorf("agent: verificar revogação local de %s: %w", releaseID, err)
 	}
 	return true, reason, nil
+}
+
+// MarkRevocationSynced (F9, achado Codex [P1] rodada 7) avança o relógio de revocation_sync
+// para agora — chamado SÓ depois que updatemgr confirma, com sucesso, que refletiu neste
+// ledger o estado ATUAL de revogações do Postgres (nenhuma pendência de entrega, ou toda
+// pendência entregue com sucesso). Nunca chamado pelo agente em si (que não tem como saber se
+// está "em dia" com o Postgres — só o processo da API, que de fato consultou o Postgres,
+// pode avançar este relógio).
+func (l *Ledger) MarkRevocationSynced(ctx context.Context) error {
+	_, err := l.db.ExecContext(ctx,
+		`INSERT INTO revocation_sync (id, synced_at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET synced_at = excluded.synced_at`,
+		time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("agent: marcar sincronização de revogação: %w", err)
+	}
+	return nil
+}
+
+// RevocationSyncFresh (F9, achado Codex [P1] rodada 7) responde se a última sincronização
+// bem-sucedida com o Postgres (MarkRevocationSynced) é mais recente que maxAge —
+// signing.yaml anti_replay.revocation.max_cache_age_seconds (300s). "Não revogada" só pode
+// ser confiada enquanto este relógio estiver fresco: se a API ficou fora do ar por mais tempo
+// do que isso, uma revogação pode ter acontecido no Postgres sem NUNCA ter sido verificada
+// por este ledger — IsReleaseRevoked responderia "false" por simples ausência de dados, nunca
+// por confirmação real. lastSync é devolvido mesmo quando fresh=false, só para contexto em
+// mensagens de erro/log — o chamador nunca decide nada a partir dele diretamente.
+func (l *Ledger) RevocationSyncFresh(ctx context.Context, maxAge time.Duration) (fresh bool, lastSync time.Time, err error) {
+	var raw string
+	err = l.db.QueryRowContext(ctx, `SELECT synced_at FROM revocation_sync WHERE id = 1`).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		// OpenLedger sempre grava esta linha na primeira abertura — chegar aqui sem ela
+		// significa um ledger aberto por um caminho que não passou por OpenLedger (erro de
+		// uso interno deste pacote, nunca um estado real de produção). Fail-closed mesmo
+		// assim: nunca presumir frescor sem a linha existir.
+		return false, time.Time{}, nil
+	}
+	if err != nil {
+		return false, time.Time{}, fmt.Errorf("agent: ler sincronização de revogação: %w", err)
+	}
+	lastSync, err = time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return false, time.Time{}, fmt.Errorf("agent: sincronização de revogação com timestamp ilegível: %w", err)
+	}
+	return time.Since(lastSync) <= maxAge, lastSync, nil
 }
 
 // AcknowledgeRecovery marca um run RECOVERY_REQUIRED como resolvido fora de banda — a única

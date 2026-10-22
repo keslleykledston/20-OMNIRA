@@ -740,12 +740,32 @@ func redeliverPendingRevocations(ctx context.Context, q platformdb.Querier, ledg
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("listar revogações pendentes de entrega: %w", err)
 	}
+	allDelivered := true
 	for _, p := range items {
 		if err := deliverRevocationToLedger(ctx, ledgerPath, q, p.releaseID, p.reason); err != nil {
 			// melhor esforço aqui: a PRÓXIMA chamada de refreshPendingRun tenta de novo — mas
 			// loga, porque uma entrega pendente de revogação é um evento de segurança real,
 			// nunca silenciado.
 			log.Printf("updatemgr: reentrega da revogação de %s ao ledger local falhou (nova tentativa na próxima operação): %v", p.releaseID, err)
+			allDelivered = false
+		}
+	}
+	// Achado Codex [P1], F9 (rodada 7): só avança o relógio de revocation_sync (consultado
+	// pelo agente via Ledger.RevocationSyncFresh antes de confiar em "não revogada") quando
+	// esta chamada confirmou, de verdade, que o estado do Postgres foi refletido neste
+	// ledger — o SELECT acima já teve sucesso (ou já teríamos retornado um erro antes de
+	// chegar aqui) e toda pendência encontrada foi entregue. Se alguma entrega falhou, NUNCA
+	// marca synced — o relógio deve continuar envelhecendo até uma tentativa futura ter
+	// sucesso de verdade, nunca fingir que está em dia.
+	if allDelivered {
+		ledger, lerr := agent.OpenLedger(ledgerPath)
+		if lerr != nil {
+			log.Printf("updatemgr: marcar sincronização de revogação: abrir ledger local: %v", lerr)
+			return nil
+		}
+		defer ledger.Close()
+		if err := ledger.MarkRevocationSynced(ctx); err != nil {
+			log.Printf("updatemgr: marcar sincronização de revogação: %v", err)
 		}
 	}
 	return nil

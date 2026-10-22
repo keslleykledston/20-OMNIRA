@@ -403,3 +403,142 @@ func TestExecute_RollbackTarget_RevokedAfterSucceeding_ForcesRecoveryRequired(t 
 		t.Errorf("Compose.Rollback nunca deveria ter sido chamado de verdade (reinstalaria a release revogada A) — applyCount=%d", wrapped.applyCount)
 	}
 }
+
+// TestExecute_StaleRevocationSync_RefusesToApplyNewSteps é a prova central do achado Codex
+// [P1] (rodada 7): entrega eventual (refreshPendingRun/StartRevocationDeliveryLoop, achados
+// anteriores) só cobre uma falha TRANSIENTE de entrega — se o processo da API inteiro fica
+// fora do ar por mais tempo que signing.yaml permite (max_cache_age_seconds=300), nada
+// reentrega NADA, e sem esta checagem de frescor o agente continuaria vendo
+// IsReleaseRevoked=false por simples ausência de dados, nunca por confirmação real. Backdata
+// o relógio de sincronização ANTES de qualquer mutação e confirma que Execute recusa aplicar
+// qualquer step — mesma classificação trivial R0 (nada mutou, nada a reverter) de uma
+// revogação real chegando antes de qualquer mutação.
+func TestExecute_StaleRevocationSync_RefusesToApplyNewSteps(t *testing.T) {
+	ctx := context.Background()
+	manifest := testManifest("expand_only")
+	fr := fakeRunnerForManifest(manifest)
+	compose := &ComposeAdapter{r: fr, Project: "test", OverrideDir: t.TempDir()}
+	migrate := &fakeMigrateRunner{}
+	backup := &fakeBackupRunner{}
+	exec, ledger, h := testExecutor(t, migrate, backup, compose)
+
+	backdateRevocationSync(t, ledger, maxRevocationSyncAge+time.Minute)
+
+	run, err := ledger.CreateRun(ctx, h, "run-1", "idem-1", "{}", domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := exec.Execute(ctx, h, run.RunID, manifest); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got, err := ledger.GetRun(ctx, run.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.State != domain.StateRolledBack {
+		t.Fatalf("sincronização de revogação obsoleta ANTES de qualquer mutação deveria classificar R0 -> ROLLED_BACK (fail-closed, nada a reverter), veio %s", got.State)
+	}
+	if migrate.upCalls != 0 || backup.runCalls != 0 {
+		t.Errorf("com a sincronização obsoleta, nenhum step real deveria ter sido aplicado: backup=%d migrate=%d", backup.runCalls, migrate.upCalls)
+	}
+}
+
+// TestExecute_RollbackTarget_PartialWorkloadRelease_ChecksPerUnitProvenance é a prova central
+// do achado Codex [P1] (rodada 7): rollbackTargetReleaseIDs precisa resolver a proveniência
+// POR UNIT, nunca assumir que "a release do run SUCCEEDED mais recente" cobre todas as units.
+// Cenário exato do achado: release A atualiza só a API (SUCCEEDED); release B, depois, só o
+// web (SUCCEEDED — mais recente que A no geral); A é revogada; release C tenta atualizar a
+// API de novo e falha depois de mutar. O rollback da API precisa recusar porque o destino é A
+// (revogada) — nunca checar B (que nunca tocou a API) e deixar passar.
+func TestExecute_RollbackTarget_PartialWorkloadRelease_ChecksPerUnitProvenance(t *testing.T) {
+	ctx := context.Background()
+
+	manifestA := testManifest("expand_only")
+	manifestA.ReleaseID = "omnira-A"
+	manifestA.Rollout.Workloads = []domain.BuildUnit{domain.UnitAPI}
+	manifestA.Artifacts = []domain.Artifact{
+		{Unit: domain.UnitAPI, Image: "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("a", 64)},
+	}
+	manifestB := testManifest("expand_only")
+	manifestB.ReleaseID = "omnira-B"
+	manifestB.Rollout.Workloads = []domain.BuildUnit{domain.UnitWeb}
+	manifestB.Artifacts = []domain.Artifact{
+		{Unit: domain.UnitWeb, Image: "ghcr.io/omnira/omnira-web@sha256:" + strings.Repeat("b", 64)},
+	}
+	manifestC := testManifest("expand_only")
+	manifestC.ReleaseID = "omnira-C"
+	manifestC.Rollout.Workloads = []domain.BuildUnit{domain.UnitAPI}
+	manifestC.Artifacts = []domain.Artifact{
+		{Unit: domain.UnitAPI, Image: "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("c", 64)},
+	}
+
+	compose := &ComposeAdapter{r: fakeRunnerForManifest(manifestA), Project: "test", OverrideDir: t.TempDir()}
+	exec, ledger, h := testExecutor(t, &fakeMigrateRunner{}, &fakeBackupRunner{}, compose)
+	exec.HealthTimeout = 50 * time.Millisecond
+
+	// Run-A: happy path, só a API.
+	rawA, err := json.Marshal(manifestA)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestA: %v", err)
+	}
+	runA, err := ledger.CreateRun(ctx, h, "run-A", "idem-A", string(rawA), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-A: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runA.RunID, manifestA); err != nil {
+		t.Fatalf("Execute run-A: %v", err)
+	}
+	if gotA, err := ledger.GetRun(ctx, runA.RunID); err != nil || gotA.State != domain.StateSucceeded {
+		t.Fatalf("run-A deveria suceder, state=%v err=%v", gotA, err)
+	}
+
+	// Run-B: happy path, só o web — mais recente que A, mas nunca toca a API.
+	compose.r = fakeRunnerForManifest(manifestB)
+	rawB, err := json.Marshal(manifestB)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestB: %v", err)
+	}
+	runB, err := ledger.CreateRun(ctx, h, "run-B", "idem-B", string(rawB), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-B: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runB.RunID, manifestB); err != nil {
+		t.Fatalf("Execute run-B: %v", err)
+	}
+	if gotB, err := ledger.GetRun(ctx, runB.RunID); err != nil || gotB.State != domain.StateSucceeded {
+		t.Fatalf("run-B deveria suceder, state=%v err=%v", gotB, err)
+	}
+
+	// SÓ DEPOIS de A e B terem sucedido, revoga A.
+	if err := ledger.RevokeRelease(ctx, manifestA.ReleaseID, "CVE crítico na API descoberto depois do sucesso de A"); err != nil {
+		t.Fatalf("RevokeRelease: %v", err)
+	}
+
+	// Run-C: tenta atualizar a API de novo, falha depois de mutar (deploy nunca fica
+	// saudável na primeira tentativa). Sem o achado corrigido, rollbackTargetReleaseIDs
+	// pegaria B (o SUCCEEDED mais recente no geral) — B não está revogada, e o rollback da
+	// API reinstalaria de volta o digest de A (revogado) sem nunca checar A.
+	wrapped := &rollbackSucceedsRunner{fakeRunner: fakeRunnerForManifest(manifestC)}
+	compose.r = wrapped
+	rawC, err := json.Marshal(manifestC)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestC: %v", err)
+	}
+	runC, err := ledger.CreateRun(ctx, h, "run-C", "idem-C", string(rawC), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-C: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runC.RunID, manifestC); err != nil {
+		t.Fatalf("Execute run-C não deveria retornar erro quando a recuperação em si é bem-sucedida: %v", err)
+	}
+	gotC, err := ledger.GetRun(ctx, runC.RunID)
+	if err != nil {
+		t.Fatalf("GetRun run-C: %v", err)
+	}
+	if gotC.State != domain.StateRecoveryRequired {
+		t.Fatalf("rollback automático da API de volta para A (revogada) nunca deveria completar, mesmo com B sendo o SUCCEEDED mais recente no geral — esperava RECOVERY_REQUIRED, veio %s", gotC.State)
+	}
+	if wrapped.applyCount >= 2 {
+		t.Errorf("Compose.Rollback nunca deveria ter sido chamado de verdade (reinstalaria o digest revogado de A na API) — applyCount=%d", wrapped.applyCount)
+	}
+}
