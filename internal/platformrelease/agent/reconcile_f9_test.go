@@ -404,6 +404,104 @@ func TestExecute_RollbackTarget_RevokedAfterSucceeding_ForcesRecoveryRequired(t 
 	}
 }
 
+// revokeRollbackTargetDuringWaitHealthyRunner (F9, achado Codex [P1] rodada 16) combina o
+// comportamento de rollbackSucceedsRunner (run-B falha a própria saúde, forçando recover() a
+// chamar Compose.Rollback de volta para A) com a entrega da revogação de A exatamente DENTRO
+// do WaitHealthy PÓS-rollback — nunca antes do Compose.Rollback em si (que já tem sua própria
+// checagem, testada por TestExecute_RollbackTarget_RevokedAfterSucceeding_ForcesRecoveryRequired).
+// Simula a janela real que o achado descreve: a revogação chega enquanto o agente está
+// esperando o container reaplicado ficar saudável de novo.
+type revokeRollbackTargetDuringWaitHealthyRunner struct {
+	*fakeRunner
+	applyCount           int
+	postRollbackInspects int
+	ledger               *Ledger
+	releaseID            string
+}
+
+func (r *revokeRollbackTargetDuringWaitHealthyRunner) run(ctx context.Context, name string, args ...string) (string, string, error) {
+	if name == "docker" && len(args) > 0 && args[0] == "compose" {
+		r.applyCount++
+	}
+	if name == "docker" && len(args) > 0 && args[0] == "inspect" && strings.Contains(strings.Join(args, " "), "{{.State.Running}}") {
+		if r.applyCount < 2 {
+			// Ainda é o próprio deploy falho de run-B (antes de qualquer Compose.Rollback).
+			return "true|starting", "", nil
+		}
+		r.postRollbackInspects++
+		if r.postRollbackInspects == 1 {
+			if err := r.ledger.RevokeRelease(ctx, r.releaseID, "CVE crítico descoberto durante o WaitHealthy pós-rollback"); err != nil {
+				return "", "", err
+			}
+			return "true|starting", "", nil
+		}
+		return "true|healthy", "", nil
+	}
+	return r.fakeRunner.run(ctx, name, args...)
+}
+
+func TestExecute_RollbackTarget_RevokedDuringPostRollbackWaitHealthy_ForcesRecoveryRequired(t *testing.T) {
+	ctx := context.Background()
+	manifestA := testManifest("expand_only")
+	manifestA.ReleaseID = "omnira-A"
+	manifestB := testManifest("expand_only")
+	manifestB.ReleaseID = "omnira-B"
+	manifestB.Artifacts = []domain.Artifact{
+		{Unit: domain.UnitAPI, Image: "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("1", 64)},
+		{Unit: domain.UnitWorker, Image: "ghcr.io/omnira/omnira-worker@sha256:" + strings.Repeat("2", 64)},
+		{Unit: domain.UnitWeb, Image: "ghcr.io/omnira/omnira-web@sha256:" + strings.Repeat("3", 64)},
+	}
+
+	compose := &ComposeAdapter{r: fakeRunnerForManifest(manifestA), Project: "test", OverrideDir: t.TempDir()}
+	exec, ledger, h := testExecutor(t, &fakeMigrateRunner{}, &fakeBackupRunner{}, compose)
+	exec.HealthTimeout = 50 * time.Millisecond
+
+	// Run-A: happy path completo — termina SUCCEEDED, deixando A rastreada no ledger. NUNCA
+	// revogada antes deste ponto — a revogação só chega durante o WaitHealthy de run-B,
+	// abaixo.
+	rawA, err := json.Marshal(manifestA)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestA: %v", err)
+	}
+	runA, err := ledger.CreateRun(ctx, h, "run-A", "idem-A", string(rawA), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-A: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runA.RunID, manifestA); err != nil {
+		t.Fatalf("Execute run-A: %v", err)
+	}
+	gotA, err := ledger.GetRun(ctx, runA.RunID)
+	if err != nil {
+		t.Fatalf("GetRun run-A: %v", err)
+	}
+	if gotA.State != domain.StateSucceeded {
+		t.Fatalf("run-A deveria suceder normalmente antes do cenário do teste começar, veio %s", gotA.State)
+	}
+
+	// Run-B: deploy nunca fica saudável na primeira tentativa, forçando recover() a tentar
+	// reverter para A. A revogação de A só é entregue durante o WaitHealthy PÓS-rollback.
+	wrapped := &revokeRollbackTargetDuringWaitHealthyRunner{fakeRunner: fakeRunnerForManifest(manifestB), ledger: ledger, releaseID: manifestA.ReleaseID}
+	compose.r = wrapped
+	rawB, err := json.Marshal(manifestB)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestB: %v", err)
+	}
+	runB, err := ledger.CreateRun(ctx, h, "run-B", "idem-B", string(rawB), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-B: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runB.RunID, manifestB); err != nil {
+		t.Fatalf("Execute run-B não deveria retornar erro quando a recuperação em si é bem-sucedida: %v", err)
+	}
+	gotB, err := ledger.GetRun(ctx, runB.RunID)
+	if err != nil {
+		t.Fatalf("GetRun run-B: %v", err)
+	}
+	if gotB.State != domain.StateRecoveryRequired {
+		t.Fatalf("uma revogação de A chegada DURANTE o WaitHealthy pós-rollback nunca deveria permitir ROLLED_BACK sobre A — esperava RECOVERY_REQUIRED, veio %s", gotB.State)
+	}
+}
+
 // TestExecute_StaleRevocationSync_RefusesToApplyNewSteps é a prova central do achado Codex
 // [P1] (rodada 7): entrega eventual (refreshPendingRun/StartRevocationDeliveryLoop, achados
 // anteriores) só cobre uma falha TRANSIENTE de entrega — se o processo da API inteiro fica

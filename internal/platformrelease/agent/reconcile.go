@@ -1022,20 +1022,14 @@ func (e *Executor) recover(ctx context.Context, h *LockHandle, runID string, man
 			fmt.Sprintf("não foi possível identificar com segurança as releases que o rollback automático restauraria — RECOVERY_REQUIRED (fail-closed): %v", terr))
 		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
 	}
-	for _, u := range units {
-		targetReleaseID, found := targets[u]
-		if !found {
-			continue
-		}
-		if revoked, reason, err := e.isRevokedOrUnsafe(ctx, targetReleaseID); err != nil {
-			_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
-				fmt.Sprintf("falha ao verificar revogação da release de destino do rollback de %s (%s) — RECOVERY_REQUIRED (fail-closed): %v", u, targetReleaseID, err))
-			return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
-		} else if revoked {
-			_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
-				fmt.Sprintf("R4: a release de destino do rollback automático de %s (%s) está REVOGADA (%s) — RECOVERY_REQUIRED, nunca reinstalar uma release revogada mesmo via rollback", u, targetReleaseID, reason))
-			return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
-		}
+	if u, targetReleaseID, reason, revoked, err := e.checkRollbackTargetsRevoked(ctx, targets, units); err != nil {
+		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+			fmt.Sprintf("falha ao verificar revogação da release de destino do rollback de %s (%s) — RECOVERY_REQUIRED (fail-closed): %v", u, targetReleaseID, err))
+		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+	} else if revoked {
+		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+			fmt.Sprintf("R4: a release de destino do rollback automático de %s (%s) está REVOGADA (%s) — RECOVERY_REQUIRED, nunca reinstalar uma release revogada mesmo via rollback", u, targetReleaseID, reason))
+		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
 	}
 
 	if err := e.Compose.Rollback(ctx, snap, units); err != nil {
@@ -1058,8 +1052,57 @@ func (e *Executor) recover(ctx context.Context, h *LockHandle, runID string, man
 			return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
 		}
 	}
+
+	// Achado Codex [P1] (rodada 16): Compose.Rollback e o WaitHealthy acima podem levar
+	// bastante tempo real (healthTimeout, por unit) — uma revogação (da release ENTRANDO,
+	// ou de qualquer release de DESTINO do rollback) entregue exatamente nessa janela nunca
+	// era revista antes de confirmar ROLLED_BACK, deixando a instalação rodando um digest
+	// revogado enquanto reporta recuperação bem-sucedida. Mesma disciplina da revalidação
+	// final que Execute já faz antes de SUCCEEDED (ver TestExecute_RevokedDuringObserveWindow/
+	// RevokedDuringFinalHealthRevalidation): nenhuma checagem feita ANTES de uma operação
+	// bloqueante real pode ser presumida ainda válida depois dela — revalida tudo de novo.
+	if revoked, reason, err := e.isRevokedOrUnsafe(ctx, manifest.ReleaseID); err != nil {
+		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+			fmt.Sprintf("falha ao revalidar revogação da release entrando depois do rollback — RECOVERY_REQUIRED (fail-closed): %v", err))
+		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+	} else if revoked {
+		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+			fmt.Sprintf("R4: release %s foi revogada (%s) durante o rollback — RECOVERY_REQUIRED, nunca confirmar ROLLED_BACK sobre uma release revogada", manifest.ReleaseID, reason))
+		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+	}
+	if u, targetReleaseID, reason, revoked, err := e.checkRollbackTargetsRevoked(ctx, targets, units); err != nil {
+		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+			fmt.Sprintf("falha ao revalidar revogação do destino do rollback de %s (%s) depois da checagem de saúde — RECOVERY_REQUIRED (fail-closed): %v", u, targetReleaseID, err))
+		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+	} else if revoked {
+		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+			fmt.Sprintf("R4: o destino do rollback automático de %s (%s) foi revogado (%s) durante a checagem de saúde — RECOVERY_REQUIRED, nunca confirmar ROLLED_BACK sobre uma release revogada", u, targetReleaseID, reason))
+		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+	}
+
 	_ = e.Ledger.RecordCheckpointDone(ctx, h, runID, "recovery_decision", "rollback de código para o snapshot anterior aplicado e confirmado saudável")
 	return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRolledBack)
+}
+
+// checkRollbackTargetsRevoked (F9, achado Codex [P1] rodada 16) refaz a MESMA checagem de
+// revogação por unit em dois pontos de recover(): antes de QUALQUER mutação real
+// (Compose.Rollback) e de novo depois de Compose.Rollback/WaitHealthy — que podem levar
+// bastante tempo real e dar tempo para uma revogação chegar exatamente nessa janela.
+// Compartilhada entre as duas chamadas de propósito: nunca um caminho que verifica e outro
+// que silenciosamente esquece de verificar de novo.
+func (e *Executor) checkRollbackTargetsRevoked(ctx context.Context, targets map[Unit]string, units []Unit) (unit Unit, releaseID, reason string, revoked bool, err error) {
+	for _, u := range units {
+		targetReleaseID, found := targets[u]
+		if !found {
+			continue
+		}
+		if rv, rs, rerr := e.isRevokedOrUnsafe(ctx, targetReleaseID); rerr != nil {
+			return u, targetReleaseID, "", false, rerr
+		} else if rv {
+			return u, targetReleaseID, rs, true, nil
+		}
+	}
+	return "", "", "", false, nil
 }
 
 // maxRevocationSyncAge (F9, achado Codex [P1] rodada 7) espelha release/policies/signing.yaml
