@@ -322,6 +322,47 @@ func (h *HTTPHandler) RevokeRelease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, rec)
 }
 
+// GetRetentionCandidates (F9, spec "Retenção, garbage collection segura") expõe
+// Service.ListRetentionCandidates — nunca remove nada, só relata.
+func (h *HTTPHandler) GetRetentionCandidates(w http.ResponseWriter, r *http.Request) {
+	operator, ok := h.scope(w, r)
+	if !ok {
+		return
+	}
+	candidates, err := h.svc.ListRetentionCandidates(r.Context(), operator)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, candidates)
+}
+
+// DeleteReleaseCatalogEntry (F9, spec "Retenção, garbage collection segura") expõe
+// Service.DeleteReleaseCatalogEntry — revalida tudo no momento da exclusão, nunca confia num
+// relatório antigo de GetRetentionCandidates.
+func (h *HTTPHandler) DeleteReleaseCatalogEntry(w http.ResponseWriter, r *http.Request) {
+	operator, ok := h.scope(w, r)
+	if !ok {
+		return
+	}
+	releaseID := r.PathValue("release_id")
+	if releaseID == "" {
+		httpError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		httpError(w, "Idempotency-Key header is required", http.StatusBadRequest)
+		return
+	}
+	deleted, err := h.svc.DeleteReleaseCatalogEntry(r.Context(), operator, key, releaseID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"deleted": deleted})
+}
+
 // --- Plans ---
 
 type createPlanRequest struct {

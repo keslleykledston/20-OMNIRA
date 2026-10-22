@@ -107,6 +107,16 @@ const stalledRunThreshold = 15 * time.Minute
 // responder (ou o próprio daemon morreu — AgentStale já cobriria isso separadamente).
 const observedDigestsStaleAfter = 15 * time.Minute
 
+// channelRetentionDays espelha release/policies/channels.yaml "retention_days" por canal —
+// uma constante Go, não um parser de YAML em runtime, nunca a autoridade real (o arquivo de
+// política é a fonte de verdade; esta cópia precisa ser atualizada no MESMO commit que mudar
+// o YAML — mesmo espírito de currentAgentProtocol/backupEvidenceMaxAgeHours acima).
+var channelRetentionDays = map[domain.Channel]int{
+	domain.ChannelDev:       14,
+	domain.ChannelCandidate: 30,
+	domain.ChannelStable:    180,
+}
+
 // Service é o Update Manager API. Mantém também o acesso ao ledger LOCAL do Update Agent
 // (mesmo arquivo, mesmo host) para StartRun — ver comentário do pacote.
 // SignatureVerifier decide se um manifesto cru é autêntico (assinatura, proveniência,
@@ -407,6 +417,174 @@ func (s *Service) ListReleases(ctx context.Context, operator uuid.UUID, limit in
 		out = []Release{}
 	}
 	return out, err
+}
+
+// RetentionCandidate (F9, spec "Retenção, garbage collection segura" — release/policies/
+// channels.yaml) descreve uma release do catálogo em relação à sua janela de retenção. Nunca
+// decide por si só: só relata — o mesmo espírito de "declaração lida por humanos" que
+// backup.yaml já documentava antes do gate real de F9 existir. DeleteReleaseCatalogEntry
+// REVALIDA tudo isto no momento da exclusão, nunca confia numa lista antiga.
+type RetentionCandidate struct {
+	ReleaseID       string    `json:"release_id"`
+	Channel         string    `json:"channel"`
+	IngestedAt      time.Time `json:"ingested_at"`
+	AgeDays         int       `json:"age_days"`
+	RetentionDays   int       `json:"retention_days"`
+	PastRetention   bool      `json:"past_retention"`
+	SafeToDelete    bool      `json:"safe_to_delete"`
+	BlockingReasons []string  `json:"blocking_reasons,omitempty"`
+}
+
+// ListRetentionCandidates (F9) relata, para cada release do catálogo, se já passou da janela
+// de retenção do seu canal (channelRetentionDays) e se é seguro removê-la — nunca remove nada
+// por si só. "Seguro" aqui replica a garantia que o próprio schema do Postgres já aplica via
+// foreign key (platform_release_ingest_requests/platform_update_plans/platform_update_runs/
+// platform_release_revocations todas referenciam platform_releases SEM CASCADE) — esta função
+// só torna essa restrição LEGÍVEL antes da tentativa, nunca a substitui.
+func (s *Service) ListRetentionCandidates(ctx context.Context, operator uuid.UUID) ([]RetentionCandidate, error) {
+	var out []RetentionCandidate
+	err := s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := authorize(c, q, operator); err != nil {
+			return err
+		}
+		rows, err := q.Query(c, `SELECT release_id, channel, ingested_at FROM platform_releases ORDER BY ingested_at ASC`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var rc RetentionCandidate
+			var channel string
+			if err := rows.Scan(&rc.ReleaseID, &channel, &rc.IngestedAt); err != nil {
+				return err
+			}
+			rc.Channel = channel
+			rc.AgeDays = int(time.Since(rc.IngestedAt).Hours() / 24)
+			rc.RetentionDays = channelRetentionDays[domain.Channel(channel)]
+			rc.PastRetention = rc.AgeDays >= rc.RetentionDays
+			out = append(out, rc)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for i := range out {
+			safe, reasons, rerr := releaseSafeToDelete(c, q, out[i].ReleaseID, out[i].PastRetention)
+			if rerr != nil {
+				return rerr
+			}
+			out[i].SafeToDelete = safe
+			out[i].BlockingReasons = reasons
+		}
+		return nil
+	})
+	if out == nil {
+		out = []RetentionCandidate{}
+	}
+	return out, err
+}
+
+// releaseSafeToDelete (F9) é a ÚNICA fonte da decisão "é seguro excluir releaseID do
+// catálogo" — usada tanto pelo relatório (ListRetentionCandidates) quanto pela exclusão real
+// (DeleteReleaseCatalogEntry), nunca duplicada entre as duas. Checa, EXPLICITAMENTE e por
+// nome, as mesmas quatro restrições que o schema do Postgres já aplicaria via foreign key sem
+// CASCADE (ingest_requests, plans, runs, revocação) — nunca para pular essas checagens, mas
+// para dar um motivo LEGÍVEL em vez de um erro genérico de constraint quando a exclusão real
+// for tentada, e para o relatório conseguir explicar "por quê não" antes de qualquer tentativa.
+func releaseSafeToDelete(ctx context.Context, q platformdb.Querier, releaseID string, pastRetention bool) (safe bool, reasons []string, err error) {
+	if !pastRetention {
+		reasons = append(reasons, "ainda dentro da janela de retenção do canal (release/policies/channels.yaml)")
+	}
+	var n int
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM platform_release_revocations WHERE release_id = $1`, releaseID).Scan(&n); err != nil {
+		return false, nil, err
+	}
+	if n > 0 {
+		reasons = append(reasons, "release revogada — o histórico de revogação é permanente, nunca removido (ADR-0054 R4)")
+	}
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM platform_update_runs WHERE release_id = $1`, releaseID).Scan(&n); err != nil {
+		return false, nil, err
+	}
+	if n > 0 {
+		reasons = append(reasons, "existe pelo menos um run (histórico de execução real, nunca removido) referenciando esta release")
+	}
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM platform_update_plans WHERE release_id = $1`, releaseID).Scan(&n); err != nil {
+		return false, nil, err
+	}
+	if n > 0 {
+		reasons = append(reasons, "existe pelo menos um plano de preflight referenciando esta release")
+	}
+	return len(reasons) == 0, reasons, nil
+}
+
+// DeleteReleaseCatalogEntry (F9) remove releaseID do catálogo — só quando releaseSafeToDelete
+// confirma, NO MOMENTO da chamada (nunca a partir de um relatório antigo de
+// ListRetentionCandidates), que a release passou da retenção do seu canal e não tem nenhuma
+// revogação/plano/run referenciando-a. platform_release_ingest_requests é removida JUNTO (a
+// mesma transação) — é só bookkeeping operacional de idempotência de ingestão, nunca um
+// registro de auditoria que precise sobreviver à própria release que protegia; TODO o resto
+// (revogação, planos, runs) nunca é tocado aqui, e sua simples EXISTÊNCIA já bloqueia a
+// exclusão (foreign key sem CASCADE, reforçado explicitamente por releaseSafeToDelete acima).
+// Idempotente (ADR-0054 §2.2.1): repetir com a MESMA Idempotency-Key depois de já ter
+// excluído devolve deleted=true sem erro, nunca tenta excluir de novo algo que já não existe.
+func (s *Service) DeleteReleaseCatalogEntry(ctx context.Context, operator uuid.UUID, idempotencyKey, releaseID string) (deleted bool, err error) {
+	if len(idempotencyKey) < 8 || len(idempotencyKey) > 128 {
+		return false, invalid("Idempotency-Key deve ter 8-128 caracteres")
+	}
+	releaseID = strings.TrimSpace(releaseID)
+	if releaseID == "" {
+		return false, invalid("release_id é obrigatório")
+	}
+	hash := requestHashGC(operator, releaseID)
+	err = s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := authorize(c, q, operator); err != nil {
+			return err
+		}
+		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, operator.String()+"/"+idempotencyKey); err != nil {
+			return err
+		}
+		var prevHash, prevReleaseID string
+		perr := q.QueryRow(c, `SELECT request_hash, release_id FROM platform_release_gc_requests WHERE operator_id = $1 AND idempotency_key = $2`, operator, idempotencyKey).
+			Scan(&prevHash, &prevReleaseID)
+		switch {
+		case perr == nil:
+			if prevHash != hash {
+				return ErrKeyMismatch
+			}
+			deleted = true
+			return nil
+		case !errors.Is(perr, pgx.ErrNoRows):
+			return perr
+		}
+		var ingestedAt time.Time
+		var channel string
+		if gerr := q.QueryRow(c, `SELECT channel, ingested_at FROM platform_releases WHERE release_id = $1`, releaseID).Scan(&channel, &ingestedAt); gerr != nil {
+			if errors.Is(gerr, pgx.ErrNoRows) {
+				return invalid("release_id %q não existe no catálogo", releaseID)
+			}
+			return gerr
+		}
+		pastRetention := int(time.Since(ingestedAt).Hours()/24) >= channelRetentionDays[domain.Channel(channel)]
+		safe, reasons, serr := releaseSafeToDelete(c, q, releaseID, pastRetention)
+		if serr != nil {
+			return serr
+		}
+		if !safe {
+			return invalid("release %q não pode ser removida do catálogo agora: %s", releaseID, strings.Join(reasons, "; "))
+		}
+		if _, err := q.Exec(c, `DELETE FROM platform_release_ingest_requests WHERE release_id = $1`, releaseID); err != nil {
+			return err
+		}
+		if _, err := q.Exec(c, `DELETE FROM platform_releases WHERE release_id = $1`, releaseID); err != nil {
+			return err
+		}
+		if _, err := q.Exec(c, `INSERT INTO platform_release_gc_requests (operator_id, idempotency_key, request_hash, release_id) VALUES ($1,$2,$3,$4)`,
+			operator, idempotencyKey, hash, releaseID); err != nil {
+			return err
+		}
+		deleted = true
+		return audit(c, q, operator, "platform.release.gc_deleted", map[string]any{"release_id": releaseID, "channel": channel})
+	})
+	return deleted, err
 }
 
 // --- Installation (singleton — ADR-0054 §2.4: "hoje: uma só") ---
@@ -814,6 +992,11 @@ type Revocation struct {
 
 func requestHashRevoke(operator uuid.UUID, releaseID, reason string) string {
 	sum := sha256.Sum256([]byte(operator.String() + "\x00" + releaseID + "\x00" + reason))
+	return hex.EncodeToString(sum[:])
+}
+
+func requestHashGC(operator uuid.UUID, releaseID string) string {
+	sum := sha256.Sum256([]byte(operator.String() + "\x00" + releaseID))
 	return hex.EncodeToString(sum[:])
 }
 

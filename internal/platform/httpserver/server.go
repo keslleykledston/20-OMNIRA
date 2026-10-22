@@ -602,6 +602,8 @@ func (s *Server) RegisterPlatformReleaseHandlers(dbPool *pgxpool.Pool, enabled b
 	s.mux.Handle("PUT /api/v1/platform/installation/version", authnMiddleware(userSession(http.HandlerFunc(h.SetInstallationVersion))))
 	s.mux.Handle("POST /api/v1/platform/backups", authnMiddleware(userSession(http.HandlerFunc(h.RecordBackupEvidence))))
 	s.mux.Handle("POST /api/v1/platform/releases/{release_id}/revoke", authnMiddleware(userSession(http.HandlerFunc(h.RevokeRelease))))
+	s.mux.Handle("GET /api/v1/platform/releases/retention", authnMiddleware(userSession(http.HandlerFunc(h.GetRetentionCandidates))))
+	s.mux.Handle("DELETE /api/v1/platform/releases/{release_id}", authnMiddleware(userSession(http.HandlerFunc(h.DeleteReleaseCatalogEntry))))
 	s.mux.Handle("POST /api/v1/platform/updates/plans", authnMiddleware(userSession(http.HandlerFunc(h.CreatePlan))))
 	s.mux.Handle("GET /api/v1/platform/updates/plans/{plan_id}", authnMiddleware(userSession(http.HandlerFunc(h.GetPlan))))
 	s.mux.Handle("POST /api/v1/platform/updates/runs", authnMiddleware(userSession(http.HandlerFunc(h.StartRun))))
