@@ -102,10 +102,14 @@ export interface PlatformUpdateEvent {
   created_at: string
 }
 
-// Terminal states: the run will never move again on its own. Kept in one place because both
-// the history list (badge color) and the tracking view (stop polling) need the same answer.
+// Terminal states: the run will never move again on its own. Mirrors internal/platformrelease/
+// domain.terminalStates EXACTLY — Codex achado real: FAILED and RECOVERING are NOT terminal there
+// (FAILED -> RECOVERING -> ROLLED_BACK/RECOVERY_REQUIRED is a legal recovery path); treating FAILED
+// as terminal here stopped run/event polling before the real recovery outcome ever arrived. Kept
+// in one place because both the history list (badge color) and the tracking view (stop polling)
+// need the same answer.
 const TERMINAL_STATES = new Set<string>([
-  'SUCCEEDED', 'FAILED', 'ROLLED_BACK', 'RECOVERY_REQUIRED', 'BLOCKED', 'CANCELLED',
+  'SUCCEEDED', 'ROLLED_BACK', 'RECOVERY_REQUIRED', 'BLOCKED', 'CANCELLED',
   'DISPATCH_CONFLICT', 'COMPATIBILITY_VOIDED',
 ])
 export function isTerminalRunState(state: string): boolean {

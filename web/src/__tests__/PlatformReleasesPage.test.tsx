@@ -85,7 +85,10 @@ const run = (state: string, id = 'run-1'): PlatformUpdateRun => ({
 let releases: PlatformRelease[]
 let runs: PlatformUpdateRun[]
 let installationState: PlatformInstallation | { notFound: true }
-let events: PlatformUpdateEvent[]
+// Keyed by run id — events are per-run on the real server; a flat shared array would let one
+// run's events leak into another run's trail in these tests without that actually proving
+// anything about the page's own cursor/accumulator reset logic.
+let eventsByRun: Record<string, PlatformUpdateEvent[]>
 
 function serve() {
   vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
@@ -96,15 +99,17 @@ function serve() {
     }
     if (u.endsWith('/platform/releases')) return { data: { items: releases } }
     if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
+    const eventsMatch = u.match(/\/platform\/updates\/runs\/([^/]+)\/events$/)
+    if (eventsMatch) {
+      const after = (config?.params?.after as number | undefined) ?? -1
+      const forRun = eventsByRun[eventsMatch[1]] ?? []
+      return { data: { items: forRun.filter((e) => e.seq > after) } }
+    }
     if (/\/platform\/updates\/runs\/[^/]+$/.test(u)) {
       const id = u.split('/').pop()!
       const found = runs.find((r) => r.id === id)
       if (!found) return Promise.reject({ response: { status: 404 } })
       return { data: found }
-    }
-    if (u.endsWith('/events')) {
-      const after = (config?.params?.after as number | undefined) ?? -1
-      return { data: { items: events.filter((e) => e.seq > after) } }
     }
     return Promise.reject({ response: { status: 404 } })
   })
@@ -118,7 +123,7 @@ beforeEach(() => {
   releases = [release()]
   runs = []
   installationState = installation()
-  events = []
+  eventsByRun = {}
   serve()
 })
 
@@ -196,7 +201,7 @@ describe('PlatformReleasesPage — golden path', () => {
 describe('PlatformReleasesPage — reentry with a run in progress', () => {
   it('reopening the screen while a run is active resumes tracking it, not the catalog', async () => {
     runs = [run('DEPLOYING')]
-    events = [{ seq: 0, kind: 'run.locked', detail: {}, created_at: '2026-10-20T10:05:00Z' }]
+    eventsByRun = { 'run-1': [{ seq: 0, kind: 'run.locked', detail: {}, created_at: '2026-10-20T10:05:00Z' }] }
     renderAt(<PlatformReleasesPage />)
     expect(await screen.findByText('Acompanhando run-1')).toBeInTheDocument()
     expect(screen.getAllByText(runLabelOf('DEPLOYING')).length).toBeGreaterThan(0)
@@ -207,6 +212,71 @@ describe('PlatformReleasesPage — reentry with a run in progress', () => {
     renderAt(<PlatformReleasesPage />)
     await screen.findByText('rel-2026.10.0')
     expect(screen.queryByText('Acompanhando run-1')).toBeNull()
+  })
+
+  it('a FAILED run is NOT terminal (FAILED -> RECOVERING -> ROLLED_BACK/RECOVERY_REQUIRED is legal): reentry still resumes tracking it', async () => {
+    runs = [run('FAILED')]
+    renderAt(<PlatformReleasesPage />)
+    expect(await screen.findByText('Acompanhando run-1')).toBeInTheDocument()
+  })
+})
+
+describe('PlatformReleasesPage — switching selection does not leak stale state (Codex round 1)', () => {
+  it('selecting a different release resets the previous one\'s preflight plan', async () => {
+    const user = userEvent.setup()
+    releases = [release('rel-A'), release('rel-B')]
+    vi.mocked(axios.post).mockImplementation(async (url: string, body: unknown) => {
+      if (String(url).endsWith('/platform/updates/plans')) {
+        const releaseId = (body as { release_id: string }).release_id
+        return {
+          data: {
+            id: `plan-${releaseId}`, release_id: releaseId, preflight_status: 'PASS',
+            preflight_detail: { version_known: true, version_compatible: true, agent_protocol_ok: true, reasons: [] },
+            created_by: 'op-1', created_at: '2026-10-20T10:04:00Z', expires_at: '2026-10-20T10:19:00Z',
+          },
+        }
+      }
+      throw new Error(`unexpected POST ${url}`)
+    })
+    renderAt(<PlatformReleasesPage />)
+    const rows = await screen.findAllByRole('button', { name: 'Detalhes' })
+    await user.click(rows[0])
+    await user.click(screen.getByRole('button', { name: 'Rodar preflight' }))
+    await screen.findByText('PASS')
+    await user.click(screen.getByRole('button', { name: 'Fechar' }))
+
+    // Selecting the OTHER release must start with no plan shown at all — never rel-A's stale PASS.
+    const rowsAgain = await screen.findAllByRole('button', { name: 'Detalhes' })
+    await user.click(rowsAgain[1])
+    expect(screen.queryByText('PASS')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Iniciar atualização (escopo global)' })).toBeNull()
+  })
+
+  it('tracking a different run resets the previous run\'s accumulated event trail and cursor', async () => {
+    runs = [run('DEPLOYING', 'run-1'), run('DEPLOYING', 'run-2')]
+    eventsByRun = {
+      // run-1 has 2 events, the second only visible via its own distinct timestamp.
+      'run-1': [
+        { seq: 0, kind: 'run.locked', detail: {}, created_at: '2026-10-20T10:05:00Z' },
+        { seq: 1, kind: 'checkpoint', detail: {}, created_at: '2026-10-20T10:06:00Z' },
+      ],
+      // run-2 has only 1 event, so a leaked run-1 cursor (after=1) would wrongly skip it, and a
+      // leaked accumulator would wrongly still show run-1's 10:06:00 entry alongside it.
+      'run-2': [{ seq: 0, kind: 'run.locked', detail: {}, created_at: '2026-10-20T10:07:00Z' }],
+    }
+    renderAt(<PlatformReleasesPage />)
+    // run-1 is active, so reentry auto-tracks it first; switch to its history row for run-2.
+    await screen.findByText('Acompanhando run-1')
+    expect(await screen.findByText('20/10/2026, 10:06:00')).toBeInTheDocument()
+
+    const user = userEvent.setup()
+    const trackButtons = await screen.findAllByRole('button', { name: 'Acompanhar' })
+    // Only run-2's row offers a fresh "Acompanhar" button (run-1 is already the one being tracked).
+    await user.click(trackButtons[trackButtons.length - 1]);
+    expect(await screen.findByText('Acompanhando run-2')).toBeInTheDocument()
+    expect(await screen.findByText('20/10/2026, 10:07:00')).toBeInTheDocument()
+    // run-1's second event must never leak into (nor be skipped from) run-2's trail.
+    expect(screen.queryByText('20/10/2026, 10:06:00')).toBeNull()
   })
 })
 

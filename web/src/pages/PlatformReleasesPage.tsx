@@ -300,7 +300,11 @@ function CatalogSection({
           </TableBody>
         </Table>
       )}
-      {selected && <ReleaseDetail release={selected} installedVersion={installedVersion} onRunStarted={onRunStarted} />}
+      {selected && (
+        // key: trocar de release precisa de um ReleaseDetail NOVO, nunca o plano/confirmação
+        // de uma release anterior sobrevivendo com o rótulo de outra (achado real do Codex).
+        <ReleaseDetail key={selected.release_id} release={selected} installedVersion={installedVersion} onRunStarted={onRunStarted} />
+      )}
     </div>
   )
 }
@@ -419,7 +423,12 @@ function UpdatesSection({
 
   return (
     <div className="space-y-6">
-      {trackedRunId && <RunTracking runId={trackedRunId} onClose={() => onTrack(null)} />}
+      {trackedRunId && (
+        // key: trocar de run precisa de um RunTracking NOVO — senão a trilha acumulada e o
+        // cursor `after` do run anterior sobrevivem e o run novo perde seus primeiros eventos
+        // (achado real do Codex).
+        <RunTracking key={trackedRunId} runId={trackedRunId} onClose={() => onTrack(null)} />
+      )}
 
       <div>
         <h2 className="text-section-md font-semibold text-text-primary">Histórico</h2>
