@@ -8,6 +8,7 @@ import { isActing } from '../lib/acting'
 import { hasSession, USER_KEY } from '../lib/session'
 import { useAuthStore } from '../lib/store'
 import { useMyHubs } from '../hooks/useMyHubs'
+import { usePlatformOperator } from '../hooks/usePlatformOperator'
 import { rememberAfterLogin } from '../lib/afterLogin'
 
 // Console de administração (ADR-0041): agentes, empresas (instâncias) e canais geridos pelo Hub. É uma entrada própria do build (admin.html, servida em
@@ -30,6 +31,9 @@ const tab = ({ isActive }: { isActive: boolean }) =>
 export default function AdminShell() {
   const location = useLocation()
   const hubs = useMyHubs()
+  // Platform operator (ADR-0038) is a SEPARATE authority from Hub grants — a person can be one
+  // without the other. Probed the same way as the Hub tabs: a real call decides what to show.
+  const platformOperator = usePlatformOperator()
   const logout = useAuthStore((s) => s.logout)
   const [signedIn] = useState(hasSession())
   const acting = isActing()
@@ -62,7 +66,7 @@ export default function AdminShell() {
   const list = hubs.data ?? []
   const canAccess = list.some((h) => h.can_manage_access)
   const canManage = list.some((h) => h.can_manage_instances)
-  const entitled = canAccess || canManage
+  const entitled = canAccess || canManage || platformOperator.isOperator
 
   return (
     <div className="flex min-h-dvh flex-col bg-canvas">
@@ -83,6 +87,11 @@ export default function AdminShell() {
               Canais das instâncias
             </NavLink>
           )}
+          {platformOperator.isOperator && (
+            <NavLink to="/plataforma" className={tab}>
+              Plataforma
+            </NavLink>
+          )}
         </nav>
         <div className="ml-auto flex items-center gap-3">
           <span className="hidden text-sm text-text-secondary sm:inline">{savedUserName()}</span>
@@ -95,17 +104,23 @@ export default function AdminShell() {
         </div>
       </header>
       <main className="min-h-0 flex-1" data-route={location.pathname}>
-        {hubs.isLoading ? (
+        {hubs.isLoading || platformOperator.isLoading ? (
           <LoadingState message="Carregando…" />
         ) : !entitled ? (
           <div className="mx-auto max-w-xl p-6">
             <EmptyState
               title="Sem acesso ao console"
-              description="O console é para administradores de um Hub e para quem recebeu a gestão de canais de uma instância. Se você deveria ter acesso, fale com o administrador do Hub."
+              description="O console é para administradores de um Hub, para quem recebeu a gestão de canais de uma instância e para operadores de plataforma. Se você deveria ter acesso, fale com o administrador do Hub ou com um operador de plataforma."
             />
           </div>
         ) : (
-          <Outlet />
+          // Repassa o MESMO resultado de usePlatformOperator já obtido aqui (contexto do Outlet, não
+          // um segundo useQuery): achado real em navegador — uma SEGUNDA assinatura da mesma
+          // chave, montada só quando esta guarda libera o Outlet, disparava seu próprio
+          // refetchOnMount; enquanto ele estava em voo esta MESMA guarda via isLoading=true de
+          // novo, desmontava o Outlet (e a assinatura nova com ele), o que deixava a tela
+          // alternando montar/desmontar para sempre. Nenhum teste em jsdom reproduziu isso.
+          <Outlet context={platformOperator} />
         )}
       </main>
     </div>

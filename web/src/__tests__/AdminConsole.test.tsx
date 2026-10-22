@@ -19,6 +19,9 @@ const replace = vi.fn()
 const realLocation = window.location
 
 let hubs: object[] = []
+// undefined: this session's user is not a platform operator (the server answers 404, same as any
+// other route this mock does not know about — no enumeration oracle, mirrors updatemgr's own 404).
+let installation: object | undefined
 
 function client() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -40,9 +43,14 @@ beforeEach(() => {
   replace.mockReset()
   Object.defineProperty(window, 'location', { configurable: true, value: { ...realLocation, pathname: '/admin/acessos', search: '', replace, assign: vi.fn() } })
   hubs = [{ id: 'hub-1', name: 'K3G', role: 'hub_admin', can_manage_access: true, can_manage_instances: true }]
+  installation = undefined
   get.mockReset()
   get.mockImplementation(async (url: string) => {
     if (String(url).endsWith('/hubs')) return { data: { items: hubs } }
+    if (String(url).endsWith('/platform/installation')) {
+      if (installation) return { data: installation }
+      return Promise.reject({ response: { status: 404 } })
+    }
     return Promise.reject({ response: { status: 404 } })
   })
 })
@@ -77,11 +85,48 @@ describe('console shell', () => {
     expect(screen.queryByRole('tablist')).toBeNull()
   })
 
+  it('a platform operator with no Hub grant at all sees the console (Plataforma only)', async () => {
+    setSession()
+    hubs = []
+    installation = { channel: 'stable', agent_protocol: 1, current_digests: {}, updated_at: new Date().toISOString() }
+    inConsole('/plataforma')
+    expect(await screen.findByRole('link', { name: 'Plataforma' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Acessos' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Canais das instâncias' })).toBeNull()
+    expect(screen.queryByText('Sem acesso ao console')).toBeNull()
+  })
+
+  it('someone who is only a Hub admin (never a platform operator) never sees Plataforma', async () => {
+    setSession()
+    installation = undefined
+    inConsole('/acessos')
+    await screen.findByRole('link', { name: 'Acessos' })
+    expect(screen.queryByRole('link', { name: 'Plataforma' })).toBeNull()
+  })
+
+  it('a platform operator who is also a Hub admin sees all three tabs', async () => {
+    setSession()
+    installation = { channel: 'stable', agent_protocol: 1, current_digests: {}, updated_at: new Date().toISOString() }
+    inConsole('/acessos')
+    expect(await screen.findByRole('link', { name: 'Acessos' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Canais das instâncias' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Plataforma' })).toBeInTheDocument()
+  })
+
   it('without a session remembers the console address and sends the person to sign in', async () => {
     Object.defineProperty(window, 'location', { configurable: true, value: { ...realLocation, pathname: '/admin/instancias', search: '?x=1', replace, assign: vi.fn() } })
     inConsole('/instancias')
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'))
     expect(takeAfterLogin()).toBe('/admin/instancias?x=1')
+  })
+
+  it('the front door sends a platform-operator-only person straight to Plataforma, never Acessos (which would just say so is unavailable)', async () => {
+    setSession()
+    hubs = []
+    installation = { channel: 'stable', agent_protocol: 1, current_digests: {}, updated_at: new Date().toISOString() }
+    inConsole('/')
+    expect(await screen.findByRole('link', { name: 'Plataforma' })).toBeInTheDocument()
+    expect(screen.getByText('Versões e atualizações')).toBeInTheDocument()
   })
 
   it('while attending an instance through the Hub the console is not offered: back to the conversations', async () => {
