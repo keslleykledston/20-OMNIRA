@@ -87,6 +87,41 @@ func TestLedger_RevocationSyncFresh_NeverSynced_FailsClosedByDefault(t *testing.
 	}
 }
 
+// TestLedger_MarkRevocationSynced_ClearsLingeringStandaloneMarker é a prova do achado Codex
+// [P2] (rodada 11): uma instalação que já rodou --standalone e depois passa a ser GERENCIADA
+// (flag removida, API habilitada) precisa recuperar o gate de frescor baseado em idade —
+// standalone=1 não pode ficar para sempre só porque já foi marcado uma vez. Uma sincronização
+// de verdade é um sinal MAIS FORTE que qualquer marca standalone anterior.
+func TestLedger_MarkRevocationSynced_ClearsLingeringStandaloneMarker(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ledger.db")
+	ledger, err := OpenLedger(path)
+	if err != nil {
+		t.Fatalf("OpenLedger: %v", err)
+	}
+	defer ledger.Close()
+
+	if err := ledger.MarkStandalone(ctx); err != nil {
+		t.Fatalf("MarkStandalone: %v", err)
+	}
+
+	// Agora a instalação passa a ser gerenciada: uma sincronização de verdade acontece.
+	if err := ledger.MarkRevocationSynced(ctx); err != nil {
+		t.Fatalf("MarkRevocationSynced: %v", err)
+	}
+
+	// O gate de frescor baseado em idade precisa ter voltado a valer — standalone não pode
+	// mais proteger um relógio obsoleto.
+	backdateRevocationSync(t, ledger, maxRevocationSyncAge+time.Minute)
+	fresh, _, err := ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	if err != nil {
+		t.Fatalf("RevocationSyncFresh (depois de MarkRevocationSynced sobre standalone anterior): %v", err)
+	}
+	if fresh {
+		t.Error("MarkRevocationSynced deveria ter limpado a marca standalone — um relógio obsoleto depois disso deveria ser fail-closed, não fresco por decreto")
+	}
+}
+
 func TestLedger_RevocationSyncFresh_LifecycleAcrossMarkBackdateMark(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "ledger.db")

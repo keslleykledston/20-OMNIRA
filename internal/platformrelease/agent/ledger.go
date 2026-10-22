@@ -701,15 +701,23 @@ func (l *Ledger) IsReleaseRevoked(ctx context.Context, releaseID string) (revoke
 	return true, reason, nil
 }
 
-// MarkRevocationSynced (F9, achado Codex [P1] rodada 7) avança o relógio de revocation_sync
-// para agora — chamado SÓ depois que updatemgr confirma, com sucesso, que refletiu neste
-// ledger o estado ATUAL de revogações do Postgres (nenhuma pendência de entrega, ou toda
-// pendência entregue com sucesso). Nunca chamado pelo agente em si (que não tem como saber se
-// está "em dia" com o Postgres — só o processo da API, que de fato consultou o Postgres,
-// pode avançar este relógio).
+// MarkRevocationSynced (F9, achados Codex [P1] rodadas 7 e 10) avança o relógio de
+// revocation_sync para agora — chamado SÓ depois que updatemgr confirma, com sucesso, que
+// refletiu neste ledger o estado ATUAL de revogações do Postgres (nenhuma pendência de
+// entrega, ou toda pendência entregue com sucesso). Nunca chamado pelo agente em si (que não
+// tem como saber se está "em dia" com o Postgres — só o processo da API, que de fato
+// consultou o Postgres, pode avançar este relógio).
+//
+// Achado Codex [P2] (rodada 11): também LIMPA standalone=0, mesmo numa instalação que já
+// tinha sido marcada standalone antes — uma sincronização de verdade é um sinal MAIS FORTE
+// que qualquer marca anterior: prova que a API está alcançável agora e deve se tornar a
+// fonte de verdade das revogações. Sem isto, --standalone removido/API habilitada depois
+// nunca restauraria o gate de frescor por idade (standalone=1 ficaria para sempre), e se a
+// sincronização real parasse de novo mais tarde (>300s), o ledger continuaria se reportando
+// fresco sem nenhuma base real.
 func (l *Ledger) MarkRevocationSynced(ctx context.Context) error {
 	_, err := l.db.ExecContext(ctx,
-		`INSERT INTO revocation_sync (id, synced_at, standalone) VALUES (1, ?, 0) ON CONFLICT(id) DO UPDATE SET synced_at = excluded.synced_at`,
+		`INSERT INTO revocation_sync (id, synced_at, standalone) VALUES (1, ?, 0) ON CONFLICT(id) DO UPDATE SET synced_at = excluded.synced_at, standalone = 0`,
 		time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("agent: marcar sincronização de revogação: %w", err)
