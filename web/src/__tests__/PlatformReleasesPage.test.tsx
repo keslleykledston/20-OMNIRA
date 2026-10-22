@@ -221,6 +221,86 @@ describe('PlatformReleasesPage — reentry with a run in progress', () => {
   })
 })
 
+describe('PlatformReleasesPage — closing tracking sticks (Codex round 2)', () => {
+  it('closing the tracking view while the run is still active does not reopen it on its own', async () => {
+    const user = userEvent.setup()
+    runs = [run('DEPLOYING')]
+    eventsByRun = { 'run-1': [{ seq: 0, kind: 'run.locked', detail: {}, created_at: '2026-10-20T10:05:00Z' }] }
+    renderAt(<PlatformReleasesPage />)
+    await screen.findByText('Acompanhando run-1')
+    await user.click(screen.getByRole('button', { name: 'Fechar acompanhamento' }))
+    // The catalog (or at least "not the tracking card") stays closed — reentry only ever fires once.
+    expect(screen.queryByText('Acompanhando run-1')).toBeNull()
+    // give any stray effect a tick to (wrongly) reopen it
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.queryByText('Acompanhando run-1')).toBeNull()
+  })
+})
+
+describe('PlatformReleasesPage — terminal transition (Codex round 2)', () => {
+  it('fetches events once more on the terminal transition, closing the race where the final checkpoint arrives between the last poll and the run finishing', async () => {
+    // Tracking a run that is ALREADY terminal on the very first render makes `terminal` true
+    // from render 1 — the SAME condition a live DEPLOYING -> SUCCEEDED transition produces, but
+    // deterministic (no fake timers needed): the fix's effect must still fire its one extra
+    // events fetch instead of relying only on the initial query.
+    runs = [run('SUCCEEDED')]
+    eventsByRun = { 'run-1': [{ seq: 0, kind: 'run.locked', detail: {}, created_at: '2026-10-20T10:05:00Z' }] }
+    let eventsCalls = 0
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) return { data: installation() }
+      if (u.endsWith('/platform/releases')) return { data: { items: releases } }
+      if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
+      if (u.endsWith('/run-1') && !u.includes('/events')) return { data: run('SUCCEEDED') }
+      if (u.endsWith('/events')) {
+        eventsCalls += 1
+        const after = (config?.params?.after as number | undefined) ?? -1
+        return { data: { items: (eventsByRun['run-1'] ?? []).filter((e) => e.seq > after) } }
+      }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    renderAt(<PlatformReleasesPage />)
+    const user = userEvent.setup()
+    await screen.findByText('rel-2026.10.0')
+    await user.click(screen.getByRole('tab', { name: 'Atualizações' }))
+    await user.click(await screen.findByRole('button', { name: 'Acompanhar' }))
+    await screen.findByText('Acompanhando run-1')
+    // The initial query fetch (1) plus the terminal-transition effect's extra fetch (2).
+    await waitFor(() => expect(eventsCalls).toBeGreaterThanOrEqual(2))
+  })
+
+  it('invalidates the installation data when a tracked run succeeds', async () => {
+    runs = [run('SUCCEEDED')]
+    eventsByRun = { 'run-1': [{ seq: 0, kind: 'run.locked', detail: {}, created_at: '2026-10-20T10:05:00Z' }] }
+    let installCalls = 0
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) {
+        installCalls += 1
+        return { data: installation(installCalls === 1 ? '2026.09.0' : '2026.10.0') }
+      }
+      if (u.endsWith('/platform/releases')) return { data: { items: releases } }
+      if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
+      if (u.endsWith('/run-1')) return { data: run('SUCCEEDED') }
+      const eventsMatch = u.match(/\/platform\/updates\/runs\/([^/]+)\/events$/)
+      if (eventsMatch) {
+        const after = (config?.params?.after as number | undefined) ?? -1
+        return { data: { items: (eventsByRun[eventsMatch[1]] ?? []).filter((e) => e.seq > after) } }
+      }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    renderAt(<PlatformReleasesPage />)
+    // A SUCCEEDED run is terminal, so reentry does not auto-open it — reach it from its history
+    // row instead (the "Atualizações" tab), which exercises the same terminal-transition effect.
+    await screen.findByText('rel-2026.10.0')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('tab', { name: 'Atualizações' }))
+    await user.click(await screen.findByRole('button', { name: 'Acompanhar' }))
+    await screen.findByText('Acompanhando run-1')
+    await waitFor(() => expect(installCalls).toBeGreaterThanOrEqual(2))
+  })
+})
+
 describe('PlatformReleasesPage — switching selection does not leak stale state (Codex round 1)', () => {
   it('selecting a different release resets the previous one\'s preflight plan', async () => {
     const user = userEvent.setup()

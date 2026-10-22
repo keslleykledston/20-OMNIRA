@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -77,11 +77,16 @@ export default function PlatformReleasesPage() {
   const [setVersionOpen, setSetVersionOpen] = useState(false)
 
   // Reentrada de tela: se já existe um run em andamento, acompanhar ele — não esquecer o que está
-  // rolando só porque a pessoa recarregou a página ou voltou mais tarde.
+  // rolando só porque a pessoa recarregou a página ou voltou mais tarde. SÓ UMA VEZ (ref, não
+  // state): achado real do Codex — sem isto, clicar em "Fechar acompanhamento" (que também zera
+  // trackedRunId) fazia este efeito reabrir o MESMO run na hora, e "fechar" nunca funcionava
+  // enquanto o run continuasse ativo.
+  const autoResumedRef = useRef(false)
   useEffect(() => {
-    if (trackedRunId || !runs.data) return
+    if (autoResumedRef.current || trackedRunId || !runs.data) return
     const active = runs.data.find((r) => !isTerminalRunState(r.state))
     if (active) {
+      autoResumedRef.current = true
       setTrackedRunId(active.id)
       setSection('atualizacoes')
     }
@@ -476,6 +481,7 @@ function RunStateBadge({ state }: { state: string }) {
 // IMPLEMENTATION-STATUS.md): refaz a consulta do run e busca só os eventos novos (cursor `after`)
 // enquanto o estado não for terminal; para de perguntar sozinho quando o run termina.
 function RunTracking({ runId, onClose }: { runId: string; onClose: () => void }) {
+  const qc = useQueryClient()
   const run = useQuery({ queryKey: ['platform-run', runId], queryFn: () => platformRunsAPI.get(runId), retry: false })
   const terminal = run.data ? isTerminalRunState(run.data.state) : false
 
@@ -503,6 +509,21 @@ function RunTracking({ runId, onClose }: { runId: string; onClose: () => void })
     const id = terminal ? undefined : setInterval(() => void run.refetch(), 4_000)
     return () => { if (id) clearInterval(id) }
   }, [terminal, run])
+
+  // Achado Codex [P2]: o run pode virar terminal bem entre uma consulta de eventos e a
+  // próxima — como refetchInterval para assim que `terminal` é verdade, o checkpoint final
+  // (sucesso, falha ou o motivo da recuperação) podia nunca chegar a esta tela. Uma última
+  // busca, só na transição para terminal (nunca de novo), cobre essa janela. Sucesso também
+  // invalida a instalação: sem isto, "Versão instalada" e o preflight de outras releases
+  // continuavam comparando contra a versão ANTERIOR mesmo depois da atualização confirmada.
+  const terminalHandledRef = useRef(false)
+  useEffect(() => {
+    if (!terminal || terminalHandledRef.current) return
+    terminalHandledRef.current = true
+    void events.refetch()
+    if (run.data?.state === 'SUCCEEDED') void qc.invalidateQueries({ queryKey: ['platform-installation'] })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminal])
 
   if (run.isLoading) return <LoadingState message="Carregando execução…" />
   if (run.isError) {
