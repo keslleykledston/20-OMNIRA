@@ -608,6 +608,57 @@ func TestUpdateMgr_GetMonitoringStatus_ObservedDigests_FreshVsStale(t *testing.T
 	}
 }
 
+// TestUpdateMgr_GetMonitoringStatus_ObservedDigests_NeverObserved_IsStale é a prova do achado
+// Codex [P2] (rodada 17): o zero-value de ObservedDigestsStale é false — sem um default
+// explícito, "o Docker nunca foi observado com sucesso" (indisponível desde o startup do
+// daemon, ou o ambiente inteiro sem ledger ainda) reportava ObservedDigestsStale=false,
+// sugerindo erroneamente que a divergência de versão/digest foi checada e está tudo bem.
+// Mesmo bug que BackupEvidenceStale já evita explicitamente (lastEvidence == nil -> stale).
+func TestUpdateMgr_GetMonitoringStatus_ObservedDigests_NeverObserved_IsStale(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+
+	// Ambiente SEM nenhum ledger ainda — o caminho mais extremo de "nunca observado".
+	svcNoLedger := updatemgr.New(w.app, filepath.Join(t.TempDir(), "never-created.db"), "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+	status, err := svcNoLedger.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (sem ledger): %v", err)
+	}
+	if status.ObservedDigestsAt != nil {
+		t.Errorf("sem nenhum ledger, ObservedDigestsAt deveria ser nil, veio %v", status.ObservedDigestsAt)
+	}
+	if !status.ObservedDigestsStale {
+		t.Error("sem nenhum ledger, ObservedDigestsStale deveria ser true (nunca observado é tão obsoleto quanto observado há muito tempo)")
+	}
+
+	// Ledger existe (o daemon já rodou e gravou heartbeat), mas NENHUMA observação de
+	// digest jamais teve sucesso (ex. Docker indisponível desde o startup).
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	ledger, err := agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.RecordAgentHeartbeat(w.ctx, "test-install-1", "test-daemon"); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+	status, err = svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (heartbeat visto, nunca observado): %v", err)
+	}
+	if !status.AgentHeartbeatSeen {
+		t.Fatal("premissa do teste: o heartbeat deveria ter sido registrado")
+	}
+	if status.ObservedDigestsAt != nil {
+		t.Errorf("sem nenhuma observação de digest, ObservedDigestsAt deveria ser nil, veio %v", status.ObservedDigestsAt)
+	}
+	if !status.ObservedDigestsStale {
+		t.Error("heartbeat vivo mas nenhuma observação de digest jamais registrada deveria ser ObservedDigestsStale=true")
+	}
+}
+
 // TestUpdateMgr_GetMonitoringStatus_VersionDivergence_ComparesVersionNotOnlyReleaseID é a
 // prova central do achado Codex [P2]: SetInstallationVersion pode registrar uma VERSÃO
 // diferente com o MESMO release_id, ou simplesmente omitir o release_id (nenhum dos dois

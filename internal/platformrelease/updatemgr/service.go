@@ -893,6 +893,16 @@ func (s *Service) GetMonitoringStatus(ctx context.Context, operator uuid.UUID) (
 	}
 
 	var out MonitoringStatus
+	// Achado Codex [P2] (rodada 17): o zero-value de bool é false — sem este default
+	// explícito, "nenhuma observação jamais aconteceu" (Docker indisponível desde o
+	// startup do daemon, ledger ilegível, ou o ambiente inteiro sem ledger — qualquer
+	// caminho que retorna antes de a seção de digests observados abaixo rodar) reportava
+	// ObservedDigestsStale=false, exatamente o mesmo bug que BackupEvidenceStale já evita
+	// explicitamente alguns parágrafos abaixo (lastEvidence == nil -> stale=true). "Nunca
+	// observado" é tão obsoleto quanto "observado há muito tempo" — version_divergence
+	// continua false nesse caso (nada para comparar), mas o monitoramento nunca pode
+	// sugerir que a divergência foi de fato checada e está tudo bem.
+	out.ObservedDigestsStale = true
 	var instVersion, instReleaseID *string
 	err := s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
 		if err := authorize(c, q, operator); err != nil {
