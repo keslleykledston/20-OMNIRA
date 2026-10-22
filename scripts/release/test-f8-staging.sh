@@ -280,7 +280,14 @@ log "   operador seedado (${OPERATOR_EMAIL})"
 section "6. omnira-api real"
 LEDGER_PATH="$WORK/ledger.db"
 INSTALLATION_ID="f8-staging"
-APIPORT=$((19500 + $$ % 400))
+# achado Codex: $$ % 400 pode colidir entre execuções concorrentes desta suíte (ou com
+# qualquer outro serviço já na porta) — se a porta já estiver ocupada, O NOSSO processo falha
+# ao abrir o socket e morre, mas o health check pode responder 200 de QUALQUER OUTRA coisa já
+# escutando ali, fazendo login/instalação seguintes validarem a API ERRADA (um PASS falso, sem
+# exercitar nem a API nem o ledger desta execução). RANDOM reduz a chance de colisão; mas a
+# defesa real é confirmar, depois do health check passar, que o PID que NÓS lançamos está
+# genuinamente vivo — só então os 200 observados podem ser atribuídos a ELE.
+APIPORT=$((19500 + (RANDOM + $$) % 2000))
 CRED_KEY="$(head -c32 /dev/urandom | base64)"
 OMNIRA_DATABASE_URL="$APP_URL" OMNIRA_ENV=test OMNIRA_AUTH_MODE=mock OMNIRA_DEV_AUTH_ENABLED=true \
   OMNIRA_NATS_URL="nats://127.0.0.1:${NATS_PORT}" OMNIRA_CREDENTIALS_KEY="$CRED_KEY" \
@@ -291,7 +298,8 @@ OMNIRA_DATABASE_URL="$APP_URL" OMNIRA_ENV=test OMNIRA_AUTH_MODE=mock OMNIRA_DEV_
 echo $! > "$WORK/api.pid"
 for i in $(seq 1 60); do curl -sf --max-time 2 "http://127.0.0.1:${APIPORT}/internal/health/live" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf --max-time 2 "http://127.0.0.1:${APIPORT}/internal/health/live" >/dev/null || { echo "FATAL: api não subiu"; tail -30 "$EVIDENCE/api.log"; exit 1; }
-log "   api em 127.0.0.1:${APIPORT} (pid $(cat "$WORK/api.pid"))"
+kill -0 "$(cat "$WORK/api.pid")" 2>/dev/null || { echo "FATAL: health check respondeu 200 mas o PID que lançamos ($(cat "$WORK/api.pid")) não está vivo — porta ${APIPORT} provavelmente já ocupada por OUTRO processo, validaríamos a API errada"; tail -30 "$EVIDENCE/api.log"; exit 1; }
+log "   api em 127.0.0.1:${APIPORT} (pid $(cat "$WORK/api.pid"), confirmado vivo)"
 
 LOGIN_RAW=$(curl -s -o /tmp/f8-login-body.$$ -w '%{http_code}' -X POST "http://127.0.0.1:${APIPORT}/api/v1/auth/dev/login" -H 'Content-Type: application/json' -d "{\"email\":\"${OPERATOR_EMAIL}\"}")
 LOGIN_BODY=$(cat /tmp/f8-login-body.$$); rm -f /tmp/f8-login-body.$$
@@ -639,20 +647,25 @@ echo "$CKPT_BEFORE_KILL" > "$EVIDENCE/cenario4-checkpoints-before-kill.log"
 # f8harness real (com o lock/heartbeat de verdade) ÓRFÃO e rodando sem interrupção — a
 # reconciliação terminava sozinha minutos depois, nunca exercitando o cenário pretendido.
 # pkill por padrão de linha de comando (--holder=$HOLDER_A é único desta chamada) encontra e
-# mata o processo REAL, em qualquer profundidade.
+# mata o processo REAL, em qualquer profundidade — com um espaço no FINAL do padrão (achado
+# Codex: $RUN="f8-$$" é derivado do PID; "f8-1234" é PREFIXO de "f8-12345", então o padrão sem
+# âncora bateria em AMBOS se duas execuções desta suíte tivessem PIDs com essa relação,
+# matando o reconciliador da OUTRA execução mesmo com projeto/ledger isolados — o espaço
+# garante que só bate quando o valor do holder termina exatamente aí, nunca como prefixo de
+# um holder mais longo).
 CRASH_OK=1
-if pgrep -f -- "--holder=$HOLDER_A" >/dev/null 2>&1; then
+if pgrep -f -- "--holder=$HOLDER_A " >/dev/null 2>&1; then
   KILL_T=$(date +%s.%N)
-  pkill -9 -f -- "--holder=$HOLDER_A" 2>/dev/null
+  pkill -9 -f -- "--holder=$HOLDER_A " 2>/dev/null
   sleep 0.3
-  pkill -9 -f -- "--holder=$HOLDER_A" 2>/dev/null  # garante que não sobrou nenhum, mesmo reparented
+  pkill -9 -f -- "--holder=$HOLDER_A " 2>/dev/null  # garante que não sobrou nenhum, mesmo reparented
   wait "$PID_A" 2>/dev/null
   log "   processo A (holder=$HOLDER_A) morto com SIGKILL real em $(date -d @${KILL_T%.*} +%T 2>/dev/null || echo "$KILL_T") (durante apply/health do unit worker=slow)"
 else
   log "   ${RED}FALHA${NC}: processo A já tinha terminado antes do kill -9 — este cenário NÃO exercitou um crash real"
   CRASH_OK=0
 fi
-if pgrep -f -- "--holder=$HOLDER_A" >/dev/null 2>&1; then
+if pgrep -f -- "--holder=$HOLDER_A " >/dev/null 2>&1; then
   log "   ${RED}FALHA${NC}: ainda há processo(s) com holder=$HOLDER_A viv(os) após o kill -9"
   CRASH_OK=0
 fi
