@@ -935,6 +935,23 @@ func (e *Executor) recover(ctx context.Context, h *LockHandle, runID string, man
 		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRolledBack)
 	}
 
+	// Achado Codex [P1], F9 (ADR-0054 §2.4/§8, R4 "release revogada/comprometida: isolar,
+	// nunca downgrade cego"): se a release foi REVOGADA e já houve mutação real, a classe de
+	// recuperação DECLARADA pelo manifesto (R1/R2, "seguro reverter") é irrelevante — R4 é
+	// sobre a dimensão de SEGURANÇA/proveniência, independente de compatibilidade de dados.
+	// Reverter automaticamente para o digest anterior aqui seria um "forward-fix automático"
+	// escondido como rollback normal — exatamente o que a especificação proíbe. Força
+	// RECOVERY_REQUIRED incondicionalmente quando revogada, mesmo que isRollbackSafe(manifest)
+	// diria "seguro" — nunca deixa a release decidir por si mesma que está segura de reverter.
+	if revoked, reason, err := e.Ledger.IsReleaseRevoked(ctx, manifest.ReleaseID); err != nil {
+		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision", fmt.Sprintf("falha ao verificar revogação local — RECOVERY_REQUIRED (fail-closed): %v", err))
+		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+	} else if revoked {
+		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+			fmt.Sprintf("R4: release %s está REVOGADA (%s) e já houve mutação real — RECOVERY_REQUIRED, nunca rollback automático (reverter cegamente para o digest anterior seria um forward-fix escondido; isolamento/recovery autorizado é manual)", manifest.ReleaseID, reason))
+		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+	}
+
 	// A partir daqui HOUVE mutação real (snapshot existe) — agora sim a classe de
 	// recuperação declarada pela release decide se reverter o código é seguro.
 	if !isRollbackSafe(manifest) {

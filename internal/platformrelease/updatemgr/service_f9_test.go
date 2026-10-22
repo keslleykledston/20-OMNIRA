@@ -257,3 +257,46 @@ func TestUpdateMgr_RevokedRelease_RejectedAtEveryRevalidationPoint(t *testing.T)
 		t.Error("uma segunda revogação da MESMA release com Idempotency-Key diferente deveria falhar (append-only, PK já existe)")
 	}
 }
+
+// TestUpdateMgr_StableChannel_StartRun_RevalidatesBackupEvidenceFreshness é a prova do achado
+// Codex [P2]: o gate de backup-evidence só corria em CreatePlan — a evidência pode ter
+// expirado DURANTE a janela de validade do plano (planExpiry, 15 minutos) e StartRun nunca
+// revalidava isso de novo antes de despachar. Envelhece TODA evidência restore_verified
+// existente (platform_backup_records é global, sem release_id — comentário já presente em
+// service_integration_test.go; outros testes deste arquivo podem ter deixado linhas FRESCAS,
+// então "envelhecer a minha própria linha" não bastaria) para garantir que, no momento do
+// StartRun, NENHUMA evidência fresca existe, independente da ordem de execução dos testes.
+func TestUpdateMgr_StableChannel_StartRun_RevalidatesBackupEvidenceFreshness(t *testing.T) {
+	w := newWorld(t)
+	svc := newService(t, w)
+	op := w.operator("op")
+
+	w.exec(`UPDATE platform_installations SET current_version = '9.0.0'`)
+	if _, _, err := svc.RecordBackupEvidence(w.ctx, op, "backup-key-f9-0020", "restore_verified", time.Now(), true, nil, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	m := manifestJSONChannel(t, "omnira-9.9.120", domain.ChannelStable, []string{"9.0.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0020", m); err != nil {
+		t.Fatal(err)
+	}
+	plan, _, err := svc.CreatePlan(w.ctx, op, "plan-key-f9-0020", "omnira-9.9.120")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PreflightStatus != "PASS" {
+		t.Fatalf("esperava PASS com evidência fresca no momento do plano, veio %s: %s", plan.PreflightStatus, plan.PreflightDetail)
+	}
+
+	// Simula a evidência expirando DEPOIS do plano PASS, mas ANTES do StartRun — envelhece
+	// TODA linha restore_verified existente (não só a desta execução) para o cenário ficar
+	// determinístico independente de outros testes deste arquivo.
+	w.exec(`UPDATE platform_backup_records SET taken_at = now() - interval '48 hours' WHERE kind = 'restore_verified'`)
+
+	before := w.count(`SELECT count(*) FROM platform_update_runs WHERE release_id = $1`, "omnira-9.9.120")
+	if _, err := svc.StartRun(w.ctx, op, plan.ID, "run-key-f9-0020"); !errors.Is(err, updatemgr.ErrInvalid) {
+		t.Errorf("StartRun deveria recusar o despacho de uma release stable com evidência de backup expirada, mesmo com plano PASS: %v", err)
+	}
+	if after := w.count(`SELECT count(*) FROM platform_update_runs WHERE release_id = $1`, "omnira-9.9.120"); after != before {
+		t.Errorf("um run foi criado a partir de uma release stable sem evidência de backup fresca: %d -> %d", before, after)
+	}
+}

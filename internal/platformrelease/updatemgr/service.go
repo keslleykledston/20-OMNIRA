@@ -717,6 +717,18 @@ func checkRevocation(ctx context.Context, q platformdb.Querier, releaseID string
 // é exatamente aí que backup.yaml exige evidência fresca ANTES da promoção). Candidate/dev
 // permanecem no comportamento WARN-only de F6 — nunca bloqueados por este gate, de propósito:
 // backup.yaml declara o gate como exigência de PROMOÇÃO a "stable", nunca de staging/dev.
+// restoreVerifiedFresh (F9) consulta platform_backup_records SEMPRE por uma query real —
+// nunca um valor cacheado de um plano anterior (achado Codex [P2]: o gate só corria em
+// CreatePlan; a evidência pode ter ficado obsoleta DURANTE a janela de validade do plano
+// (planExpiry, 15 minutos) ou um replay de StartRun pode reaproveitar uma reserva antiga sem
+// nunca revalidar isto de novo — exatamente a mesma razão de checkRevocation ser chamada em
+// TODO ponto de revalidação, nunca só na ingestão/criação do plano).
+func restoreVerifiedFresh(ctx context.Context, q platformdb.Querier) bool {
+	var lastRestoreVerified *time.Time
+	_ = q.QueryRow(ctx, `SELECT taken_at FROM platform_backup_records WHERE kind = $1 AND verified ORDER BY taken_at DESC LIMIT 1`, backupEvidenceRestoreVerifiedKind).Scan(&lastRestoreVerified)
+	return lastRestoreVerified != nil && time.Since(*lastRestoreVerified).Hours() <= backupEvidenceMaxAgeHours
+}
+
 func checkStableBackupGate(m *domain.ReleaseManifest, restoreVerifiedFresh bool) (blocked bool, reason string) {
 	if m.Channel != domain.ChannelStable {
 		return false, ""
@@ -842,9 +854,7 @@ func (s *Service) CreatePlan(ctx context.Context, operator uuid.UUID, idempotenc
 		// -hub-check.sh), não só "o dump não falhou". O gate do canal stable usa esta
 		// consulta SEPARADA, restrita a backupEvidenceRestoreVerifiedKind, nunca a
 		// "fresh" genérico acima (que continua servindo só o WARN informativo de F6).
-		var lastRestoreVerified *time.Time
-		_ = q.QueryRow(c, `SELECT taken_at FROM platform_backup_records WHERE kind = $1 AND verified ORDER BY taken_at DESC LIMIT 1`, backupEvidenceRestoreVerifiedKind).Scan(&lastRestoreVerified)
-		restoreFresh := lastRestoreVerified != nil && time.Since(*lastRestoreVerified).Hours() <= backupEvidenceMaxAgeHours
+		restoreFresh := restoreVerifiedFresh(c, q)
 		backupDetail["restore_verified_fresh"] = restoreFresh
 		detail["backup_evidence"] = backupDetail
 		// F9 (release/policies/backup.yaml "promotion_gate.stable_channel"): GATE real — nunca
@@ -1056,6 +1066,17 @@ func (s *Service) StartRun(ctx context.Context, operator uuid.UUID, planID uuid.
 					detail["reasons"] = append(reasons, fmt.Sprintf("esta release foi REVOGADA (%s) — nunca despachável, mesmo já reservada", reason))
 				}
 			}
+			// Achado Codex [P2]: o gate de backup-evidence do canal stable só corria em
+			// CreatePlan — a evidência pode ter expirado DURANTE a janela de validade do
+			// plano, ou um replay como este pode reaproveitar uma reserva antiga sem nunca
+			// revalidar isto de novo.
+			if status == "PASS" && m.Channel == domain.ChannelStable {
+				if blocked, reason := checkStableBackupGate(m, restoreVerifiedFresh(c, q)); blocked {
+					status = "BLOCK"
+					reasons, _ := detail["reasons"].([]string)
+					detail["reasons"] = append(reasons, reason)
+				}
+			}
 			if status != "PASS" {
 				// Achado Codex [P2]: gravar stateCompatibilityVoided AQUI e então devolver um
 				// erro deste callback faz WithTenantSession dar ROLLBACK na transação inteira
@@ -1129,6 +1150,16 @@ func (s *Service) StartRun(ctx context.Context, operator uuid.UUID, planID uuid.
 				status = "BLOCK"
 				reasons, _ := detail["reasons"].([]string)
 				detail["reasons"] = append(reasons, fmt.Sprintf("esta release foi REVOGADA (%s) — nunca despachável", reason))
+			}
+		}
+		// Achado Codex [P2]: o gate de backup-evidence do canal stable só corria em
+		// CreatePlan (15 minutos antes, planExpiry) — a evidência pode ter expirado dentro
+		// dessa janela, e este StartRun nunca revalidava de novo antes de despachar.
+		if status == "PASS" && m.Channel == domain.ChannelStable {
+			if blocked, reason := checkStableBackupGate(m, restoreVerifiedFresh(c, q)); blocked {
+				status = "BLOCK"
+				reasons, _ := detail["reasons"].([]string)
+				detail["reasons"] = append(reasons, reason)
 			}
 		}
 		if status != "PASS" {
