@@ -1044,3 +1044,208 @@ Próxima fase: F7 — Frontend real do OMNIRA (menu "Administração global → 
 **Veredito: PASS**
 
 ---
+
+## F7 — Frontend real do OMNIRA
+
+```
+Fase: F7
+Baseline SHA: 6e8cf28 (último commit de F6 nesta mesma branch)
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+Implementação:
+  "Administração global → Plataforma → Versões e Atualizações" (ADR-0036: evolução aditiva do
+  console existente em web/src/admin — NUNCA um app shell/rota/auth/estado novo, nunca copiado
+  do protótipo Lovable; PRESERVE>EXTEND aplicado: o console de administração do Hub (ADR-0041)
+  já existia, a Plataforma é uma SEÇÃO nova dele, atrás da PRÓPRIA autorização do servidor).
+  Consome só as 10 rotas reais de internal/platformrelease/updatemgr (F6); nenhum dado é
+  inventado.
+  - web/src/hooks/usePlatformOperator.ts: probe real (GetInstallation) — mesmo padrão de
+    useMyHubs. Autorização de plataforma é SEPARADA da autorização de Hub (uma pessoa pode ter
+    uma sem a outra); usado TANTO pelo guard de navegação (AdminShell) QUANTO repassado via
+    contexto do Outlet para a página — nunca uma segunda assinatura da mesma chave (achado real
+    de navegador, ver "Review Codex" abaixo).
+  - web/src/admin/AdminShell.tsx: nova aba "Plataforma" (só quando is_platform_operator),
+    `entitled` agora inclui a autorização de plataforma; distingue 404 confirmado (nega) de
+    outro erro (probe inconclusivo, oferece retry) de 401 (sessão expirada, vai para /login).
+  - web/src/admin/AdminApp.tsx: rota `/plataforma`; front door (ConsoleHome) manda quem só é
+    operador de plataforma direto para lá.
+  - web/src/lib/platformRelease.ts: cliente tipado das 10 rotas, espelhando o contrato OpenAPI
+    exatamente (inclusive os 2 estados sentinela Postgres-only e os estados reais do
+    domain.RunState).
+  - web/src/pages/PlatformReleasesPage.tsx: instalação atual (com "Registrar versão instalada"
+    quando desconhecida — F6 não popula isso a partir de deploy real), catálogo com paginação
+    por cursor, detalhe de release (changelog/diff/riscos), preflight (PASS/BLOCK com motivos E
+    o aviso de evidência de backup, nunca escondido), confirmação SERVER-VALIDATED (o botão só
+    aparece com plano PASS, e o servidor recusa de novo em toda chamada — nunca uma condição
+    visual do browser como gate de segurança), acompanhamento de run com reentrada (retoma o run
+    ativo ao reabrir a tela OU ao fechar/trocar de aba durante um despacho em andamento) e
+    histórico paginado.
+  - Especificação pede "acompanhamento SSE"; F6 implementou só polling por cursor (documentado
+    como pendência em F6). Esta tela faz o acompanhamento por polling real (4s para run/eventos,
+    10s para o histórico) — mesma adaptação, documentada aqui também.
+Arquivos:
+  web/src/hooks/usePlatformOperator.ts (novo)
+  web/src/lib/platformRelease.ts (novo)
+  web/src/pages/PlatformReleasesPage.tsx (novo, ~800 linhas)
+  web/src/admin/AdminShell.tsx, web/src/admin/AdminApp.tsx (alterados)
+  web/src/__tests__/PlatformReleasesPage.test.tsx (novo, 28 testes)
+  web/src/__tests__/AdminConsole.test.tsx (alterado, +5 testes)
+  web/e2e/platform-releases.mock.spec.ts (novo, 3 cenários Playwright)
+Migrations: nenhuma (fase é só frontend).
+Contratos: nenhum novo (consome os 10 endpoints já documentados em F6); nenhuma mudança no
+  OpenAPI.
+Testes executados (comandos, PASS/FAIL):
+  cd web && npx tsc --noEmit / npx eslint src / npm run build → limpos em toda rodada
+  npx vitest run src/__tests__/PlatformReleasesPage.test.tsx src/__tests__/AdminConsole.test.tsx
+    → 28 + 15 = 43 testes, PASS (API mockada — jsdom): guarda de navegação (operador puro, Hub-
+    admin puro, os dois, 404/500/401 do probe distintos), permissão (nunca vê/aciona o botão),
+    golden path completo (catálogo→preflight PASS→confirmação→despacho→acompanhamento→
+    histórico), BLOCK com motivos, aviso de evidência de backup sempre visível, reentrada (run
+    ativo reabre, run terminal não força, FAILED não é terminal), fechar acompanhamento (nunca
+    reabre, mesmo para um run iniciado na mesma visita), transição terminal (busca final de
+    eventos, invalida instalação — no RunTracking E no nível da página, independente de qual
+    painel está aberto), checkpoint com step/status/diagnóstico, erro de busca de eventos com
+    retry, troca de seleção sem fuga de estado (plano/trilha de eventos), paginação (carregar
+    mais releases/runs, nunca um buraco silencioso quando a fronteira muda, mesmo com a página
+    extra vazia, descarta resposta de paginação de uma fronteira já superada), reuso de
+    Idempotency-Key em retry (escopado por plano/versão/manifesto — nunca incondicional nem
+    perdido entre componentes), retry de despacho restrito a quem reservou.
+  npm run test (suíte completa, 117 arquivos, 1208 testes) → 1205-1208 PASS a depender da carga
+    da máquina compartilhada; UMA falha reproduz de forma determinística e isolada
+    (FlowEditorPage.test.tsx, 2 subtestes) e já estava confirmada como PRÉ-EXISTENTE durante F6
+    (reproduz idêntica no commit e0e560e, antes de qualquer linha deste programa). As demais
+    falhas observadas em rodadas com carga alta (PlatformReleasesPage, HubAccessPage,
+    ContactsPage, AttendancePages, SessionEnd) desaparecem ao reexecutar isoladamente ou com a
+    máquina menos ocupada — flakes de ambiente compartilhado, não regressões (confirmado
+    reexecutando cada um isoladamente: PASS limpo).
+  npx playwright test -c playwright.mock.config.ts e2e/platform-releases.mock.spec.ts → 3/3 PASS
+    repetidamente ao longo de todas as 18 rodadas de revisão: golden path completo (preflight→
+    confirmação→despacho→acompanhamento→reentrada após reload), negação para quem não administra
+    Hub nenhum e não é operador (nem o link nem a tela aparecem), e o caso mais sutil — alguém
+    que chega à tela via OUTRA entitlement (admin de Hub) mas não é operador: a página tem seu
+    PRÓPRIO probe e recusa, nunca confiando que ter chegado lá significa ter permissão.
+  npx playwright test -c playwright.mock.config.ts (regressão ampliada: hub-access, hub-manage,
+    hub, hub-companies + platform-releases) → 21/22 PASS; a falha (hub.mock.spec.ts, "NorteNet
+    com contexto completo") é a MESMA falha pré-existente já documentada em F6 (histórico
+    confirmado não implementado para delegados do Hub, nada a ver com esta fase).
+Gates de segurança: o frontend NUNCA é autoridade — toda ação passa pelo servidor de novo
+  (CLAUDE.md, ADR-0036 §7). O botão de iniciar atualização só existe com um plano PASS vindo do
+  servidor; mesmo assim o servidor revalida tudo de novo ao StartRun (F6). A tela de Plataforma
+  tem seu PRÓPRIO probe de operador — alcançável por outra entitlement (Hub-admin) mas sempre
+  recusada pelo servidor se a pessoa não for operador. Idempotency-Key é obrigatória em toda
+  mutação (reaproveitada no retry da MESMA ação, escopada por payload/plano quando a ação pode
+  legitimamente mudar de alvo entre tentativas — nunca incondicional, nunca perdida por um
+  componente desmontado). Retry de despacho de um run reservado (REQUESTED) restrito a quem
+  reservou (actor_id do run == usuário atual) — nunca oferecido a um operador que não
+  conseguiria retomá-lo de qualquer forma (o servidor resolve replay por operator_id+chave).
+Review Codex (evidência real): `codex exec review` executado 18 vezes contra o diff acumulado de
+  F7 (`6e8cf28..HEAD`), seguindo o mesmo ciclo rigoroso fix→teste real→nova rodada das fases
+  anteriores. As duas ÚLTIMAS rodadas convergiram consecutivamente em "No actionable
+  defects/regressions were identified/confirmed". Mais de 20 achados reais corrigidos, agrupados
+  por tema:
+  - **Fuga de estado entre seleções** (rodada 1): trocar de release selecionada reaproveitava o
+    plano de preflight da release ANTERIOR (StartRun podia disparar com o plan_id errado sob o
+    rótulo certo); trocar de run acompanhado reaproveitava a trilha de eventos e o cursor
+    `after` do run anterior. Corrigido com `key={id}` nos dois componentes — React sempre monta
+    uma instância nova ao trocar de identidade.
+  - **Classificação de estado terminal** (rodada 1): FAILED estava na lista de estados
+    terminais, mas o backend permite FAILED→RECOVERING→ROLLED_BACK/RECOVERY_REQUIRED — um run
+    assim parava de ser consultado antes do resultado real da recuperação chegar.
+  - **Fechar o acompanhamento nunca fechava** (rodadas 2 e 3): a reentrada automática reabria o
+    MESMO run na hora, porque não sabia que foi a PESSOA quem fechou; e a ref que marcava "já
+    fiz a reentrada automática" só era setada DENTRO do próprio efeito de reentrada — um run
+    iniciado durante a mesma visita (nunca passou pelo efeito) reproduzia o mesmo bug por outro
+    caminho. Corrigido unificando em um único `trackRun()` que é o ÚNICO jeito de escolher um
+    run e sempre marca a reentrada como "já feita".
+  - **Transição terminal perdendo o desfecho real** (rodada 2): refetchInterval parava assim
+    que `terminal` ficava verdadeiro, sem buscar a última janela de eventos pendentes — um
+    checkpoint final (sucesso, falha, motivo de recuperação) escrito nessa janela nunca
+    chegava à tela. Corrigido com uma busca extra, só na transição, antes de parar.
+  - **"Versão instalada" ficando parada após sucesso** (rodadas 2 e 16): o invalidate da
+    instalação ao suceder vivia dentro de RunTracking — se a pessoa fechasse o acompanhamento ou
+    nunca o tivesse aberto, o efeito nunca disparava. Corrigido com uma segunda camada no nível
+    da página, assistindo o histórico (sempre com polling de 10s, independente de qualquer
+    painel) para qualquer run que apareça SUCCEEDED pela primeira vez.
+  - **Checkpoints sem diagnóstico e erro de eventos escondido** (rodada 4): cada checkpoint real
+    do Update Agent (step, status, mensagem) era mostrado só como "checkpoint" + hora,
+    indistinguível de qualquer outro; uma falha ao buscar eventos (inclusive num run terminal,
+    sem outra chance de corrigir sozinha) era ignorada silenciosamente.
+  - **Paginação** (rodadas 5, 6, 7 e 14): catálogo e histórico só mostravam a primeira página
+    (50), sem usar o cursor `before` já existente no cliente e no servidor. Ao implementar
+    "Carregar mais", surgiram em cascata: um buraco silencioso quando a primeira página mudava
+    com páginas extras já carregadas (um item ficava inacessível para sempre); o MESMO buraco
+    mesmo com `olderReleases`/`olderRuns` vazios (página extra tinha vindo vazia com exatamente
+    50 itens, então a condição de reset nunca disparava); e uma resposta de "carregar mais" já
+    EM VOO contra a fronteira ANTIGA chegando DEPOIS de um reset, reabrindo o mesmo buraco.
+    Corrigido com detecção de mudança do item do topo + um contador de geração que descarta
+    respostas de uma fronteira já superada.
+  - **Idempotency-Key gerada de novo em cada tentativa** (rodadas 9, 10 e 11): `crypto.
+    randomUUID()` chamado DENTRO de cada mutationFn gerava uma chave nova em todo retry —
+    StartRun especificamente ficava travado (reserva feita, despacho falho, retry com chave
+    diferente cai no gate de "run ativo"). Corrigido reutilizando a chave entre tentativas da
+    MESMA ação; depois, escopada por ALVO (plan_id para StartRun, versão/manifesto para os
+    formulários editáveis) para não ficar presa quando o alvo legitimamente muda (novo plano
+    após um preflight repetido, valor editado antes de reenviar).
+  - **Chave perdida ao desmontar o componente** (rodada 11): se a reserva (REQUESTED) fosse
+    feita mas o despacho falhasse, e a pessoa trocasse de aba (ou a própria reentrada trocasse
+    por ela), a chave morria com o componente. Corrigido com um botão "Tentar despachar
+    novamente" em RunTracking usando os PRÓPRIOS plan_id/idempotency_key do run — nunca depende
+    de qual componente criou a reserva.
+  - **Evidência de backup escondida e retry sem dono** (rodada 12): `backup_evidence.warn` (só
+    aviso, nunca bloqueia em F6) nunca era mostrado nem em planos PASS; o retry de despacho
+    (rodada 11) era oferecido a QUALQUER operador, mas o servidor resolve replay por
+    (operator_id, chave) — um operador diferente do que reservou nunca conseguiria.
+  - **Probe de operador: inconclusivo vs. negado vs. sessão expirada** (rodadas 13 e 15): um
+    erro transitório (500/rede) do probe de operador era tratado IGUAL a um 404 confirmado
+    ("Sem acesso ao console" para um operador de verdade); depois, a correção para isso
+    classificava um 401 (sessão expirada) como "transitório" também, oferecendo um retry que só
+    reenviava a mesma credencial morta para sempre em vez de ir para /login.
+  - **Achado real de navegador, não de lógica** (slice 1, nenhum teste jsdom reproduziu): dois
+    `useQuery` para a MESMA chave de instalação (um na guarda de navegação, outro na própria
+    página) faziam os observadores divergirem — a tela nunca saía do estado de carregamento.
+    Corrigido repassando o MESMO resultado via contexto do Outlet.
+Commits (nesta branch, nunca push):
+  ad22015 feat(release-web): menu Plataforma — Versões e Atualizações (F7, slice 1)
+  eb7cd49 fix(release-web): corrige fuga de estado entre seleções e estados não-terminais
+  c56b87e fix(release-web): fecho de acompanhamento, último fetch na transição terminal, refresh pós-sucesso
+  6c02155 fix(release-web): fecho de acompanhamento para runs iniciados na mesma visita
+  5065164 fix(release-web): mostra detalhe de checkpoint e erro de busca de eventos
+  abc15a1 feat(release-web): paginação do catálogo e do histórico de atualizações
+  0ce2e79 fix(release-web): nunca deixa um buraco silencioso na paginação quando a primeira página muda
+  6281607 fix(release-web): descarta resposta de paginação da fronteira antiga
+  2373a82b fix(release-web): reusa a Idempotency-Key em retry após falha transitória
+  8b2b4cd fix(release-web): escopa a chave de StartRun por plano e estabiliza o polling do run
+  3dc47fe fix(release-web): recupera despacho travado e escopa chaves de formulários editáveis
+  19ef07a fix(release-web): mostra aviso de evidência de backup e restringe retry ao operador que reservou
+  654709f fix(release-web): distingue falha transitória de negação confirmada no probe de operador
+  ea7a68a fix(release-web): reinicia o indicador de paginação mesmo com a página extra vazia
+  28ee655 fix(release-web): trata sessão expirada como saída definitiva, nunca retry transitório
+  26cf213 fix(release-web): invalida a instalação no nível da página, independente de RunTracking
+Pendências/BLOCKED_EXTERNAL:
+  - SSE não implementado (nem no backend, F6, nem exigido de novo aqui): polling real (4s/10s)
+    cobre a cláusula "SSE/polling" da especificação. Nenhuma credencial faltando — decisão de
+    escopo, documentada em F6 e aqui.
+  - Responsividade mobile: os primitives/tokens do design system (já responsivos em todo o
+    resto do produto) foram reaproveitados sem nenhum layout dedicado a telas estreitas
+    verificado manualmente nesta fase — NOT WIRED além do que os primitives já garantem por
+    padrão (grid/flex responsivos, sem overflow horizontal). Verificação visual em viewport
+    móvel real fica como pendência.
+  - a11y: navegação por teclado e foco visível vêm dos primitives (Button/Modal/Tabs já
+    testados em outras telas do produto); nenhuma auditoria de a11y dedicada (axe/contraste) foi
+    rodada especificamente nesta tela.
+  - `platform_component_versions` (schema de F6) continua sem população real — a tela não
+    mostra nada daqui porque o backend ainda não preenche.
+  - Teste Playwright contra BACKEND REAL (não mockado) não foi construído: as 3 fatias cobertas
+    aqui usam API mockada (mesmo padrão já usado pelas outras telas do console de administração
+    — HubAccessPage, HubManagedPage, etc.); a autorização real (IsPlatformOperator, RLS) já está
+    exaustivamente provada no backend por 20 testes de integração reais em F6. Construir uma
+    infraestrutura `e2e-real` equivalente à do Hub (scripts/e2e-hub-browser.sh) para esta tela
+    ficaria para uma fase futura, se o dono do repositório pedir.
+  - A falha determinística pré-existente em FlowEditorPage.test.tsx (2 subtestes) e em
+    hub.mock.spec.ts ("NorteNet com contexto completo") seguem documentadas como PRÉ-EXISTENTES
+    (confirmadas contra o commit e0e560e durante F6) — nada desta fase as toca.
+Próxima fase: F8 — Staging e testes realistas de atualização/falha
+```
+
+**Veredito: PASS**
+
+---
