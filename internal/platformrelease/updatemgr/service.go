@@ -60,10 +60,18 @@ func invalid(format string, a ...any) error {
 const currentAgentProtocol = 1
 
 // backupEvidenceMaxAgeHours espelha release/policies/backup.yaml
-// "promotion_gate.stable_channel.max_evidence_age_hours" — usado aqui só para um WARN
-// informativo no preflight (F6); o GATE que bloqueia promoção "stable" de verdade é F9, como o
-// próprio backup.yaml documenta.
+// "promotion_gate.stable_channel.max_evidence_age_hours" — a partir de F9, GATE real que
+// bloqueia qualquer plano no canal "stable" sem evidência fresca (ver checkStableBackupGate);
+// nos demais canais (dev/candidate) permanece só um WARN informativo, como já era em F6.
 const backupEvidenceMaxAgeHours = 24
+
+// revocationMaxCacheAgeSeconds espelha release/policies/signing.yaml
+// "revocation.max_cache_age_seconds" — documenta que a lista de revogação nunca é cacheada
+// indefinidamente; nesta implementação cada checkRevocation já consulta o Postgres
+// diretamente (sem cache de processo nenhum), então o limite é satisfeito trivialmente (idade
+// efetiva = 0) — a constante existe para a intenção da política ficar auditável no código,
+// nunca para implementar um cache que ainda não existe.
+const revocationMaxCacheAgeSeconds = 300
 
 // Service é o Update Manager API. Mantém também o acesso ao ledger LOCAL do Update Agent
 // (mesmo arquivo, mesmo host) para StartRun — ver comentário do pacote.
@@ -527,6 +535,80 @@ func (s *Service) RecordBackupEvidence(ctx context.Context, operator uuid.UUID, 
 	return rec, replayed, err
 }
 
+// --- Revocation (F9, release/policies/signing.yaml "revocation") ---
+
+type Revocation struct {
+	ReleaseID string    `json:"release_id"`
+	RevokedAt time.Time `json:"revoked_at"`
+	Reason    string    `json:"reason"`
+	RevokedBy uuid.UUID `json:"revoked_by"`
+}
+
+func requestHashRevoke(operator uuid.UUID, releaseID, reason string) string {
+	sum := sha256.Sum256([]byte(operator.String() + "\x00" + releaseID + "\x00" + reason))
+	return hex.EncodeToString(sum[:])
+}
+
+// RevokeRelease (F9) é uma mutação (ADR-0054 §2.2.1 exige Idempotency-Key em toda mutação) —
+// mesmo padrão de RecordBackupEvidence. platform_release_revocations é append-only de verdade
+// (migration 000174: REVOKE UPDATE/DELETE + trigger) — uma segunda chamada com a MESMA
+// Idempotency-Key reaproveita a revogação já registrada (replay normal); uma chamada para o
+// MESMO release_id com uma Idempotency-Key DIFERENTE falha na constraint de chave primária da
+// tabela (um release_id só pode ser revogado uma vez — revogar de novo com um motivo diferente
+// não é uma operação suportada por este método; exigiria uma decisão de operador documentada
+// fora desta tabela, como o comentário da migration já explica).
+func (s *Service) RevokeRelease(ctx context.Context, operator uuid.UUID, idempotencyKey, releaseID, reason string) (rec Revocation, replayed bool, err error) {
+	if len(idempotencyKey) < 8 || len(idempotencyKey) > 128 {
+		return Revocation{}, false, invalid("Idempotency-Key deve ter 8-128 caracteres")
+	}
+	releaseID = strings.TrimSpace(releaseID)
+	if releaseID == "" {
+		return Revocation{}, false, invalid("release_id é obrigatório")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return Revocation{}, false, invalid("reason é obrigatório")
+	}
+	hash := requestHashRevoke(operator, releaseID, reason)
+	err = s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := authorize(c, q, operator); err != nil {
+			return err
+		}
+		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, operator.String()+"/"+idempotencyKey); err != nil {
+			return err
+		}
+		var prevHash string
+		perr := q.QueryRow(c, `SELECT request_hash FROM platform_release_revocation_requests WHERE operator_id = $1 AND idempotency_key = $2`, operator, idempotencyKey).Scan(&prevHash)
+		switch {
+		case perr == nil:
+			if prevHash != hash {
+				return ErrKeyMismatch
+			}
+			replayed = true
+			return q.QueryRow(c, `SELECT release_id, revoked_at, reason, revoked_by FROM platform_release_revocations WHERE release_id = $1`, releaseID).
+				Scan(&rec.ReleaseID, &rec.RevokedAt, &rec.Reason, &rec.RevokedBy)
+		case !errors.Is(perr, pgx.ErrNoRows):
+			return perr
+		}
+		if _, err := q.Exec(c, `SELECT 1 FROM platform_releases WHERE release_id = $1`, releaseID); err != nil {
+			return err
+		}
+		if _, err := q.Exec(c, `INSERT INTO platform_release_revocations (release_id, reason, revoked_by) VALUES ($1,$2,$3)`, releaseID, reason, operator); err != nil {
+			return err
+		}
+		if _, err := q.Exec(c, `INSERT INTO platform_release_revocation_requests (operator_id, idempotency_key, request_hash, release_id) VALUES ($1,$2,$3,$4)`,
+			operator, idempotencyKey, hash, releaseID); err != nil {
+			return err
+		}
+		if err := q.QueryRow(c, `SELECT release_id, revoked_at, reason, revoked_by FROM platform_release_revocations WHERE release_id = $1`, releaseID).
+			Scan(&rec.ReleaseID, &rec.RevokedAt, &rec.Reason, &rec.RevokedBy); err != nil {
+			return err
+		}
+		return audit(c, q, operator, "platform.release.revoked", map[string]any{"release_id": releaseID, "reason": reason})
+	})
+	return rec, replayed, err
+}
+
 // --- Plan (preflight — especificação §7.1) ---
 
 type Plan struct {
@@ -574,6 +656,50 @@ func checkCompatibility(m *domain.ReleaseManifest, installVersion *string, agent
 		"agent_protocol_ok":  agentProtocolOK,
 		"reasons":            reasons,
 	}
+}
+
+// checkRevocation (F9, release/policies/signing.yaml "revocation"/"anti_replay") consulta
+// platform_release_revocations SEMPRE por uma query real ao Postgres — nunca um cache de
+// processo, nunca confiada do manifesto (revogação é decidida pelo catálogo, não pela release
+// que está sendo avaliada: uma release revogada nunca "sabe" disso em seu próprio JSON). Fail
+// closed: um erro de consulta é tratado como "não sei, recusar" pelo chamador (devolvido como
+// erro, nunca interpretado como "não revogada"). Chamada em TODO ponto que decide
+// preflight/despacho (CreatePlan, StartRun replay E StartRun novo) — nunca só na ingestão —
+// porque signing.yaml exige revalidar ANTES do apply, não só do download
+// (anti_replay.revalidate_before_apply): um manifesto baixado/planejado antes de uma revogação
+// nunca pode ser aplicado depois dela só porque já estava em disco/plano local.
+func checkRevocation(ctx context.Context, q platformdb.Querier, releaseID string) (revoked bool, reason string, err error) {
+	var revokedAt time.Time
+	err = q.QueryRow(ctx, `SELECT revoked_at, reason FROM platform_release_revocations WHERE release_id = $1`, releaseID).Scan(&revokedAt, &reason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("updatemgr: verificar revogação de %s: %w", releaseID, err)
+	}
+	return true, reason, nil
+}
+
+// checkStableBackupGate (F9, release/policies/backup.yaml "promotion_gate.stable_channel")
+// torna a evidência de backup um GATE real e bloqueante — nunca só um WARN informativo — para
+// QUALQUER release cujo manifesto declare channel="stable" (ADR-0054 §2.6: o canal é metadado
+// de roteamento, mas "stable" é a única classe instalável na instalação SaaS compartilhada, e
+// é exatamente aí que backup.yaml exige evidência fresca ANTES da promoção). Candidate/dev
+// permanecem no comportamento WARN-only de F6 — nunca bloqueados por este gate, de propósito:
+// backup.yaml declara o gate como exigência de PROMOÇÃO a "stable", nunca de staging/dev.
+func checkStableBackupGate(m *domain.ReleaseManifest, backupDetail map[string]any) (blocked bool, reason string) {
+	if m.Channel != domain.ChannelStable {
+		return false, ""
+	}
+	fresh, _ := backupDetail["fresh"].(bool)
+	if fresh {
+		return false, ""
+	}
+	present, _ := backupDetail["present"].(bool)
+	if !present {
+		return true, "release/policies/backup.yaml: promoção ao canal stable exige evidência de backup/restore registrada — nenhuma evidência foi encontrada"
+	}
+	return true, fmt.Sprintf("release/policies/backup.yaml: promoção ao canal stable exige evidência de backup/restore com no máximo %dh e verificada — a evidência mais recente não satisfaz isso", backupEvidenceMaxAgeHours)
 }
 
 // CreatePlan monta o preflight de uma release já ingerida contra o estado REAL da instalação —
@@ -659,6 +785,16 @@ func (s *Service) CreatePlan(ctx context.Context, operator uuid.UUID, idempotenc
 			reasons, _ := detail["reasons"].([]string)
 			detail["reasons"] = append(reasons, "esta instalação tem uma recuperação pendente não reconhecida (RECOVERY_REQUIRED) — o Update Agent recusa processar qualquer run novo até isso ser resolvido via updatectl/runbook")
 		}
+		// F9 (release/policies/signing.yaml "revocation"): fail-closed — uma release revogada
+		// nunca passa, independente de compatibilidade/canal.
+		if revoked, reason, err := checkRevocation(c, q, releaseID); err != nil {
+			return err
+		} else if revoked {
+			status = "BLOCK"
+			reasons, _ := detail["reasons"].([]string)
+			detail["reasons"] = append(reasons, fmt.Sprintf("esta release foi REVOGADA (%s) — nunca instalável, mesmo com compatibilidade/canal corretos", reason))
+			detail["revoked"] = true
+		}
 
 		var lastEvidence *time.Time
 		var lastVerified bool
@@ -676,6 +812,13 @@ func (s *Service) CreatePlan(ctx context.Context, operator uuid.UUID, idempotenc
 			backupDetail["warn"] = "nenhuma evidência de backup registrada — não bloqueia em F6 (gate de promoção stable é F9), mas revise antes de aprovar"
 		}
 		detail["backup_evidence"] = backupDetail
+		// F9 (release/policies/backup.yaml "promotion_gate.stable_channel"): GATE real — nunca
+		// só um WARN — quando a release é do canal "stable".
+		if blocked, reason := checkStableBackupGate(m, backupDetail); blocked {
+			status = "BLOCK"
+			reasons, _ := detail["reasons"].([]string)
+			detail["reasons"] = append(reasons, reason)
+		}
 
 		detailRaw, err := json.Marshal(detail)
 		if err != nil {
@@ -867,6 +1010,17 @@ func (s *Service) StartRun(ctx context.Context, operator uuid.UUID, planID uuid.
 					detail["reasons"] = append(reasons, "esta instalação tem uma recuperação pendente não reconhecida (RECOVERY_REQUIRED) — o Update Agent recusa processar qualquer run novo até isso ser resolvido")
 				}
 			}
+			if status == "PASS" {
+				// F9: revalida revogação no momento do RE-despacho (replay) — signing.yaml
+				// "anti_replay.revalidate_before_apply".
+				if revoked, reason, err := checkRevocation(c, q, m.ReleaseID); err != nil {
+					return err
+				} else if revoked {
+					status = "BLOCK"
+					reasons, _ := detail["reasons"].([]string)
+					detail["reasons"] = append(reasons, fmt.Sprintf("esta release foi REVOGADA (%s) — nunca despachável, mesmo já reservada", reason))
+				}
+			}
 			if status != "PASS" {
 				// Achado Codex [P2]: gravar stateCompatibilityVoided AQUI e então devolver um
 				// erro deste callback faz WithTenantSession dar ROLLBACK na transação inteira
@@ -927,6 +1081,19 @@ func (s *Service) StartRun(ctx context.Context, operator uuid.UUID, planID uuid.
 				status = "BLOCK"
 				reasons, _ := detail["reasons"].([]string)
 				detail["reasons"] = append(reasons, "esta instalação tem uma recuperação pendente não reconhecida (RECOVERY_REQUIRED) — o Update Agent recusa processar qualquer run novo até isso ser resolvido")
+			}
+		}
+		if status == "PASS" {
+			// F9: revalida revogação no momento do APPLY (StartRun), nunca só no momento do
+			// plano/download — signing.yaml "anti_replay.revalidate_before_apply": uma release
+			// revogada DEPOIS do plano PASS, mas ANTES deste StartRun, nunca pode ser
+			// despachada só porque o plano cacheado dizia PASS.
+			if revoked, reason, err := checkRevocation(c, q, m.ReleaseID); err != nil {
+				return err
+			} else if revoked {
+				status = "BLOCK"
+				reasons, _ := detail["reasons"].([]string)
+				detail["reasons"] = append(reasons, fmt.Sprintf("esta release foi REVOGADA (%s) — nunca despachável", reason))
 			}
 		}
 		if status != "PASS" {

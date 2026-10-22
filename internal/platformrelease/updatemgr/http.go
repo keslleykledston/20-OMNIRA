@@ -265,6 +265,47 @@ func (h *HTTPHandler) RecordBackupEvidence(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, status, rec)
 }
 
+// --- Revocation (F9, release/policies/signing.yaml "revocation") ---
+
+type revokeReleaseRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *HTTPHandler) RevokeRelease(w http.ResponseWriter, r *http.Request) {
+	operator, ok := h.scope(w, r)
+	if !ok {
+		return
+	}
+	releaseID := r.PathValue("release_id")
+	if releaseID == "" {
+		httpError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		httpError(w, "Idempotency-Key header is required", http.StatusBadRequest)
+		return
+	}
+	var body revokeReleaseRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil || dec.More() {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	rec, replayed, err := h.svc.RevokeRelease(r.Context(), operator, key, releaseID, body.Reason)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	status := http.StatusCreated
+	if replayed {
+		w.Header().Set("Idempotent-Replayed", "true")
+		status = http.StatusOK
+	}
+	writeJSON(w, status, rec)
+}
+
 // --- Plans ---
 
 type createPlanRequest struct {
