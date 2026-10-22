@@ -1072,34 +1072,40 @@ func (e *Executor) isRevokedOrUnsafe(ctx context.Context, releaseID string) (blo
 	return e.Ledger.IsReleaseRevoked(ctx, releaseID)
 }
 
-// rollbackTargetReleaseIDs (F9, achado Codex [P1] rodadas 6, 7 e 8) identifica, POR UNIT
+// rollbackTargetReleaseIDs (F9, achado Codex [P1] rodadas 6, 7, 8 e 10) identifica, POR UNIT
 // sendo revertida, a release que de fato implantou o digest que `snap` restauraria — nunca
 // assume que "a release do run SUCCEEDED mais recente" cobre TODAS as units: rolloutUnits
 // permite releases que tocam só um SUBCONJUNTO dos workloads (release A só atualiza a API,
 // release B só atualiza o web — revertendo a API depois de uma falha de C restaura o digest
 // de A, nunca de B, mesmo que B seja o SUCCEEDED mais recente no geral). Para cada unit em
 // `units`, percorre o histórico de runs da instalação em ordem DECRESCENTE de CreatedAt (mais
-// recente primeiro) e usa o primeiro run SUCCEEDED, anterior ao run atual, cujo PRÓPRIO
-// manifesto declara essa unit E cujo digest declarado para essa unit BATE com
-// snap.Digests[unit] — achado Codex da rodada 8: "o SUCCEEDED mais recente que tocou esta
+// recente primeiro) e usa o primeiro run SUCCEEDED OU RECOVERY_REQUIRED, anterior ao run
+// atual, cujo PRÓPRIO manifesto declara essa unit E cujo digest declarado para essa unit BATE
+// com snap.Digests[unit] — achado Codex da rodada 8: "o SUCCEEDED mais recente que tocou esta
 // unit" NUNCA é suficiente por si só, porque um RECOVERY_REQUIRED reconhecido fora de banda
 // (AcknowledgeRecovery, ver ledger.go — um operador confirma que investigou e autorizou
 // seguir, nunca que um digest específico ficou rodando) ou uma correção manual direta no host
 // podem deixar rodando um digest que NENHUM run SUCCEEDED jamais registrou como "o atual"
 // para essa unit; sem confirmar o digest, o rollback poderia atribuir a unit à release ERRADA
-// e deixar passar (ou bloquear por engano) uma revogação.
+// e deixar passar (ou bloquear por engano) uma revogação. RECOVERY_REQUIRED entra na busca
+// (achado Codex da rodada 10) porque recover() só alcança esse estado quando `snap != nil`
+// (mutação real já aconteceu) — um run assim pode ter deployado seu próprio digest antes de
+// falhar, e isso nunca é desfeito por AcknowledgeRecovery; excluí-lo da busca fazia uma unit
+// cuja ÚNICA release conhecida estivesse presa em RECOVERY_REQUIRED cair, por engano, no caso
+// de "nenhum histórico" — deixando passar o rollback sem checar revogação. ROLLED_BACK
+// continua excluído: o PRÓPRIO digest desse run foi revertido, nunca é o que está rodando.
 //
-// Uma unit AUSENTE do mapa devolvido (sem erro) é o caso legítimo de NENHUM run SUCCEEDED
-// rastreado por este ledger ter tocado essa unit ainda (ex. a primeira release já instalada
-// por este agente para essa unit, cujo "antes" foi definido fora deste sistema, no
-// provisionamento do host) — não há release_id nenhum para checar contra revogação; o
-// chamador segue sem gate extra para essa unit, exatamente como antes desta checagem existir.
-// Qualquer OUTRA ambiguidade — a unit FOI tocada por histórico conhecido, mas nenhum desses
-// runs tem o digest que `snap` de fato reporta agora — é tratada como um ERRO (fail-closed),
-// nunca como "nada a checar": "não posso confirmar que é seguro reverter", nunca "assumo que
-// está tudo bem". Um erro de verdade na própria leitura (ledger ilegível, manifesto
-// corrompido de um run que EXISTE) é outra coisa do mesmo tipo — o chamador trata ambos como
-// fail-closed para TODO o rollback, nunca só para a unit afetada.
+// Uma unit AUSENTE do mapa devolvido (sem erro) é o caso legítimo de NENHUM run
+// SUCCEEDED/RECOVERY_REQUIRED rastreado por este ledger ter tocado essa unit ainda (ex. a
+// primeira release já instalada por este agente para essa unit, cujo "antes" foi definido
+// fora deste sistema, no provisionamento do host) — não há release_id nenhum para checar
+// contra revogação; o chamador segue sem gate extra para essa unit, exatamente como antes
+// desta checagem existir. Qualquer OUTRA ambiguidade — a unit FOI tocada por histórico
+// conhecido, mas nenhum desses runs tem o digest que `snap` de fato reporta agora — é tratada
+// como um ERRO (fail-closed), nunca como "nada a checar": "não posso confirmar que é seguro
+// reverter", nunca "assumo que está tudo bem". Um erro de verdade na própria leitura (ledger
+// ilegível, manifesto corrompido de um run que EXISTE) é outra coisa do mesmo tipo — o
+// chamador trata ambos como fail-closed para TODO o rollback, nunca só para a unit afetada.
 func (e *Executor) rollbackTargetReleaseIDs(ctx context.Context, run *RunRecord, units []Unit, snap *Snapshot) (map[Unit]string, error) {
 	runs, err := e.Ledger.AllRuns(ctx, run.InstallationID)
 	if err != nil {
@@ -1118,7 +1124,21 @@ func (e *Executor) rollbackTargetReleaseIDs(ctx context.Context, run *RunRecord,
 			break
 		}
 		r := &runs[i]
-		if r.RunID == run.RunID || r.State != domain.StateSucceeded || !r.CreatedAt.Before(run.CreatedAt) {
+		// Achado Codex [P1], F9 (rodada 10): SUCCEEDED não é o único estado em que um run
+		// pode ter deixado um digest NOVO rodando. Um run que atinge RECOVERY_REQUIRED
+		// (nunca ROLLED_BACK — ver recover(): snap==nil sempre resolve para ROLLED_BACK,
+		// então RECOVERY_REQUIRED só é alcançado quando `snap != nil`, ou seja, mutação real
+		// já aconteceu) pode ter deployado seu próprio digest ANTES de falhar — e
+		// AcknowledgeRecovery nunca reverte isso, só desbloqueia novos runs. Excluir
+		// RECOVERY_REQUIRED aqui fazia `everTouched[u]` permanecer false quando a ÚNICA
+		// release que já tocou essa unit estava presa em RECOVERY_REQUIRED — caindo no
+		// "nenhum histórico, bootstrap legítimo" por engano, e deixando o rollback passar
+		// SEM checar a revogação dessa release. ROLLED_BACK continua excluído: o PRÓPRIO
+		// digest desse run foi revertido, nunca é o que está rodando agora.
+		if r.RunID == run.RunID || !r.CreatedAt.Before(run.CreatedAt) {
+			continue
+		}
+		if r.State != domain.StateSucceeded && r.State != domain.StateRecoveryRequired {
 			continue
 		}
 		m, perr := domain.ParseManifest([]byte(r.ManifestJSON))

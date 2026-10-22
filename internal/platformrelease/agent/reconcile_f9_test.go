@@ -664,3 +664,93 @@ func TestExecute_RollbackTarget_NeverSynced_StandaloneAgentStillRollsBack(t *tes
 		t.Fatalf("um agente standalone (nunca sincronizado) nunca deveria ter seu rollback automático bloqueado por frescor — esperava ROLLED_BACK, veio %s", got.State)
 	}
 }
+
+// TestExecute_RollbackTarget_AcknowledgedRecoveryRequired_StillChecksRevocation é a prova
+// central do achado Codex [P1] (rodada 10): rollbackTargetReleaseIDs só considerava runs
+// SUCCEEDED como proveniência — mas release A pode mutar (deployar seu digest) e cair em
+// RECOVERY_REQUIRED (nunca SUCCEEDED) por uma razão TOTALMENTE independente de revogação (ex.
+// database_strategy desconhecido, que recover() sempre trata como rollback automático
+// inseguro). Um operador reconhece a recuperação (AcknowledgeRecovery) para desbloquear novos
+// runs — isso NUNCA reverte o digest de A, que continua rodando. Se A for revogada DEPOIS
+// disso, e uma release E mais nova falhar tentando atualizar a mesma unit, o rollback
+// automático de E precisa recusar — nunca "A nunca sucedeu, então não há nada a checar".
+func TestExecute_RollbackTarget_AcknowledgedRecoveryRequired_StillChecksRevocation(t *testing.T) {
+	ctx := context.Background()
+
+	manifestA := testManifest("") // estratégia desconhecida: isRollbackSafe sempre falso
+	manifestA.ReleaseID = "omnira-A"
+	manifestA.Rollout.Workloads = []domain.BuildUnit{domain.UnitAPI}
+	manifestA.Artifacts = []domain.Artifact{
+		{Unit: domain.UnitAPI, Image: "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("a", 64)},
+	}
+	frA := fakeRunnerForManifest(manifestA)
+	frA.stdoutByFormat["{{.State.Running}}"] = "true|starting" // nunca healthy -> força a falha de A
+
+	compose := &ComposeAdapter{r: frA, Project: "test", OverrideDir: t.TempDir()}
+	exec, ledger, h := testExecutor(t, &fakeMigrateRunner{}, &fakeBackupRunner{}, compose)
+	exec.HealthTimeout = 50 * time.Millisecond
+
+	rawA, err := json.Marshal(manifestA)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestA: %v", err)
+	}
+	runA, err := ledger.CreateRun(ctx, h, "run-A", "idem-A", string(rawA), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-A: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runA.RunID, manifestA); err != nil {
+		t.Fatalf("Execute run-A não deveria retornar erro quando a recuperação em si é bem-sucedida: %v", err)
+	}
+	gotA, err := ledger.GetRun(ctx, runA.RunID)
+	if err != nil {
+		t.Fatalf("GetRun run-A: %v", err)
+	}
+	if gotA.State != domain.StateRecoveryRequired {
+		t.Fatalf("premissa do teste: run-A deveria cair em RECOVERY_REQUIRED (database_strategy desconhecido, nunca rollback automático), veio %s", gotA.State)
+	}
+
+	// Operador investiga e reconhece a recuperação — desbloqueia novos runs, mas NUNCA
+	// reverte o digest de A, que continua rodando.
+	if err := ledger.AcknowledgeRecovery(ctx, h, runA.RunID); err != nil {
+		t.Fatalf("AcknowledgeRecovery: %v", err)
+	}
+
+	// SÓ DEPOIS disso, A é revogada (CVE descoberto depois do fato).
+	if err := ledger.RevokeRelease(ctx, manifestA.ReleaseID, "CVE crítico descoberto depois do reconhecimento de A"); err != nil {
+		t.Fatalf("RevokeRelease: %v", err)
+	}
+
+	manifestE := testManifest("expand_only")
+	manifestE.ReleaseID = "omnira-E"
+	manifestE.Rollout.Workloads = []domain.BuildUnit{domain.UnitAPI}
+	manifestE.Artifacts = []domain.Artifact{
+		{Unit: domain.UnitAPI, Image: "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("e", 64)},
+	}
+	// Reusa frA (SEM alterar seu Config.Image) — o digest "atualmente rodando" continua
+	// sendo o de A, exatamente como a realidade simulada até aqui. Só a falha de saúde do
+	// PRÓPRIO deploy de E precisa ser forçada.
+	wrapped := &rollbackSucceedsRunner{fakeRunner: frA}
+	compose.r = wrapped
+
+	rawE, err := json.Marshal(manifestE)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestE: %v", err)
+	}
+	runE, err := ledger.CreateRun(ctx, h, "run-E", "idem-E", string(rawE), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-E: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runE.RunID, manifestE); err != nil {
+		t.Fatalf("Execute run-E não deveria retornar erro quando a recuperação em si é bem-sucedida: %v", err)
+	}
+	gotE, err := ledger.GetRun(ctx, runE.RunID)
+	if err != nil {
+		t.Fatalf("GetRun run-E: %v", err)
+	}
+	if gotE.State != domain.StateRecoveryRequired {
+		t.Fatalf("rollback automático de volta para A (RECOVERY_REQUIRED reconhecida, depois revogada) nunca deveria completar — esperava RECOVERY_REQUIRED, veio %s", gotE.State)
+	}
+	if wrapped.applyCount >= 2 {
+		t.Errorf("Compose.Rollback nunca deveria ter sido chamado de verdade (reinstalaria o digest revogado de A) — applyCount=%d", wrapped.applyCount)
+	}
+}
