@@ -1901,6 +1901,74 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: 'Invalid/unsigned-shape manifest, or the Idempotency-Key was used with a different manifest' }
+  /platform/releases/retention:
+    get:
+      operationId: listPlatformReleaseRetentionCandidates
+      tags: [PlatformRelease]
+      summary: Report which catalog releases are past their channel's retention window (platform operator)
+      description: |
+        Read-only report (F9, release/policies/channels.yaml retention_days) — never deletes anything.
+        `safe_to_delete` is revalidated from scratch at DELETE time (`/platform/releases/{release_id}`);
+        this report is never trusted as the authority for the delete itself.
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/PlatformReleaseRetentionCandidate' } } } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /platform/releases/{release_id}/revoke:
+    post:
+      operationId: revokePlatformRelease
+      tags: [PlatformRelease]
+      summary: Revoke a release (platform operator) — blocks every future apply, forces R4 on anything already dispatched
+      description: |
+        F9 (ADR-0054 §2.1/§2.2, release/policies/signing.yaml anti_replay.revocation). Append-only fact
+        (platform_release_revocations never supports UPDATE/DELETE) — revoking by mistake is corrected with
+        a new, separately-audited operator decision, never a silent reversal of this row. Mirrored to the
+        Update Agent's local ledger with retry-until-delivered semantics; the agent itself never trusts a
+        revocation older than release/policies/signing.yaml anti_replay.revocation.max_cache_age_seconds
+        without a fresh sync, and refuses to run (fail-closed) until that sync has happened at least once
+        (or the installation is explicitly marked standalone — see OMNIRA_AGENT_STANDALONE).
+        `Idempotency-Key` required: a retry with the same reason replays the original record (200); the
+        same key with a different reason is 422.
+      parameters:
+        - { name: release_id, in: path, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 500 } } }
+      responses:
+        '200': { description: 'Idempotent replay', content: { application/json: { schema: { $ref: '#/components/schemas/PlatformReleaseRevocation' } } } }
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformReleaseRevocation' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'release_id/reason missing, or the Idempotency-Key was used with a different reason' }
+  /platform/releases/{release_id}:
+    delete:
+      operationId: deletePlatformReleaseCatalogEntry
+      tags: [PlatformRelease]
+      summary: Permanently remove a release from the local catalog (platform operator) — garbage collection
+      description: |
+        F9 (release/policies/channels.yaml retention_days). Revalidates everything at deletion time (within
+        retention, revoked, referenced by a run/plan, currently installed, still provided by the local
+        ledger's history) — never trusts a possibly stale `/platform/releases/retention` report. Holds the
+        Update Agent's installation lock for the whole check-then-delete (a unique holder per call, so two
+        concurrent deletes never steal each other's lock) so a run cannot be dispatched for this release
+        between the safety check and the actual DELETE. `Idempotency-Key` required.
+      parameters:
+        - { name: release_id, in: path, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      responses:
+        '200':
+          description: 'deleted=true if this call removed the row; deleted=false if it was already gone (idempotent)'
+          content: { application/json: { schema: { type: object, required: [deleted], properties: { deleted: { type: boolean } } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'Not safe to delete yet (within retention, revoked, referenced, installed, or still provided by the agent ledger), or the installation lock is held by a concurrent GC call' }
   /platform/installation:
     get:
       operationId: getPlatformInstallation
@@ -1936,6 +2004,19 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: 'version missing, or the Idempotency-Key was used with different fields' }
+  /platform/monitoring/status:
+    get:
+      operationId: getPlatformMonitoringStatus
+      tags: [PlatformRelease]
+      summary: Aggregate monitoring signals — agent liveness, backup, version/digest drift, stalled updates, post-release errors (platform operator)
+      description: |
+        F9 (spec "Monitoramento"). Read-only, never mutates anything. Attempts a fresh sync with the local
+        Update Agent ledger before comparing version/digest (same as GetInstallation) — never compares
+        against a value already known to be stale.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformMonitoringStatus' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /platform/backups:
     post:
       operationId: recordPlatformBackupEvidence
@@ -6001,6 +6082,50 @@ components:
         kind: { type: string, enum: [run.locked, checkpoint] }
         detail: { type: object }
         created_at: { type: string, format: date-time }
+    PlatformReleaseRevocation:
+      type: object
+      required: [release_id, revoked_at, reason, revoked_by]
+      properties:
+        release_id: { type: string }
+        revoked_at: { type: string, format: date-time }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        revoked_by: { type: string, format: uuid }
+    PlatformReleaseRetentionCandidate:
+      type: object
+      required: [release_id, channel, ingested_at, age_days, retention_days, past_retention, safe_to_delete]
+      properties:
+        release_id: { type: string }
+        channel: { type: string }
+        ingested_at: { type: string, format: date-time }
+        age_days: { type: integer, description: "dias desde ingested_at, computado no momento da chamada" }
+        retention_days: { type: integer, description: "release/policies/channels.yaml retention_days para este canal" }
+        past_retention: { type: boolean }
+        safe_to_delete: { type: boolean, description: "past_retention E nenhum bloqueio real (revogada, referenciada por run/plan, instalada, protegida pelo ledger local) — mesma checagem revalidada no momento do DELETE, nunca confiável sozinho" }
+        blocking_reasons: { type: array, items: { type: string } }
+    PlatformMonitoringStatus:
+      type: object
+      required: [agent_heartbeat_seen, agent_stale, backup_evidence_present, backup_evidence_verified, backup_evidence_stale, version_divergence, observed_digests_stale, unresolved_recovery_required]
+      description: Os cinco sinais de monitoramento do F9 — agente, backup, versão/digest divergente, update estagnado, erros após release.
+      properties:
+        agent_heartbeat_seen: { type: boolean }
+        agent_last_heartbeat: { type: string, format: date-time }
+        agent_holder: { type: string }
+        agent_stale: { type: boolean }
+        backup_evidence_present: { type: boolean }
+        backup_evidence_age_hours: { type: number }
+        backup_evidence_verified: { type: boolean }
+        backup_evidence_stale: { type: boolean }
+        ledger_version: { type: string }
+        ledger_release_id: { type: string }
+        installation_version: { type: string }
+        installation_release_id: { type: string }
+        version_divergence: { type: boolean }
+        observed_digests_at: { type: string, format: date-time }
+        observed_digests_stale: { type: boolean }
+        stalled_run_id: { type: string }
+        stalled_run_state: { type: string }
+        stalled_since: { type: string, format: date-time }
+        unresolved_recovery_required: { type: boolean }
     HubCompany:
       type: object
       required: [id, legal_name, trade_name, display_name, status, contract_status, capabilities, channels, integrations, open_conversations, agents, created_at]
