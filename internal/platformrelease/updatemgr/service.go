@@ -682,88 +682,106 @@ func (s *Service) DeleteReleaseCatalogEntry(ctx context.Context, operator uuid.U
 	if err := s.refreshPendingRun(ctx, operator); err != nil {
 		return false, err
 	}
-	// Achado Codex [P2] (rodada 6 desta fatia, estendido na rodada 7): abre o ledger e
-	// adquire agent_lock AQUI — ANTES de s.tx, nunca dentro do callback — e só libera
-	// DEPOIS que s.tx retorna (ou seja, depois que WithTenantSession já deu COMMIT ou
-	// ROLLBACK na transação Postgres). Um defer registrado DENTRO do callback (achado da
-	// rodada 6, agora corrigido) libera o lock no instante em que o callback RETORNA, que é
-	// ANTES do commit real — deixando uma janela estreita onde `updatectl start` (que nunca
-	// passa pelos advisory locks do Postgres abaixo) podia adquirir o lock já livre e criar
-	// um run para releaseID enquanto o DELETE ainda não era durável. Detém o MESMO lock que
-	// o daemon/updatectl usam: se um deploy real está em andamento (holder com heartbeat
-	// válido), AcquireLock recusa aqui, e GC corretamente não pode proceder até ele terminar.
+	// Achado Codex [P2] (rodada 6, estendido nas rodadas 7 e 8): abre o ledger e detém
+	// agent_lock durante TODA a checagem de proveniência E a transação Postgres (nunca só
+	// um AcquireLock/ReleaseLock manual, que não sobrevive a dois problemas reais):
+	//
+	// 1. (rodada 7) liberar o lock no instante em que o callback de s.tx RETORNA, em vez de
+	//    depois do COMMIT real, deixava uma janela onde `updatectl start` podia adquirir o
+	//    lock já livre e criar um run antes do DELETE ser durável.
+	// 2. (rodada 8) um AcquireLock sem heartbeat nunca renova o lease — se a própria
+	//    transação Postgres demorar mais que s.lease (ex. esperando um advisory lock sob
+	//    contenção), o lock expirava NATURALMENTE e o daemon/updatectl podiam assumi-lo no
+	//    meio da checagem/exclusão; e usar s.holder (compartilhado por TODA chamada desta
+	//    API) significava que uma SEGUNDA chamada de GC concorrente — AcquireLock aceita
+	//    reaquisição do MESMO holder e avança o fencing — podia invalidar o handle da
+	//    PRIMEIRA e liberar o lock enquanto a transação dela ainda rodava.
+	//
+	// Executor.WithLockAndHeartbeat (já usado por Reconcile/`updatectl rollback` para o
+	// MESMO problema de operações potencialmente longas) resolve os dois: heartbeat em
+	// background renova o lease, e cancela execCtx (abortando a transação Postgres junto)
+	// no instante em que o fencing é perdido. Um holder ÚNICO por chamada (nunca s.holder
+	// compartilhado) garante que duas chamadas de GC concorrentes nunca se enxerguem como
+	// "o mesmo holder reconectando" — a segunda recebe ErrLockHeld de verdade, serializando
+	// as duas, em vez de roubar o lock uma da outra.
 	ledger, lerr := agent.OpenLedger(s.ledgerPath)
 	if lerr != nil {
 		return false, fmt.Errorf("verificar o ledger local antes de permitir GC: %w", lerr)
 	}
 	defer ledger.Close()
-	h, lockErr := ledger.AcquireLock(ctx, s.installationID, s.holder, s.lease)
-	if lockErr != nil {
-		return false, fmt.Errorf("adquirir o lock do ledger local antes de permitir GC: %w", lockErr)
-	}
-	defer ledger.ReleaseLock(context.Background(), h)
-	protected, perr := protectedReleaseIDsFromOpenLedger(ctx, ledger, s.installationID)
-	if perr != nil {
-		return false, perr
-	}
-	err = s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
-		if err := authorize(c, q, operator); err != nil {
-			return err
+	gcHolder := s.holder + ":gc:" + uuid.NewString()
+	lockedExec := &agent.Executor{Ledger: ledger}
+	err = lockedExec.WithLockAndHeartbeat(ctx, s.installationID, gcHolder, s.lease, func(execCtx context.Context, _ *agent.LockHandle) error {
+		protected, perr := protectedReleaseIDsFromOpenLedger(execCtx, ledger, s.installationID)
+		if perr != nil {
+			return perr
 		}
-		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, operator.String()+"/"+idempotencyKey); err != nil {
-			return err
-		}
-		// Achado Codex [P1]: o MESMO lock que SetInstallationVersion/refreshPendingRun usam
-		// para serializar escritas em platform_installations — sem isto, uma chamada
-		// concorrente podia marcar ESTA release como current_release_id depois da checagem
-		// de releaseSafeToDelete abaixo, mas antes do DELETE comitar, deixando a instalação
-		// apontar para uma release que já não existe mais no catálogo.
-		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "platform-installation-runs:"+s.installationID); err != nil {
-			return err
-		}
-		var prevHash, prevReleaseID string
-		rerr := q.QueryRow(c, `SELECT request_hash, release_id FROM platform_release_gc_requests WHERE operator_id = $1 AND idempotency_key = $2`, operator, idempotencyKey).
-			Scan(&prevHash, &prevReleaseID)
-		switch {
-		case rerr == nil:
-			if prevHash != hash {
-				return ErrKeyMismatch
-			}
-			deleted = true
-			return nil
-		case !errors.Is(rerr, pgx.ErrNoRows):
-			return rerr
-		}
-		var ingestedAt time.Time
-		var channel string
-		if gerr := q.QueryRow(c, `SELECT channel, ingested_at FROM platform_releases WHERE release_id = $1`, releaseID).Scan(&channel, &ingestedAt); gerr != nil {
-			if errors.Is(gerr, pgx.ErrNoRows) {
-				return invalid("release_id %q não existe no catálogo", releaseID)
-			}
-			return gerr
-		}
-		pastRetention := int(time.Since(ingestedAt).Hours()/24) >= channelRetentionDays[domain.Channel(channel)]
-		safe, reasons, serr := releaseSafeToDelete(c, q, releaseID, pastRetention, protected[releaseID])
-		if serr != nil {
-			return serr
-		}
-		if !safe {
-			return invalid("release %q não pode ser removida do catálogo agora: %s", releaseID, strings.Join(reasons, "; "))
-		}
-		if _, err := q.Exec(c, `DELETE FROM platform_release_ingest_requests WHERE release_id = $1`, releaseID); err != nil {
-			return err
-		}
-		if _, err := q.Exec(c, `DELETE FROM platform_releases WHERE release_id = $1`, releaseID); err != nil {
-			return err
-		}
-		if _, err := q.Exec(c, `INSERT INTO platform_release_gc_requests (operator_id, idempotency_key, request_hash, release_id) VALUES ($1,$2,$3,$4)`,
-			operator, idempotencyKey, hash, releaseID); err != nil {
-			return err
-		}
-		deleted = true
-		return audit(c, q, operator, "platform.release.gc_deleted", map[string]any{"release_id": releaseID, "channel": channel})
+		return s.tx(execCtx, func(c context.Context, q platformdb.Querier) error {
+			return s.deleteReleaseCatalogEntryTx(c, q, operator, idempotencyKey, releaseID, hash, protected, &deleted)
+		})
 	})
 	return deleted, err
+}
+
+// deleteReleaseCatalogEntryTx é o corpo da transação Postgres de DeleteReleaseCatalogEntry,
+// extraído para rodar dentro do execCtx cancelável de WithLockAndHeartbeat (achado Codex [P2]
+// rodada 8) — nunca o ctx original, que sobreviveria a uma perda de fencing.
+func (s *Service) deleteReleaseCatalogEntryTx(c context.Context, q platformdb.Querier, operator uuid.UUID, idempotencyKey, releaseID, hash string, protected map[string]bool, deleted *bool) error {
+	if err := authorize(c, q, operator); err != nil {
+		return err
+	}
+	if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, operator.String()+"/"+idempotencyKey); err != nil {
+		return err
+	}
+	// Achado Codex [P1]: o MESMO lock que SetInstallationVersion/refreshPendingRun usam
+	// para serializar escritas em platform_installations — sem isto, uma chamada
+	// concorrente podia marcar ESTA release como current_release_id depois da checagem
+	// de releaseSafeToDelete abaixo, mas antes do DELETE comitar, deixando a instalação
+	// apontar para uma release que já não existe mais no catálogo.
+	if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "platform-installation-runs:"+s.installationID); err != nil {
+		return err
+	}
+	var prevHash, prevReleaseID string
+	rerr := q.QueryRow(c, `SELECT request_hash, release_id FROM platform_release_gc_requests WHERE operator_id = $1 AND idempotency_key = $2`, operator, idempotencyKey).
+		Scan(&prevHash, &prevReleaseID)
+	switch {
+	case rerr == nil:
+		if prevHash != hash {
+			return ErrKeyMismatch
+		}
+		*deleted = true
+		return nil
+	case !errors.Is(rerr, pgx.ErrNoRows):
+		return rerr
+	}
+	var ingestedAt time.Time
+	var channel string
+	if gerr := q.QueryRow(c, `SELECT channel, ingested_at FROM platform_releases WHERE release_id = $1`, releaseID).Scan(&channel, &ingestedAt); gerr != nil {
+		if errors.Is(gerr, pgx.ErrNoRows) {
+			return invalid("release_id %q não existe no catálogo", releaseID)
+		}
+		return gerr
+	}
+	pastRetention := int(time.Since(ingestedAt).Hours()/24) >= channelRetentionDays[domain.Channel(channel)]
+	safe, reasons, serr := releaseSafeToDelete(c, q, releaseID, pastRetention, protected[releaseID])
+	if serr != nil {
+		return serr
+	}
+	if !safe {
+		return invalid("release %q não pode ser removida do catálogo agora: %s", releaseID, strings.Join(reasons, "; "))
+	}
+	if _, err := q.Exec(c, `DELETE FROM platform_release_ingest_requests WHERE release_id = $1`, releaseID); err != nil {
+		return err
+	}
+	if _, err := q.Exec(c, `DELETE FROM platform_releases WHERE release_id = $1`, releaseID); err != nil {
+		return err
+	}
+	if _, err := q.Exec(c, `INSERT INTO platform_release_gc_requests (operator_id, idempotency_key, request_hash, release_id) VALUES ($1,$2,$3,$4)`,
+		operator, idempotencyKey, hash, releaseID); err != nil {
+		return err
+	}
+	*deleted = true
+	return audit(c, q, operator, "platform.release.gc_deleted", map[string]any{"release_id": releaseID, "channel": channel})
 }
 
 // --- Installation (singleton — ADR-0054 §2.4: "hoje: uma só") ---
