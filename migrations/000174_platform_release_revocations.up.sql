@@ -23,11 +23,28 @@ CREATE TABLE platform_release_revocation_requests (
   PRIMARY KEY (operator_id, idempotency_key)
 );
 
+-- Achado Codex [P1]: Service.RevokeRelease grava no Postgres (fato imutável, abaixo) e DEPOIS
+-- espelha no ledger local do agente (nenhuma transação distribuída real entre os dois) — se o
+-- processo da API morrer/cancelar exatamente entre as duas escritas, a revogação fica
+-- PERMANENTEMENTE registrada no Postgres mas AUSENTE do ledger que Executor.Execute de fato
+-- consulta, deixando um run já despachado instalar a release revogada indefinidamente até um
+-- operador notar e repetir manualmente a chamada. Esta tabela de ENTREGA (nunca a tabela
+-- append-only da revogação em si) é atualizável de propósito — rastreia só "este espelho já
+-- chegou ao ledger local?", nunca o fato da revogação. refreshPendingRun (chamada em quase
+-- toda operação real desta API — CreatePlan, StartRun, GetInstallation, ListRuns) tenta
+-- entregar de novo QUALQUER revogação ainda marcada delivered_to_agent=false, dando entrega
+-- confiável e eventual sem precisar de um worker de fundo separado.
+CREATE TABLE platform_release_revocation_delivery (
+  release_id         TEXT PRIMARY KEY REFERENCES platform_release_revocations(release_id),
+  delivered_to_agent BOOLEAN NOT NULL DEFAULT false,
+  delivered_at       TIMESTAMPTZ
+);
+
 DO $$
 DECLARE
   t TEXT;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['platform_release_revocations', 'platform_release_revocation_requests']
+  FOREACH t IN ARRAY ARRAY['platform_release_revocations', 'platform_release_revocation_requests', 'platform_release_revocation_delivery']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);

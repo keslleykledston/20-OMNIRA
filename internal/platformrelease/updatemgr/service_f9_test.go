@@ -11,10 +11,12 @@ package updatemgr_test
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/omnira/omnira/internal/platformrelease/agent"
 	"github.com/omnira/omnira/internal/platformrelease/domain"
 	"github.com/omnira/omnira/internal/platformrelease/updatemgr"
 )
@@ -298,5 +300,70 @@ func TestUpdateMgr_StableChannel_StartRun_RevalidatesBackupEvidenceFreshness(t *
 	}
 	if after := w.count(`SELECT count(*) FROM platform_update_runs WHERE release_id = $1`, "omnira-9.9.120"); after != before {
 		t.Errorf("um run foi criado a partir de uma release stable sem evidência de backup fresca: %d -> %d", before, after)
+	}
+}
+
+// TestUpdateMgr_RevokeRelease_RedeliversToLedgerAfterInitialFailure é a prova central do
+// achado Codex [P1] (rodada 3): se a entrega SÍNCRONA ao ledger local falha (aqui, simulada
+// com um ledgerPath inválido — o equivalente real seria um crash/timeout exatamente entre o
+// commit do Postgres e essa escrita), a revogação precisa ficar durável no Postgres
+// (delivered_to_agent=false) e ser reentregue automaticamente numa operação POSTERIOR, nunca
+// exigir que o operador repita a chamada manualmente.
+func TestUpdateMgr_RevokeRelease_RedeliversToLedgerAfterInitialFailure(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+
+	// Primeiro serviço: ledgerPath INVÁLIDO (diretório inexistente) — a entrega síncrona a
+	// este ledger FALHA de propósito, simulando o crash/timeout real que a rodada 3 apontou.
+	badLedgerPath := filepath.Join(t.TempDir(), "subdir-nao-existe", "ledger.db")
+	svcBad := updatemgr.New(w.app, badLedgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	w.exec(`UPDATE platform_installations SET current_version = '9.0.0'`)
+	m := manifestJSONChannel(t, "omnira-9.9.130", domain.ChannelCandidate, []string{"9.0.0"})
+	if _, _, err := svcBad.IngestRelease(w.ctx, op, "ingest-key-f9-0030", m); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svcBad.RevokeRelease(w.ctx, op, "revoke-key-f9-0030", "omnira-9.9.130", "teste de entrega confiável"); err == nil {
+		t.Fatal("esperava erro na entrega síncrona com ledgerPath inválido, mas não houve")
+	}
+	// A revogação REAL já está no Postgres, só a entrega ao ledger falhou — nunca "a
+	// aparência de revogado sem a revogação real ter acontecido".
+	if n := w.count(`SELECT count(*) FROM platform_release_revocations WHERE release_id = $1`, "omnira-9.9.130"); n != 1 {
+		t.Fatalf("a revogação deveria estar persistida no Postgres mesmo com a entrega ao ledger falha, achei %d", n)
+	}
+	var delivered bool
+	if err := w.owner.QueryRow(w.ctx, `SELECT delivered_to_agent FROM platform_release_revocation_delivery WHERE release_id = $1`, "omnira-9.9.130").Scan(&delivered); err != nil {
+		t.Fatal(err)
+	}
+	if delivered {
+		t.Fatal("delivered_to_agent deveria ser false depois de uma entrega síncrona que falhou de propósito")
+	}
+
+	// Segundo serviço: MESMO Postgres, mas um ledgerPath VÁLIDO (simula o ambiente real
+	// voltando a funcionar). Qualquer operação que chame refreshPendingRun deve reentregar a
+	// revogação pendente automaticamente — aqui, GetInstallation.
+	goodLedgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svcGood := updatemgr.New(w.app, goodLedgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+	if _, err := svcGood.GetInstallation(w.ctx, op); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.owner.QueryRow(w.ctx, `SELECT delivered_to_agent FROM platform_release_revocation_delivery WHERE release_id = $1`, "omnira-9.9.130").Scan(&delivered); err != nil {
+		t.Fatal(err)
+	}
+	if !delivered {
+		t.Error("delivered_to_agent deveria ser true depois de uma operação real (GetInstallation) reentregar a revogação pendente")
+	}
+	ledger, err := agent.OpenLedger(goodLedgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ledger.Close()
+	revoked, _, err := ledger.IsReleaseRevoked(w.ctx, "omnira-9.9.130")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !revoked {
+		t.Error("o ledger local deveria ter recebido a revogação reentregue — o agente real a veria aqui")
 	}
 }
