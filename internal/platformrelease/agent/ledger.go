@@ -146,21 +146,15 @@ func OpenLedger(path string) (*Ledger, error) {
 		db.Close()
 		return nil, fmt.Errorf("agent: migrar schema do ledger: %w", err)
 	}
-	// F9, achado Codex [P1] rodada 7: só define o relógio de revocation_sync se a linha AINDA
-	// NÃO existir (ON CONFLICT DO NOTHING) — OpenLedger é chamado com MUITA frequência em
-	// produção (o processo da API abre/fecha o ledger por chamada, ver
-	// updatemgr.deliverRevocationToLedger/redeliverPendingRevocations), e "resetar" o relógio
-	// a cada abertura tornaria a checagem de frescor inútil (sempre pareceria recém-sincronizado
-	// mesmo que o Postgres nunca tenha sido consultado de fato). Só a PRIMEIRA abertura de um
-	// arquivo .db novo grava este baseline — correto, porque um ledger recém-criado não tem
-	// nenhuma revogação para ter perdido ainda.
-	if err := retryOnBusy(func() error {
-		_, err := db.Exec(`INSERT INTO revocation_sync (id, synced_at) VALUES (1, ?) ON CONFLICT(id) DO NOTHING`, time.Now().UTC().Format(time.RFC3339Nano))
-		return err
-	}); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("agent: inicializar relógio de sincronização de revogação: %w", err)
-	}
+	// F9, achado Codex [P1] rodada 9: deliberadamente NÃO grava nenhum baseline em
+	// revocation_sync aqui. A rodada 7 inicializava com "agora" na primeira abertura — mas
+	// isso certificava como "fresco" um ledger que nunca de fato consultou o Postgres: um
+	// ledger pré-F9 reaberto pela primeira vez depois de um upgrade, ou um ledger novo numa
+	// instalação onde o Postgres já tinha revogações, passava os primeiros 300s "confiável"
+	// sem nenhuma sincronização real ter acontecido. Ver Ledger.RevocationSyncFresh — nenhuma
+	// linha é tratado como "nunca sincronizado" (gate não se aplica, nunca "fresco por
+	// decreto"), e só updatemgr.MarkRevocationSynced (depois de confirmar com sucesso o
+	// estado do Postgres) grava a primeira linha de verdade.
 	return &Ledger{db: db}, nil
 }
 
@@ -629,11 +623,23 @@ func (l *Ledger) RevocationSyncFresh(ctx context.Context, maxAge time.Duration) 
 	var raw string
 	err = l.db.QueryRowContext(ctx, `SELECT synced_at FROM revocation_sync WHERE id = 1`).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		// OpenLedger sempre grava esta linha na primeira abertura — chegar aqui sem ela
-		// significa um ledger aberto por um caminho que não passou por OpenLedger (erro de
-		// uso interno deste pacote, nunca um estado real de produção). Fail-closed mesmo
-		// assim: nunca presumir frescor sem a linha existir.
-		return false, time.Time{}, nil
+		// F9, achado Codex [P1] rodadas 7 e 9: NENHUMA linha significa "esta instalação
+		// nunca teve uma sincronização de verdade com o Postgres" — nunca "obsoleta" (que
+		// implicaria já ter tido uma referência confiável e tê-la perdido). Duas situações
+		// legítimas caem aqui: (a) a janela estreita entre um ledger novo/recém-upgradado e
+		// a primeira sincronização real (updatemgr.reconcileRevocationsToLedger ainda não
+		// rodou nenhuma vez); (b) uma instalação standalone — ADR-0054, OMNIRA_PLATFORM_
+		// RELEASE_API_ENABLED=false por padrão — onde NENHUM processo jamais chama
+		// MarkRevocationSynced, e nunca vai. Bloquear a operação normal do agente/updatectl
+		// (incluindo 'updatectl rollback', desenhado para funcionar SEM Postgres) só porque
+		// nenhuma sincronização aconteceu ainda tornaria o agente permanentemente inoperável
+		// nesse modo suportado — contrário à independência do agente em relação ao Postgres
+		// que é o ponto central deste pacote (ver comentário no topo do arquivo). "Nunca
+		// sincronizado" não é um sinal de segurança (não é uma revogação conhecida sendo
+		// escondida), é ausência de uma fonte de verdade — tratado como fresco: o chamador
+		// segue com a checagem normal de IsReleaseRevoked, que ainda bloqueia corretamente
+		// qualquer revogação que JÁ tenha sido entregue a este ledger.
+		return true, time.Time{}, nil
 	}
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("agent: ler sincronização de revogação: %w", err)

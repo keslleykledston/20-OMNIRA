@@ -149,8 +149,23 @@ func (s *Service) WithVerifier(v SignatureVerifier) *Service { s.verifier = v; r
 func (s *Service) StartRevocationDeliveryLoop(ctx context.Context, interval time.Duration) (stop func()) {
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
+	syncOnce := func() {
+		err := s.tx(loopCtx, func(c context.Context, q platformdb.Querier) error {
+			return reconcileRevocationsToLedger(c, q, s.ledgerPath)
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("updatemgr: StartRevocationDeliveryLoop: %v", err)
+		}
+	}
 	go func() {
 		defer close(done)
+		// Achado Codex [P1], F9 (rodada 9): time.NewTicker só dispara DEPOIS do primeiro
+		// `interval` — sem esta chamada imediata, um ledger recém-criado ou recém-upgradado
+		// (Ledger.RevocationSyncFresh sem nenhuma linha ainda) ficaria até `interval`
+		// segundos antes da primeira sincronização de verdade acontecer, mesmo com a API já
+		// rodando. Sincronizar assim que o laço inicia (ANTES do primeiro tick) encurta essa
+		// janela ao mínimo operacionalmente possível quando a API está de fato habilitada.
+		syncOnce()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -158,12 +173,7 @@ func (s *Service) StartRevocationDeliveryLoop(ctx context.Context, interval time
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
-				err := s.tx(loopCtx, func(c context.Context, q platformdb.Querier) error {
-					return reconcileRevocationsToLedger(c, q, s.ledgerPath)
-				})
-				if err != nil && !errors.Is(err, context.Canceled) {
-					log.Printf("updatemgr: StartRevocationDeliveryLoop: %v", err)
-				}
+				syncOnce()
 			}
 		}
 	}()

@@ -2,10 +2,16 @@ package agent
 
 // F9 (release/policies/signing.yaml "anti_replay.revocation.max_cache_age_seconds"): prova
 // direta de Ledger.RevocationSyncFresh/MarkRevocationSynced — o relógio que isRevokedOrUnsafe
-// (reconcile.go) consulta antes de confiar em "não revogada". Um ledger recém-criado começa
-// fresco (nada a perder ainda); backdatar o relógio manualmente (simulando a API inteira fora
-// do ar por mais tempo do que qualquer retry individual cobre) o torna obsoleto; marcar
-// synced de novo o torna fresco outra vez.
+// (reconcile.go) consulta antes de confiar em "não revogada".
+//
+// Achado Codex [P1] (rodada 9): um ledger SEM NENHUMA sincronização registrada (nenhuma linha
+// em revocation_sync) nunca é tratado como "obsoleto" — é o caso legítimo de uma instalação
+// standalone (OMNIRA_PLATFORM_RELEASE_API_ENABLED=false por padrão, ADR-0054) onde NENHUM
+// processo jamais chama MarkRevocationSynced, e nunca vai; bloquear a operação normal do
+// agente/updatectl (incluindo 'updatectl rollback', desenhado para funcionar SEM Postgres)
+// nesse modo suportado tornaria o agente permanentemente inoperável. Só depois que uma
+// sincronização de VERDADE aconteceu (MarkRevocationSynced chamado ao menos uma vez) é que o
+// relógio passa a poder envelhecer e, se ficar velho demais, bloquear.
 
 import (
 	"context"
@@ -14,19 +20,23 @@ import (
 	"time"
 )
 
-// backdateRevocationSync simula um relógio de sincronização antigo — o equivalente real
-// seria o processo da API (updatemgr) ter ficado fora do ar, ou nunca ter conseguido entregar
-// uma revogação pendente, por mais tempo que maxRevocationSyncAge.
+// backdateRevocationSync simula um relógio de sincronização antigo — o equivalente real seria
+// o processo da API (updatemgr) ter ficado fora do ar, ou nunca ter conseguido entregar uma
+// revogação pendente, por mais tempo que maxRevocationSyncAge, DEPOIS de já ter sincronizado
+// ao menos uma vez antes. Upsert deliberado (nunca um UPDATE simples): funciona tanto para
+// backdatar um relógio já existente quanto para criar um diretamente num estado "antigo", sem
+// depender de uma inicialização automática que este pacote não faz mais (achado rodada 9).
 func backdateRevocationSync(t *testing.T, ledger *Ledger, age time.Duration) {
 	t.Helper()
-	_, err := ledger.db.Exec(`UPDATE revocation_sync SET synced_at = ? WHERE id = 1`,
+	_, err := ledger.db.Exec(
+		`INSERT INTO revocation_sync (id, synced_at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET synced_at = excluded.synced_at`,
 		time.Now().UTC().Add(-age).Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatalf("backdateRevocationSync: %v", err)
 	}
 }
 
-func TestLedger_RevocationSyncFresh_LifecycleAcrossCreateBackdateMark(t *testing.T) {
+func TestLedger_RevocationSyncFresh_NeverSynced_TreatedAsFreshNeverAsStale(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "ledger.db")
 	ledger, err := OpenLedger(path)
@@ -35,14 +45,39 @@ func TestLedger_RevocationSyncFresh_LifecycleAcrossCreateBackdateMark(t *testing
 	}
 	defer ledger.Close()
 
-	// Um ledger recém-criado começa fresco — não há nenhuma revogação para ter perdido
-	// ainda, bloquear a própria primeira execução seria desproporcional.
-	fresh, _, err := ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	// Nenhuma sincronização aconteceu ainda (nem MarkRevocationSynced, nem backdate) — o
+	// caso real de uma instalação standalone, ou da janela antes da primeira sincronização.
+	fresh, lastSync, err := ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
 	if err != nil {
-		t.Fatalf("RevocationSyncFresh (recém-criado): %v", err)
+		t.Fatalf("RevocationSyncFresh (nunca sincronizado): %v", err)
 	}
 	if !fresh {
-		t.Error("um ledger recém-criado deveria começar com a sincronização de revogação fresca")
+		t.Error("um ledger que NUNCA sincronizou deveria ser tratado como fresco (gate não se aplica), nunca como obsoleto")
+	}
+	if !lastSync.IsZero() {
+		t.Errorf("lastSync deveria ser zero quando nunca houve sincronização, veio %s", lastSync)
+	}
+}
+
+func TestLedger_RevocationSyncFresh_LifecycleAcrossMarkBackdateMark(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ledger.db")
+	ledger, err := OpenLedger(path)
+	if err != nil {
+		t.Fatalf("OpenLedger: %v", err)
+	}
+	defer ledger.Close()
+
+	// Primeira sincronização de verdade.
+	if err := ledger.MarkRevocationSynced(ctx); err != nil {
+		t.Fatalf("MarkRevocationSynced: %v", err)
+	}
+	fresh, _, err := ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	if err != nil {
+		t.Fatalf("RevocationSyncFresh (recém-sincronizado): %v", err)
+	}
+	if !fresh {
+		t.Error("imediatamente depois de MarkRevocationSynced, o relógio deveria estar fresco")
 	}
 
 	backdateRevocationSync(t, ledger, maxRevocationSyncAge+time.Minute)
@@ -51,30 +86,35 @@ func TestLedger_RevocationSyncFresh_LifecycleAcrossCreateBackdateMark(t *testing
 		t.Fatalf("RevocationSyncFresh (obsoleto): %v", err)
 	}
 	if fresh {
-		t.Error("um relógio mais antigo que maxRevocationSyncAge nunca deveria ser reportado como fresco")
+		t.Error("um relógio mais antigo que maxRevocationSyncAge, depois de JÁ ter sincronizado antes, nunca deveria ser reportado como fresco")
 	}
 	if time.Since(lastSync) < maxRevocationSyncAge {
 		t.Errorf("lastSync deveria refletir o backdate aplicado, veio %s (idade real %s)", lastSync, time.Since(lastSync))
 	}
 
 	if err := ledger.MarkRevocationSynced(ctx); err != nil {
-		t.Fatalf("MarkRevocationSynced: %v", err)
+		t.Fatalf("MarkRevocationSynced (segunda vez): %v", err)
 	}
 	fresh, _, err = ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
 	if err != nil {
-		t.Fatalf("RevocationSyncFresh (depois de MarkRevocationSynced): %v", err)
+		t.Fatalf("RevocationSyncFresh (depois de ressincronizar): %v", err)
 	}
 	if !fresh {
-		t.Error("depois de MarkRevocationSynced, o relógio deveria estar fresco de novo")
+		t.Error("depois de MarkRevocationSynced de novo, o relógio deveria estar fresco outra vez")
 	}
 }
 
-func TestLedger_RevocationSyncFresh_ReopeningExistingFileNeverResetsTheClock(t *testing.T) {
+func TestLedger_RevocationSyncFresh_ReopeningExistingFileNeverResetsAnAlreadySyncedClock(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "ledger.db")
 	ledger, err := OpenLedger(path)
 	if err != nil {
 		t.Fatalf("OpenLedger (primeira abertura): %v", err)
+	}
+	// Precisa ter sincronizado ANTES de backdatar — achado rodada 9: este pacote não grava
+	// mais nenhum baseline automático na criação do arquivo.
+	if err := ledger.MarkRevocationSynced(ctx); err != nil {
+		t.Fatalf("MarkRevocationSynced: %v", err)
 	}
 	backdateRevocationSync(t, ledger, maxRevocationSyncAge+time.Minute)
 	ledger.Close()
@@ -83,7 +123,7 @@ func TestLedger_RevocationSyncFresh_ReopeningExistingFileNeverResetsTheClock(t *
 	// produção (o processo da API abre/fecha o ledger por chamada) — se cada abertura
 	// "resetasse" o relógio para agora, a checagem de frescor seria inútil (sempre pareceria
 	// recém-sincronizado mesmo que o Postgres nunca tenha sido consultado de fato). Reabrir
-	// o MESMO arquivo nunca deve apagar um backdate já gravado.
+	// o MESMO arquivo nunca deve apagar um relógio JÁ sincronizado antes, mesmo obsoleto.
 	ledger2, err := OpenLedger(path)
 	if err != nil {
 		t.Fatalf("OpenLedger (reabertura): %v", err)
@@ -94,6 +134,6 @@ func TestLedger_RevocationSyncFresh_ReopeningExistingFileNeverResetsTheClock(t *
 		t.Fatalf("RevocationSyncFresh: %v", err)
 	}
 	if fresh {
-		t.Error("reabrir um ledger EXISTENTE nunca deveria resetar o relógio de sincronização de revogação")
+		t.Error("reabrir um ledger com um relógio JÁ sincronizado (mesmo obsoleto) nunca deveria resetá-lo para fresco")
 	}
 }

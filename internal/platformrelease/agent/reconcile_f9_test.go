@@ -621,3 +621,46 @@ func TestExecute_RollbackTarget_SnapshotDigestNotTrackedByAnySucceededRun_FailsC
 		t.Errorf("Compose.Rollback nunca deveria ter sido chamado de verdade com proveniência ambígua — applyCount=%d", wrapped.applyCount)
 	}
 }
+
+// TestExecute_RollbackTarget_NeverSynced_StandaloneAgentStillRollsBack é a prova central do
+// achado Codex [P1] (rodada 9): com OMNIRA_PLATFORM_RELEASE_API_ENABLED=false (o default,
+// ADR-0054) nenhum processo jamais chama Ledger.MarkRevocationSynced — "nunca sincronizado"
+// precisa continuar sendo tratado como fresco (gate não se aplica), nunca como obsoleto, ou
+// um rollback automático comum (o mesmo cenário de
+// TestExecute_FailureWithCompatibleStrategy_RollsBackCode) ficaria permanentemente bloqueado
+// cinco minutos depois da criação do ledger — inclusive via 'updatectl rollback', desenhado
+// para funcionar explicitamente SEM Postgres.
+func TestExecute_RollbackTarget_NeverSynced_StandaloneAgentStillRollsBack(t *testing.T) {
+	ctx := context.Background()
+	previousDigest := "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("9", 64)
+	fr := &rollbackSucceedsRunner{fakeRunner: &fakeRunner{
+		stdout:         map[string]string{"docker ps": "container-123"},
+		stdoutByFormat: map[string]string{"{{.Config.Image}}": previousDigest},
+	}}
+	compose := &ComposeAdapter{r: fr, Project: "test", OverrideDir: t.TempDir()}
+	exec, ledger, h := testExecutor(t, &fakeMigrateRunner{}, &fakeBackupRunner{}, compose)
+	exec.HealthTimeout = 50 * time.Millisecond
+
+	// Confirma a premissa do teste: este ledger NUNCA sincronizou (nem MarkRevocationSynced,
+	// nem qualquer backdate) — exatamente o estado real de uma instalação standalone.
+	fresh, _, err := ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	if err != nil || !fresh {
+		t.Fatalf("premissa do teste: ledger nunca sincronizado deveria ser fresco, fresh=%v err=%v", fresh, err)
+	}
+
+	manifest := testManifest("expand_only")
+	run, err := ledger.CreateRun(ctx, h, "run-1", "idem-1", "{}", domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := exec.Execute(ctx, h, run.RunID, manifest); err != nil {
+		t.Fatalf("Execute não deveria retornar erro quando a recuperação em si é bem-sucedida: %v", err)
+	}
+	got, err := ledger.GetRun(ctx, run.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.State != domain.StateRolledBack {
+		t.Fatalf("um agente standalone (nunca sincronizado) nunca deveria ter seu rollback automático bloqueado por frescor — esperava ROLLED_BACK, veio %s", got.State)
+	}
+}
