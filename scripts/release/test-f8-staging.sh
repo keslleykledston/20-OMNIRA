@@ -65,6 +65,16 @@ cleanup() {
   # o .db (e só depois matar a API) arrisca um snapshot sem nem as tabelas. Mata a API PRIMEIRO
   # (ela fecha o SQLite ao sair) e só então copia .db junto dos sidecars -wal/-shm, se existirem.
   [ -f "$WORK/api.pid" ] && kill "$(cat "$WORK/api.pid")" 2>/dev/null && wait "$(cat "$WORK/api.pid")" 2>/dev/null
+  # achado Codex: "$WORK/agent.pid" abaixo nunca é escrito por nenhum cenário real (resquício
+  # de uma versão anterior) — se o script fosse interrompido (Ctrl-C/SIGTERM) durante o
+  # Cenário 4, o reconciliador de fundo (f8harness/updatectl, descendente de PID_A) sobrevivia
+  # à limpeza, podia continuar mutando Docker DEPOIS dos containers/ledger serem removidos, e
+  # até recriar recursos. $WORK/bin/ é um caminho ÚNICO desta invocação (mktemp -d) — matar
+  # por ele, nunca por holder específico de um cenário, cobre QUALQUER binário real desta
+  # execução ainda vivo, em qualquer ponto do script.
+  pkill -9 -f -- "$WORK/bin/" 2>/dev/null
+  sleep 0.3
+  pkill -9 -f -- "$WORK/bin/" 2>/dev/null
   if [ -n "$LEDGER_PATH" ] && [ -f "$LEDGER_PATH" ]; then
     cp "$LEDGER_PATH" "$ARTIFACTS_DIR/ledger.db"
     [ -f "$LEDGER_PATH-wal" ] && cp "$LEDGER_PATH-wal" "$ARTIFACTS_DIR/ledger.db-wal"
@@ -74,7 +84,6 @@ cleanup() {
   "${DOCKER[@]}" ps -aq --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null | xargs -r "${DOCKER[@]}" rm -fv >/dev/null 2>&1
   "${DOCKER[@]}" network ls -q --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null | xargs -r "${DOCKER[@]}" network rm >/dev/null 2>&1
   "${DOCKER[@]}" rm -fv "$REGISTRY_NAME" "$PG_NAME" "$NATS_NAME" >/dev/null 2>&1
-  [ -f "$WORK/agent.pid" ] && kill -9 "$(cat "$WORK/agent.pid")" 2>/dev/null
   rm -rf "/tmp/omnira-f8-override-${PROJECT}"
   if [ -n "${KEEP_WORK:-}" ]; then
     echo "KEEP_WORK definido — mantendo $WORK para inspeção"
