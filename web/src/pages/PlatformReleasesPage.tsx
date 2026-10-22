@@ -141,9 +141,15 @@ export default function PlatformReleasesPage() {
   useEffect(() => {
     if (prevTopReleaseIdRef.current !== undefined && topReleaseId !== undefined && topReleaseId !== prevTopReleaseIdRef.current) {
       releasesGenerationRef.current += 1
+      // Achado Codex [P2] (14a rodada): `extraReleasesHasMore` tinha que voltar a `null` (derivar
+      // de novo do tamanho da primeira página) INDEPENDENTE de `olderReleases` estar vazio —
+      // com exatamente PAGE_SIZE releases, "carregar mais" já tinha recebido uma página VAZIA
+      // (olderReleases nunca deixou de ser []), fixando hasMore=false; sem resetar aqui TAMBÉM
+      // nesse caso, uma release nova empurrando a antiga última entrada da 1a página escondia o
+      // botão "Carregar mais" para sempre, mesmo havendo agora uma entrada genuína ali.
+      setExtraReleasesHasMore(null)
       if (olderReleases.length > 0) {
         setOlderReleases([])
-        setExtraReleasesHasMore(null)
         showToast('O catálogo foi atualizado — carregue mais de novo se precisar ver releases mais antigas.', 'info')
       }
     }
@@ -176,9 +182,11 @@ export default function PlatformReleasesPage() {
   useEffect(() => {
     if (prevTopRunIdRef.current !== undefined && topRunId !== undefined && topRunId !== prevTopRunIdRef.current) {
       runsGenerationRef.current += 1
+      // Mesmo achado acima: reseta SEMPRE, mesmo com olderRuns vazio (página adicional vazia
+      // com exatamente PAGE_SIZE runs já tinha fixado hasMore=false antes desta mudança).
+      setExtraRunsHasMore(null)
       if (olderRuns.length > 0) {
         setOlderRuns([])
-        setExtraRunsHasMore(null)
         showToast('O histórico foi atualizado — carregue mais de novo se precisar ver execuções mais antigas.', 'info')
       }
     }

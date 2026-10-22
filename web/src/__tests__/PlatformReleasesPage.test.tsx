@@ -663,6 +663,36 @@ describe('PlatformReleasesPage — pagination (Codex round 5)', () => {
     expect(screen.queryByRole('button', { name: 'Carregar mais execuções' })).toBeNull()
   })
 
+  it('re-offers "load more" after a new run shifts the boundary even when the second page was EMPTY (exactly PAGE_SIZE runs) (Codex round 14)', async () => {
+    // With exactly 50 runs, "load more" gets back an EMPTY page — olderRuns never stops being
+    // [], so a reset guarded only by "olderRuns.length > 0" would never fire, permanently hiding
+    // the button even after a new run genuinely pushes an old entry past the first page.
+    const firstPage = Array.from({ length: 50 }, (_, i) => run('SUCCEEDED', `run-first-${i}`))
+    let currentFirstPage = firstPage
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) return { data: installation() }
+      if (u.endsWith('/platform/releases')) return { data: { items: [] } }
+      if (u.endsWith('/platform/updates/runs')) {
+        const before = config?.params?.before as string | undefined
+        return { data: { items: before ? [] : currentFirstPage } }
+      }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    const { queryClient } = renderAtWithClient(<PlatformReleasesPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('tab', { name: 'Atualizações' }))
+    await screen.findByText('run-first-0')
+    await user.click(screen.getByRole('button', { name: 'Carregar mais execuções' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Carregar mais execuções' })).toBeNull())
+
+    // A new run shifts the boundary — the old 50th entry is now genuinely reachable again.
+    currentFirstPage = [run('DEPLOYING', 'run-new'), ...firstPage.slice(0, 49)]
+    await queryClient.invalidateQueries({ queryKey: ['platform-runs'] })
+    await screen.findByText('run-new')
+    expect(await screen.findByRole('button', { name: 'Carregar mais execuções' })).toBeInTheDocument()
+  })
+
   it('resets the accumulated older runs (never leaves a silent gap) when a new run shifts the first page\'s boundary', async () => {
     const firstPage = Array.from({ length: 50 }, (_, i) => run('SUCCEEDED', `run-first-${i}`))
     const secondPage = [run('SUCCEEDED', 'run-older-1')]
