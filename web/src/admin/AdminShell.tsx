@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import clsx from 'clsx'
 import { BrandMark } from '../components/BrandMark'
-import { Button, EmptyState, LoadingState } from '../components/primitives'
+import { Button, EmptyState, ErrorState, LoadingState } from '../components/primitives'
 import { authAPI } from '../lib/api'
 import { isActing } from '../lib/acting'
 import { hasSession, USER_KEY } from '../lib/session'
@@ -67,6 +67,13 @@ export default function AdminShell() {
   const canAccess = list.some((h) => h.can_manage_access)
   const canManage = list.some((h) => h.can_manage_instances)
   const entitled = canAccess || canManage || platformOperator.isOperator
+  // Achado Codex [P2] (13a rodada): um 404 do probe de operador é uma negação CONFIRMADA (a
+  // mesma resposta uniforme de "não encontrado" que updatemgr/http.go dá a quem não é
+  // operador); qualquer OUTRO erro (500, rede, timeout) é só "não deu para saber" — tratar os
+  // dois do mesmo jeito dizia "Sem acesso ao console" a um operador de plataforma de verdade
+  // (sem Hub nenhum) só por causa de um problema transitório, e como o Outlet nunca montava, o
+  // estado de erro e o "tentar de novo" de PlatformReleasesPage ficavam inalcançáveis.
+  const platformOperatorProbeInconclusive = platformOperator.query.isError && (platformOperator.query.error as { response?: { status?: number } })?.response?.status !== 404
 
   return (
     <div className="flex min-h-dvh flex-col bg-canvas">
@@ -106,6 +113,14 @@ export default function AdminShell() {
       <main className="min-h-0 flex-1" data-route={location.pathname}>
         {hubs.isLoading || platformOperator.isLoading ? (
           <LoadingState message="Carregando…" />
+        ) : !entitled && platformOperatorProbeInconclusive ? (
+          <div className="mx-auto max-w-xl p-6">
+            <ErrorState
+              title="Não foi possível confirmar seu acesso"
+              message="Não deu para confirmar se você é operador de plataforma agora (problema temporário). Tente de novo — se você não tiver acesso, o servidor vai dizer isso de novo, de forma confiável."
+              action={{ label: 'Tentar novamente', onClick: () => void platformOperator.query.refetch() }}
+            />
+          </div>
         ) : !entitled ? (
           <div className="mx-auto max-w-xl p-6">
             <EmptyState

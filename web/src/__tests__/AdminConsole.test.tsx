@@ -21,7 +21,7 @@ const realLocation = window.location
 let hubs: object[] = []
 // undefined: this session's user is not a platform operator (the server answers 404, same as any
 // other route this mock does not know about — no enumeration oracle, mirrors updatemgr's own 404).
-let installation: object | undefined
+let installation: object | 'transient-error' | undefined
 
 function client() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -48,6 +48,7 @@ beforeEach(() => {
   get.mockImplementation(async (url: string) => {
     if (String(url).endsWith('/hubs')) return { data: { items: hubs } }
     if (String(url).endsWith('/platform/installation')) {
+      if (installation === 'transient-error') return Promise.reject({ response: { status: 500 } })
       if (installation) return { data: installation }
       return Promise.reject({ response: { status: 404 } })
     }
@@ -94,6 +95,16 @@ describe('console shell', () => {
     expect(screen.queryByRole('link', { name: 'Acessos' })).toBeNull()
     expect(screen.queryByRole('link', { name: 'Canais das instâncias' })).toBeNull()
     expect(screen.queryByText('Sem acesso ao console')).toBeNull()
+  })
+
+  it('a transient probe failure (not a confirmed 404) never says "Sem acesso" to a platform-only operator — offers retry instead (Codex round 13)', async () => {
+    setSession()
+    hubs = []
+    installation = 'transient-error'
+    inConsole('/plataforma')
+    expect(await screen.findByText('Não foi possível confirmar seu acesso')).toBeInTheDocument()
+    expect(screen.queryByText('Sem acesso ao console')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument()
   })
 
   it('someone who is only a Hub admin (never a platform operator) never sees Plataforma', async () => {
