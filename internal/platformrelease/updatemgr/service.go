@@ -99,6 +99,14 @@ const agentHeartbeatStaleAfter = 5 * time.Minute
 // nesta base de código; julgamento operacional, ajustável sem quebrar nenhum contrato.
 const stalledRunThreshold = 15 * time.Minute
 
+// observedDigestsStaleAfter (F9, monitoramento "versão real/digest divergente", achado Codex
+// [P2] rodada 3) — a observação real do Docker (RecordObservedDigests) tem sua PRÓPRIA
+// cadência (uma vez por ciclo de reconcile, nunca o ticker independente de heartbeat de 30s),
+// e um ciclo de reconcile pode legitimamente demorar; generoso como stalledRunThreshold pela
+// mesma razão. Mais antiga que isto sem nenhuma observação nova significa o Docker parou de
+// responder (ou o próprio daemon morreu — AgentStale já cobriria isso separadamente).
+const observedDigestsStaleAfter = 15 * time.Minute
+
 // Service é o Update Manager API. Mantém também o acesso ao ledger LOCAL do Update Agent
 // (mesmo arquivo, mesmo host) para StartRun — ver comentário do pacote.
 // SignatureVerifier decide se um manifesto cru é autêntico (assinatura, proveniência,
@@ -468,6 +476,16 @@ type MonitoringStatus struct {
 	InstallationReleaseID string `json:"installation_release_id,omitempty"`
 	VersionDivergence     bool   `json:"version_divergence"`
 
+	// Achado Codex [P2] (rodada 3): o digest REAL observado (RecordObservedDigests) tem sua
+	// PRÓPRIA cadência — se o Docker fica indisponível depois de uma observação bem-sucedida,
+	// o heartbeat de liveness continua avançando (ticker independente, achado rodada 1), mas
+	// observed_digests/observed_at ficam CONGELADOS na última observação boa, para sempre.
+	// VersionDivergence acima NUNCA é suprimida por isto (uma divergência já detectada nunca
+	// é escondida só porque a observação envelheceu) — mas um VersionDivergence=false
+	// baseado em dados velhos não pode ser lido como "confirmado agora" sem este sinal.
+	ObservedDigestsAt    *time.Time `json:"observed_digests_at,omitempty"`
+	ObservedDigestsStale bool       `json:"observed_digests_stale"`
+
 	// Update estagnado: um run ATIVO (não-terminal) sem nenhuma transição de estado há mais
 	// tempo que stalledRunThreshold.
 	StalledRunID    string     `json:"stalled_run_id,omitempty"`
@@ -557,6 +575,11 @@ func (s *Service) GetMonitoringStatus(ctx context.Context, operator uuid.UUID) (
 	// release SUCCEEDED mais recente no geral perde drift em units tocadas por uma release
 	// MAIS ANTIGA quando a mais recente só atualizou outras — mesmo problema de
 	// rollbackTargetReleaseIDs, resolvido aqui com a mesma ideia de proveniência por unit).
+	if !heartbeat.ObservedAt.IsZero() {
+		oa := heartbeat.ObservedAt
+		out.ObservedDigestsAt = &oa
+		out.ObservedDigestsStale = time.Since(heartbeat.ObservedAt) > observedDigestsStaleAfter
+	}
 	if heartbeat.ObservedDigests != "" && heartbeat.ObservedDigests != "{}" {
 		var observed map[string]string
 		if jerr := json.Unmarshal([]byte(heartbeat.ObservedDigests), &observed); jerr == nil {

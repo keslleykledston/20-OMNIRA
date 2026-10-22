@@ -532,3 +532,78 @@ func TestUpdateMgr_GetMonitoringStatus_RuntimeDigestDrift_DetectsRemovedContaine
 		t.Fatal("um digest esperado com observação real de container AUSENTE deveria reportar divergência, nunca ser ignorado silenciosamente")
 	}
 }
+
+// observedDigestsStaleAfterForTest espelha o valor não-exportado de
+// updatemgr.observedDigestsStaleAfter — mantido em sincronia manualmente (este teste está no
+// pacote externo updatemgr_test e não pode importar uma constante não-exportada).
+const observedDigestsStaleAfterForTest = 15 * time.Minute
+
+// TestUpdateMgr_GetMonitoringStatus_ObservedDigests_FreshVsStale é a prova central do achado
+// Codex [P2] (rodada 3): a observação real do Docker (RecordObservedDigests) tem sua PRÓPRIA
+// cadência — se o Docker fica indisponível depois de uma observação bem-sucedida,
+// observed_digests/observed_at ficam CONGELADOS para sempre, mas nada avisava disso. Confirma
+// que ObservedDigestsAt/ObservedDigestsStale refletem o frescor real, e que um
+// VersionDivergence JÁ detectado nunca é escondido só porque a observação envelheceu depois.
+func TestUpdateMgr_GetMonitoringStatus_ObservedDigests_FreshVsStale(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	ledger, err := agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := ledger.AcquireLock(w.ctx, "test-install-1", "test-direct-driver", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseID := "omnira-9.9.208"
+	m := manifestJSONChannel(t, releaseID, domain.ChannelCandidate, []string{"0.1.0"})
+	if _, err := ledger.CreateRun(w.ctx, h, "run-obs", "idem-obs", string(m), domain.StateLocked); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []domain.RunState{
+		domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+		domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+		domain.StateObserving, domain.StateSucceeded,
+	} {
+		if err := ledger.TransitionRun(w.ctx, h, "run-obs", st); err != nil {
+			t.Fatalf("transição para %s: %v", st, err)
+		}
+	}
+	if err := ledger.ReleaseLock(w.ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	driftedDigest := "ghcr.io/k3g/omnira-api@sha256:" + sha64("drift-"+releaseID)
+	// A observação já é de um digest DIVERGENTE — simula "o Docker caiu bem depois de uma
+	// release já ter saído do controle, e desde então nenhuma observação nova aconteceu".
+	if err := ledger.RecordObservedDigests(w.ctx, "test-install-1", "test-daemon", `{"api":"`+driftedDigest+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+
+	status, err := svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (observação fresca): %v", err)
+	}
+	if status.ObservedDigestsAt == nil || status.ObservedDigestsStale {
+		t.Errorf("observação recém-gravada deveria ter ObservedDigestsAt definido e ObservedDigestsStale=false, veio at=%v stale=%v", status.ObservedDigestsAt, status.ObservedDigestsStale)
+	}
+	if !status.VersionDivergence {
+		t.Fatal("a divergência já detectada deveria continuar reportada com a observação fresca")
+	}
+
+	backdateLedgerColumn(t, ledgerPath, "agent_heartbeat", "observed_at", "installation_id", "test-install-1", observedDigestsStaleAfterForTest+time.Minute)
+
+	status, err = svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (observação obsoleta): %v", err)
+	}
+	if !status.ObservedDigestsStale {
+		t.Error("uma observação de digest antiga deveria ser reportada como obsoleta")
+	}
+	if !status.VersionDivergence {
+		t.Fatal("uma divergência JÁ detectada nunca deveria ser escondida só porque a observação envelheceu depois — ObservedDigestsStale é um sinal SEPARADO, nunca uma supressão")
+	}
+}
