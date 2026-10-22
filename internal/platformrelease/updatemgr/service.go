@@ -894,7 +894,15 @@ func (s *Service) GetMonitoringStatus(ctx context.Context, operator uuid.UUID) (
 	if version, releaseID, _, _, found, verr := latestSucceededVersion(ctx, ledger, s.installationID); verr == nil && found {
 		out.LedgerVersion = version
 		out.LedgerReleaseID = releaseID
-		out.VersionDivergence = out.InstallationReleaseID != "" && releaseID != out.InstallationReleaseID
+		// Achado Codex [P2]: SetInstallationVersion pode registrar uma VERSÃO diferente com
+		// o MESMO release_id, ou simplesmente omitir o release_id — a sincronização
+		// automática preserva de propósito esse registro manual mais recente (achado Codex
+		// anterior em applyLatestSucceededRunToInstallation), mas comparar só release_id
+		// nunca detectava essa divergência PERSISTENTE na versão de verdade usada por
+		// checkCompatibility. Compara os dois, independentemente — qualquer um divergindo
+		// (quando ambos os lados existem) já é sinal real.
+		out.VersionDivergence = (out.InstallationReleaseID != "" && releaseID != out.InstallationReleaseID) ||
+			(out.InstallationVersion != "" && version != out.InstallationVersion)
 	}
 
 	// Achado Codex [P2] (rodada 1 desta fatia): nem o ledger (histórico de runs) nem o

@@ -607,3 +607,74 @@ func TestUpdateMgr_GetMonitoringStatus_ObservedDigests_FreshVsStale(t *testing.T
 		t.Fatal("uma divergência JÁ detectada nunca deveria ser escondida só porque a observação envelheceu depois — ObservedDigestsStale é um sinal SEPARADO, nunca uma supressão")
 	}
 }
+
+// TestUpdateMgr_GetMonitoringStatus_VersionDivergence_ComparesVersionNotOnlyReleaseID é a
+// prova central do achado Codex [P2]: SetInstallationVersion pode registrar uma VERSÃO
+// diferente com o MESMO release_id, ou simplesmente omitir o release_id (nenhum dos dois
+// campos é obrigatório além de version) — a sincronização automática preserva de propósito
+// esse registro manual mais recente, mas comparar só release_id nunca detectava essa
+// divergência PERSISTENTE na versão de verdade que checkCompatibility usa.
+func TestUpdateMgr_GetMonitoringStatus_VersionDivergence_ComparesVersionNotOnlyReleaseID(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	ledger, err := agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := ledger.AcquireLock(w.ctx, "test-install-1", "test-direct-driver", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseID := "omnira-9.9.209"
+	m := manifestJSONChannel(t, releaseID, domain.ChannelCandidate, []string{"0.1.0"})
+	if _, err := ledger.CreateRun(w.ctx, h, "run-vers", "idem-vers", string(m), domain.StateLocked); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []domain.RunState{
+		domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+		domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+		domain.StateObserving, domain.StateSucceeded,
+	} {
+		if err := ledger.TransitionRun(w.ctx, h, "run-vers", st); err != nil {
+			t.Fatalf("transição para %s: %v", st, err)
+		}
+	}
+	if err := ledger.ReleaseLock(w.ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+
+	// SetInstallationVersion com o MESMO release_id, mas uma versão DIFERENTE da que o
+	// manifesto da release realmente declara (9.9.1, via manifestJSONChannel).
+	if _, err := svc.SetInstallationVersion(w.ctx, op, "setver-key-f9-0209a", "9.9.999-manual", releaseID); err != nil {
+		t.Fatal(err)
+	}
+	status, err := svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (mesmo release_id, versão diferente): %v", err)
+	}
+	if status.InstallationReleaseID != status.LedgerReleaseID {
+		t.Fatalf("premissa do teste: release_id deveria coincidir, veio ledger=%q installation=%q", status.LedgerReleaseID, status.InstallationReleaseID)
+	}
+	if !status.VersionDivergence {
+		t.Error("mesmo release_id mas versão DIFERENTE deveria reportar divergência — é a versão, não o release_id, que checkCompatibility usa")
+	}
+
+	// SetInstallationVersion omitindo o release_id inteiramente — só version é obrigatório.
+	if _, err := svc.SetInstallationVersion(w.ctx, op, "setver-key-f9-0209b", "9.9.999-manual-sem-release", ""); err != nil {
+		t.Fatal(err)
+	}
+	status, err = svc.GetMonitoringStatus(w.ctx, op)
+	if err != nil {
+		t.Fatalf("GetMonitoringStatus (release_id omitido): %v", err)
+	}
+	if status.InstallationReleaseID != "" {
+		t.Fatalf("premissa do teste: InstallationReleaseID deveria estar vazio, veio %q", status.InstallationReleaseID)
+	}
+	if !status.VersionDivergence {
+		t.Error("release_id omitido mas versão DIFERENTE do ledger deveria reportar divergência, nunca ser mascarado por InstallationReleaseID vazio")
+	}
+}
