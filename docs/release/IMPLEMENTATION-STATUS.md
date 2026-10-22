@@ -1473,3 +1473,201 @@ Próxima fase: F9 (gate de enforcement de backup-evidence e demais itens do road
 **Veredito: PASS**
 
 ---
+
+## F9 — Catálogo stable, política, hardening e revisão independente
+
+```
+Fase: F9
+Baseline SHA: 53ed222 (último commit de F8 nesta mesma branch)
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+HEAD ao final: e09b624 (31 commits desde o baseline)
+Implementação:
+  Três fatias verticais reais, cada uma levada a duas rodadas consecutivas de
+  `codex exec review --base 53ed222` sem achado acionável, mais uma auditoria de conformidade
+  CLAUDE.md que encontrou e corrigiu um gap real de documentação de contrato. Nenhum achado de
+  segurança foi deixado sem correção — toda rodada que encontrou algo foi seguida de
+  fix→reteste real→nova rodada até convergir.
+
+  1) Gates de assinatura/revogação/anti-replay/canais (ADR-0054 §2.1/§2.2, release/policies/
+     signing.yaml anti_replay.revocation):
+     - migrations/000174_platform_release_revocations.{up,down}.sql: platform_release_
+       revocations (append-only, trigger impede UPDATE/DELETE), platform_release_revocation_
+       requests (idempotência), platform_release_revocation_delivery (rastreio "já chegou ao
+       ledger local?" — nunca o fato da revogação em si). RLS manual (ENABLE+FORCE+policy
+       is_system_admin()/is_platform_operator(), mesmo padrão de platform_release_tables da
+       migration 000173) — sem tenant_id, nunca tenant-owned.
+     - Service.RevokeRelease (POST /platform/releases/{release_id}/revoke): grava o fato no
+       Postgres, tenta entrega imediata ao ledger local, registra a obrigação de entrega
+       separadamente da revogação em si — reentregue automaticamente por refreshPendingRun
+       (quase toda operação real desta API) até confirmar sucesso.
+     - Executor.isRevokedOrUnsafe (internal/platformrelease/agent/reconcile.go): chokepoint
+       único que o agente consulta antes de confiar em "não revogada" — combina Ledger.
+       IsReleaseRevoked com Ledger.RevocationSyncFresh (idade do último sync local bem-
+       sucedido contra signing.yaml anti_replay.revocation.max_cache_age_seconds=300s).
+       Checado em QUATRO pontos de Execute/recover: antes de qualquer step, antes de um
+       rollback automático (por unit, via proveniência real do digest — nunca "a última
+       release instalada, seja o que for que tocou"), depois da janela de observação e da
+       revalidação final de saúde antes de SUCCEEDED, e (achado da própria revisão
+       independente, ver "Review Codex" abaixo) depois do Compose.Rollback/WaitHealthy antes
+       de confirmar ROLLED_BACK.
+     - Ledger.RevocationSyncFresh/MarkRevocationSynced/MarkStandalone/ClearStandalone
+       (internal/platformrelease/agent/ledger.go): "nenhuma sincronização ainda" é FAIL-CLOSED
+       por padrão (nunca "fresco por decreto") — só uma instalação EXPLICITAMENTE marcada
+       standalone (--standalone/OMNIRA_AGENT_STANDALONE=true, decisão do operador, nunca
+       inferida pela ausência de uma linha) é tratada como confiável sem sincronização real.
+       agentconfig.Config.Build() (chamado pelos DOIS binários — apps/update-agent e apps/
+       updatectl) é o único ponto que marca OU limpa essa isenção, em toda montagem.
+  2) Monitoramento (status do agente, falhas de backup, versão/digest divergente, update
+     estagnado, erros após release):
+     - agent_heartbeat (nova tabela SQLite): heartbeat do daemon (ticker de 30s, independente
+       do ciclo de reconcile) e observed_digests (cadência própria, via exec.Compose.
+       CurrentSnapshot) — duas cadências deliberadamente separadas.
+     - Service.GetMonitoringStatus (GET /platform/monitoring/status): agrega os cinco sinais.
+       expectedDigestsAcrossHistory resolve o digest esperado POR UNIT através de todo o
+       histórico SUCCEEDED (nunca só a release mais recente no geral, que pode ter tocado só
+       um subconjunto dos workloads). Cada sinal de "obsolescência" (backup, heartbeat, digest
+       observado) tem um default explícito para o caso "nunca aconteceu" — nenhum deles usa o
+       zero-value de bool (false) por acidente (achado corrigido na própria fatia, ver abaixo).
+  3) Retenção e garbage collection seguro do catálogo (release/policies/channels.yaml
+     retention_days):
+     - migrations/000175_platform_release_gc_requests.{up,down}.sql: idempotência do DELETE —
+       deliberadamente SEM foreign key para platform_releases (a exclusão bem-sucedida remove
+       exatamente essa linha).
+     - Service.ListRetentionCandidates (GET /platform/releases/retention): relatório read-only,
+       nunca remove nada.
+     - Service.DeleteReleaseCatalogEntry (DELETE /platform/releases/{release_id}): revalida
+       TUDO no momento da exclusão (dentro da retenção, revogada, referenciada por run/plan,
+       instalada, protegida pelo ledger local) — nunca confia num relatório antigo. Detém o
+       MESMO advisory lock de instalação que StartRun (na MESMA ordem, depois do achado de
+       deadlock da rodada 15) e o lock do agente (Executor.WithLockAndHeartbeat, holder único
+       por chamada) durante todo o check-then-delete.
+     - protectedReleaseIDsFromOpenLedger: proveniência por unit via histórico SUCCEEDED+
+       RECOVERY_REQUIRED do ledger local E runs ativos — fail-closed em qualquer erro de
+       leitura/parse.
+  4) Auditoria de conformidade (CLAUDE.md "mantenha OpenAPI/AsyncAPI alinhados", "Validar
+     segurança de GitHub Actions"): encontrou e corrigiu 1 gap real — os 4 endpoints HTTP
+     novos desta fase (monitoring/status, revoke, retention, DELETE release) não tinham
+     entrada em contracts/openapi/omnira-v1.yaml (commit 22c08db). A auditoria de GitHub
+     Actions (os 4 workflows, SSRF/path-traversal/injection/segredo-em-log) não encontrou
+     nenhum achado novo — toda ação já estava fixada por SHA completo, entrada não-confiável
+     já passava por `env:` (nunca interpolação direta em `run:`), e nenhum secret chega a um
+     log; a auditoria de RLS/tenancy confirmou que as 4 novas tabelas (platform_release_
+     revocations/_requests/_delivery, platform_release_gc_requests) seguem o MESMO padrão de
+     F6 (platform operator only, nunca tenant_id do payload como autorização).
+Arquivos (principais, não exaustivo — ver `git diff --stat 53ed222..e09b624`):
+  migrations/000174_platform_release_revocations.{up,down}.sql (novo)
+  migrations/000175_platform_release_gc_requests.{up,down}.sql (novo)
+  internal/platformrelease/agent/ledger.go (+~250 linhas: revoked_releases, revocation_sync
+    com coluna standalone, agent_heartbeat, MarkRevocationSynced/MarkStandalone/ClearStandalone)
+  internal/platformrelease/agent/reconcile.go (+~230 linhas: isRevokedOrUnsafe,
+    rollbackTargetReleaseIDs, checkRollbackTargetsRevoked, 4+ pontos de checagem em Execute/recover)
+  internal/platformrelease/agentconfig/config.go (Standalone bool, flag --standalone, Build()
+    como único ponto de Mark/ClearStandalone para os dois binários)
+  internal/platformrelease/updatemgr/service.go (+~1040 linhas: RevokeRelease,
+    GetMonitoringStatus, ListRetentionCandidates, DeleteReleaseCatalogEntry, e todo o suporte)
+  internal/platformrelease/updatemgr/http.go (+~100 linhas: 4 handlers HTTP novos)
+  internal/platform/httpserver/server.go (4 rotas novas registradas)
+  apps/update-agent/cmd/omnira-update-agent/main.go (heartbeat independente, observed digests,
+    log de modo standalone)
+  contracts/openapi/omnira-v1.yaml (+125 linhas: os 4 endpoints novos + 3 schemas)
+  Testes novos: internal/platformrelease/agent/{ledger,reconcile}_f9_test.go,
+    internal/platformrelease/updatemgr/{monitoring,retention,service}_f9_test.go,
+    internal/platformrelease/agentconfig/config_test.go (casos novos de standalone)
+Migrations: 000174 (revocations/requests/delivery, append-only + RLS manual) e 000175
+  (gc_requests, RLS manual, sem FK para platform_releases). Nenhuma migration tenant-owned;
+  nenhuma precisa de estratégia de rollback de dados (só schema novo, nunca altera/remove
+  coluna existente) — reversível via *.down.sql padrão.
+Contratos: contracts/openapi/omnira-v1.yaml atualizado com GET /platform/monitoring/status,
+  POST /platform/releases/{release_id}/revoke, GET /platform/releases/retention, DELETE
+  /platform/releases/{release_id} (commit 22c08db — `bash tools/validate-specs.sh` OK,
+  incluindo redocly lint). AsyncAPI inalterado (F9 não introduziu nenhum evento novo).
+Testes executados:
+  go build ./... e go vet ./... (monorepo completo) → limpos em toda rodada desta fase.
+  go test ./... (monorepo completo, unitário/SQLite real) → PASS, nenhuma falha, nenhum skip
+    inesperado (pacotes sem teste são os de sempre, não relacionados a F9).
+  scripts/test-integration-one.sh (Postgres 16 real descartável) para
+    ./internal/platformrelease/updatemgr (regex TestUpdateMgr_) e ./internal/platform/db
+    (regex TestRLS) — executado repetidamente (uma vez por rodada de fix nas 3 fatias, ~20
+    execuções ao todo nesta fase) — sempre PASS na versão final de cada commit.
+  scripts/test-integration.sh (gate completo do monorepo, todos os 44 pacotes de integração
+    via containers Docker): BLOQUEADO neste ambiente por uma limitação estrutural pré-
+    existente, não relacionada a F9 — o script roda cada pacote num container Docker com um
+    único bind mount do diretório do worktree; o arquivo `.git` de um git worktree aponta para
+    `.git/worktrees/<nome>` dentro do repositório PRINCIPAL (fora do mount), então o Go
+    tooling dentro do container falha ao tentar ler VCS info ("fatal: not a git repository").
+    Nunca reproduzido fora de worktree (confirmado por scripts/test-integration-one.sh,
+    usado em TODAS as 3 fatias desta fase, funcionar normalmente — ele NÃO roda dentro de
+    Docker para o próprio `go test`). Registrado como limitação de ambiente desta sessão
+    (worktree + script de integração completo), nunca como teste pulado por conveniência.
+  Testes novos cobrindo cada achado Codex corrigido nesta fase (ver "Review Codex" abaixo) —
+    todos com nome rastreável ao achado (ex. TestLedger_ClearStandalone,
+    TestExecute_RollbackTarget_RevokedDuringPostRollbackWaitHealthy_ForcesRecoveryRequired,
+    TestUpdateMgr_GetMonitoringStatus_ObservedDigests_NeverObserved_IsStale).
+Gates de segurança:
+  Nenhuma RLS/tenancy enforcement removida ou afrouxada. Todas as tabelas novas desta fase
+    (platform_release_revocations/_requests/_delivery, platform_release_gc_requests) são
+    platform-operator-owned (ENABLE+FORCE ROW LEVEL SECURITY, policy is_system_admin() OR
+    is_platform_operator(current_user_id())), nunca tenant-owned — nenhuma delas aceita
+    tenant_id/hub_id do payload como autorização.
+  Nenhum segredo/token em fila — a entrega de revogação ao ledger local é uma chamada de
+    função direta (agent.OpenLedger + RevokeRelease), nunca passa por NATS/qualquer fila.
+  Revogação é fail-closed por padrão em toda ambiguidade: sincronização obsoleta, ledger
+    ilegível, manifesto histórico corrompido, instalação nunca sincronizada (e não marcada
+    standalone) — todos tratados como "não posso confirmar que é seguro", nunca "presumo que
+    está tudo bem".
+  Signing mechanism em si (assinatura real da lista de revogação, release/policies/
+    signing.yaml) permanece BLOCKED_EXTERNAL nesta sessão (credenciais GHCR/gh CLI
+    indisponíveis, achado F1/F3, sem mudança nesta fase) — F9 implementa e testa o
+    ENFORCEMENT real da revogação (a aplicação da lista, nunca cacheada indefinidamente),
+    nunca a infraestrutura de assinatura da lista em si.
+  Auditoria de GitHub Actions (4 workflows): nenhum achado novo. Toda third-party action já
+    fixada por SHA completo; nenhum campo controlado por quem abre a PR (head_ref, título,
+    corpo) é interpolado em qualquer `run:`; `secrets.GITHUB_TOKEN` só é passado como `with:`
+    de uma action, nunca para dentro de um script que o ecoaria num log.
+Review Codex (evidência real — `codex exec review --base 53ed222` contra o diff ACUMULADO
+  completo de F9 a cada rodada, nunca só o diff incremental):
+  19 rodadas no total, cobrindo as 3 fatias E as correções cruzadas entre elas:
+  - Fatia 1 (revogação/anti-replay): rodadas 1-11, convergência em 11/12 (clean).
+  - Fatia 2 (monitoramento): rodadas 1-4 (numeração própria da fatia), convergência em 4/5.
+  - Fatia 3 (retenção/GC): rodadas 1-10 (numeração própria), convergência aparente em 9/10 —
+    mas a rodada 10 reabriu um achado da fatia 1 (ver abaixo), reiniciando a contagem de
+    "duas rodadas limpas" para o diff acumulado total.
+  - Rodadas 11-19 (numeração do diff acumulado, pós-fatia-3): 5 achados REAIS corrigidos, cada
+    um com teste de regressão nomeado ao achado:
+    [P1] rodada 10→11: instalação GERENCIADA nunca sincronizada era tratada como fresca por
+      decreto (igual a uma standalone) — podia executar uma release já revogada no Postgres
+      indefinidamente se a API nunca sincronizasse. Corrigido: fail-closed por padrão; só
+      MarkStandalone (decisão explícita) isenta. Commit 1104956.
+    [P2] rodada 11: MarkRevocationSynced não limpava uma marca standalone residual — uma
+      instalação que voltasse a ser gerenciada continuaria isenta para sempre. Commit 728e498.
+    [P1] rodada 12: a marca standalone só era gravada no startup do daemon
+      (apps/update-agent) — apps/updatectl (CLI sem daemon, o caminho real de uma instalação
+      standalone) nunca a gravava. Centralizado em Config.Build(). Commit 150f79d.
+    [P2] rodada 15 (dois achados no mesmo diff): (a) o CAMINHO INVERSO da marca standalone
+      (voltar a gerenciada) não era limpo automaticamente; (b) o GC do catálogo adquiria os
+      dois advisory locks em ordem INVERSA à de StartRun — risco de deadlock real entre
+      chamadas concorrentes. Commit 6d5d869.
+    [P1] rodada 16: recover() revalidava revogação ANTES de Compose.Rollback/WaitHealthy, mas
+      nunca DEPOIS — uma revogação entregue durante essa janela (potencialmente longa, até
+      HealthTimeout por unit) nunca era revista antes de confirmar ROLLED_BACK. Commit 12aeb36.
+    [P2] rodada 17: ObservedDigestsStale ficava no zero-value (false) quando nenhuma
+      observação de digest jamais tinha sucesso — sugeria "checado, tudo bem" quando na
+      verdade nunca foi checado. Commit e09b624.
+  Rodadas 18 e 19: CLEAN consecutivas contra o diff acumulado final — convergência confirmada.
+  Nenhum achado foi descartado sem correção; nenhum foi corrigido sem reteste real (unitário +
+  Postgres real) antes do commit seguinte.
+Pendências/limitações (documentadas, nunca escondidas):
+  - Signing mechanism real (assinar a lista de revogação) permanece BLOCKED_EXTERNAL — mesma
+    causa de F1/F3 (credenciais GHCR/gh CLI/Cosign indisponíveis nesta sessão).
+  - scripts/test-integration.sh (gate completo via Docker) não roda neste worktree — ver
+    "Testes executados" acima. Mitigado por scripts/test-integration-one.sh, usado
+    extensivamente nesta fase para os pacotes realmente tocados por F9.
+  - Nenhum release-promote.yml/gate automatizado de CI consome os novos endpoints de
+    monitoramento/retenção ainda — ficam disponíveis via API para um operador/dashboard futuro
+    (fora do escopo de F9, que entrega o enforcement, nunca a UI de operação).
+Próxima fase: F10 (operacionalização e documentação — runbooks, Makefile, docs canônicas)
+```
+
+**Veredito: PASS**
+
+---
