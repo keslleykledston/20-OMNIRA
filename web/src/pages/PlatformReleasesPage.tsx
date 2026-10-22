@@ -224,7 +224,13 @@ export default function PlatformReleasesPage() {
 
   const setVersionKey = useStableIdempotencyKey()
   const setVersionMutation = useMutation({
-    mutationFn: (version: string) => platformInstallationAPI.setVersion(version, setVersionKey.get()),
+    // Achado Codex [P2] (11a rodada): sem escopo, uma resposta perdida (o servidor gravou, mas
+    // o cliente nunca viu o 200 — um erro de rede, não de aplicação) deixava a chave presa ao
+    // valor SUBMETIDO; editar o campo e reenviar reusaria a mesma chave para um valor
+    // DIFERENTE, batendo em ErrKeyMismatch sem nenhum jeito de corrigir a não ser fechar e
+    // reabrir o modal. Escopar por `version` (o mesmo padrão já usado por StartRun/plan_id):
+    // reenviar o MESMO valor reusa a chave (retry correto), editar o valor ganha uma chave nova.
+    mutationFn: (version: string) => platformInstallationAPI.setVersion(version, setVersionKey.get(version)),
     onSuccess: () => {
       setVersionKey.spend()
       showToast('Versão instalada registrada.')
@@ -236,7 +242,10 @@ export default function PlatformReleasesPage() {
 
   const ingestKey = useStableIdempotencyKey()
   const ingestMutation = useMutation({
-    mutationFn: (manifest: unknown) => platformReleasesAPI.ingest(manifest as never, ingestKey.get()),
+    // Mesmo achado acima, para o manifesto colado: escopado pelo JSON exato submetido (via
+    // JSON.stringify estável o bastante aqui — o ponto é distinguir "mesmo texto" de "texto
+    // editado", nunca comparar semanticamente).
+    mutationFn: (manifest: unknown) => platformReleasesAPI.ingest(manifest as never, ingestKey.get(JSON.stringify(manifest))),
     onSuccess: () => {
       ingestKey.spend()
       showToast('Release adicionada ao catálogo.')
@@ -735,6 +744,22 @@ function RunTracking({ runId, onClose }: { runId: string; onClose: () => void })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminal])
 
+  // Achado Codex [P2] (11a rodada): a chave de StartRun só sobrevivia DENTRO do ReleaseDetail
+  // (componente condicional) — se a reserva (estado REQUESTED) fosse feita mas o despacho
+  // falhasse de forma transitória, e a pessoa trocasse de aba (ou a própria reentrada
+  // automática trocasse por ela, ao descobrir o run reservado), o ReleaseDetail desmontava e a
+  // chave se perdia: uma nova tentativa usaria uma chave NOVA e seria recusada pelo gate de "só
+  // um run ativo por instalação" (a reserva antiga ainda conta como ativa), sem nenhum caminho
+  // de recuperação nesta tela. Em vez de guardar a identidade do pedido em outro lugar, o
+  // PRÓPRIO run já carrega plan_id e idempotency_key (campos reais da API) — repetir StartRun
+  // com os dois exatamente como estão SEMPRE aciona o caminho de replay do servidor,
+  // independente de qual componente criou a reserva originalmente.
+  const retryDispatch = useMutation({
+    mutationFn: () => platformRunsAPI.start(run.data!.plan_id, run.data!.idempotency_key),
+    onSuccess: () => { showToast('Novo despacho solicitado.'); void run.refetch() },
+    onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
+  })
+
   if (run.isLoading) return <LoadingState message="Carregando execução…" />
   if (run.isError) {
     return <ErrorState message={describePlatformReleaseError(run.error)} action={{ label: 'Fechar', onClick: onClose }} />
@@ -752,6 +777,16 @@ function RunTracking({ runId, onClose }: { runId: string; onClose: () => void })
       </CardHeader>
       <CardBody className="space-y-4">
         <RunStateBadge state={r.state} />
+        {r.state === 'REQUESTED' && (
+          <div className="rounded-control border border-status-warning-border bg-status-warning-soft p-4">
+            <p className="text-body-sm text-status-warning-strong">
+              Esta atualização foi reservada, mas o despacho ao Update Agent ainda não foi confirmado (pode ter falhado de forma transitória).
+            </p>
+            <Button className="mt-2" size="sm" variant="secondary" onClick={() => retryDispatch.mutate()} isLoading={retryDispatch.isPending}>
+              Tentar despachar novamente
+            </Button>
+          </div>
+        )}
         {r.state === 'RECOVERY_REQUIRED' && (
           <ErrorState title="Recuperação manual necessária" message="O Update Agent não processa nenhum run novo desta instalação até a recuperação ser reconhecida (updatectl/runbook de operações)." />
         )}

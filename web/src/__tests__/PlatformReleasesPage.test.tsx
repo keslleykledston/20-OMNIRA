@@ -448,6 +448,97 @@ describe('PlatformReleasesPage — terminal transition (Codex round 2)', () => {
   })
 })
 
+describe('PlatformReleasesPage — retry dispatch for a stuck REQUESTED run (Codex round 11)', () => {
+  it('retries dispatch using the run\'s OWN plan_id and idempotency_key, surviving the component that originally created it being gone', async () => {
+    // "REQUESTED" is the Postgres-only sentinel for "reserved, dispatch to the ledger not yet
+    // confirmed" — reachable here even though ReleaseDetail (which held the original key) is
+    // long unmounted: the retry button must work from the run's OWN fields, never a local ref.
+    runs = [run('REQUESTED')]
+    const posted: { url: string; key: string }[] = []
+    vi.mocked(axios.post).mockImplementation(async (url: string, _body: unknown, config?: any) => {
+      posted.push({ url: String(url), key: config?.headers?.['Idempotency-Key'] })
+      return { data: run('LOCKED') }
+    })
+    renderAt(<PlatformReleasesPage />)
+    await screen.findByText('Acompanhando run-1')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Tentar despachar novamente' }))
+    await waitFor(() => expect(posted.length).toBe(1))
+    expect(posted[0].url).toMatch(/\/platform\/updates\/runs$/)
+    expect(posted[0].key).toBe(run('REQUESTED').idempotency_key)
+  })
+})
+
+describe('PlatformReleasesPage — scoped keys for editable forms (Codex round 11)', () => {
+  it('reuses the SetInstallationVersion key for a retry of the SAME version, but a new key for an edited one', async () => {
+    const user = userEvent.setup()
+    const keysByVersion: Record<string, string> = {}
+    // Always fails: the modal only ever closes on SUCCESS, and this test cares only about
+    // which key was sent for which value, never about completing the flow.
+    vi.mocked(axios.put).mockImplementation(async (url: string, body: unknown, config?: any) => {
+      const version = (body as { version: string }).version
+      keysByVersion[version] = config?.headers?.['Idempotency-Key']
+      return Promise.reject({ response: { status: 500 } })
+    })
+    renderAt(<PlatformReleasesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Registrar versão instalada' }))
+    const dialog1 = await screen.findByRole('dialog', { name: 'Registrar versão instalada' })
+    await user.type(within(dialog1).getByLabelText('Versão'), '2026.10.0')
+    await user.click(within(dialog1).getByRole('button', { name: 'Registrar' }))
+    await waitFor(() => expect(keysByVersion['2026.10.0']).toBeTruthy())
+    const firstKey = keysByVersion['2026.10.0']
+
+    // Retry the SAME version (the modal stays open after a failure) — same key.
+    await user.click(screen.getByRole('button', { name: 'Registrar' }))
+    await waitFor(() => expect(Object.keys(keysByVersion).length).toBe(1))
+    expect(keysByVersion['2026.10.0']).toBe(firstKey)
+
+    // Edit the version before the next attempt — must be treated as a NEW request.
+    const versionInput = screen.getByLabelText('Versão')
+    await user.clear(versionInput)
+    await user.type(versionInput, '2026.10.1')
+    await user.click(screen.getByRole('button', { name: 'Registrar' }))
+    await waitFor(() => expect(keysByVersion['2026.10.1']).toBeTruthy())
+    expect(keysByVersion['2026.10.1']).not.toBe(firstKey)
+  })
+
+  it('reuses the IngestRelease key for a retry of the SAME manifest text, but a new key for an edited one', async () => {
+    const user = userEvent.setup()
+    const keysByManifest: Record<string, string> = {}
+    // Always fails, same reason as the SetInstallationVersion test above.
+    vi.mocked(axios.post).mockImplementation(async (url: string, body: unknown, config?: any) => {
+      if (!String(url).endsWith('/platform/releases')) throw new Error(`unexpected POST ${url}`)
+      const text = JSON.stringify(body)
+      keysByManifest[text] = config?.headers?.['Idempotency-Key']
+      return Promise.reject({ response: { status: 500 } })
+    })
+    renderAt(<PlatformReleasesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Ingerir release' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Ingerir release' })
+    const textarea = within(dialog).getByLabelText('Manifesto (JSON)')
+    const manifestA = JSON.stringify(manifest('rel-A'))
+    await user.click(textarea)
+    await user.paste(manifestA)
+    await user.click(within(dialog).getByRole('button', { name: 'Ingerir' }))
+    await waitFor(() => expect(Object.keys(keysByManifest).length).toBe(1))
+    const firstKey = Object.values(keysByManifest)[0]
+
+    // Retry the SAME manifest text — same key.
+    await user.click(within(dialog).getByRole('button', { name: 'Ingerir' }))
+    await waitFor(() => expect(Object.keys(keysByManifest).length).toBe(1))
+    expect(Object.values(keysByManifest)[0]).toBe(firstKey)
+
+    // Edit the manifest before the next attempt — must be a NEW request.
+    await user.clear(textarea)
+    await user.click(textarea)
+    await user.paste(JSON.stringify(manifest('rel-B')))
+    await user.click(within(dialog).getByRole('button', { name: 'Ingerir' }))
+    await waitFor(() => expect(Object.keys(keysByManifest).length).toBe(2))
+    const keys = Object.values(keysByManifest)
+    expect(keys[0]).not.toBe(keys[1])
+  })
+})
+
 describe('PlatformReleasesPage — checkpoint detail and event-fetch errors (Codex round 4)', () => {
   it('renders the checkpoint step, status and diagnostic message — never just "checkpoint" and a time', async () => {
     runs = [run('DEPLOYING')]
