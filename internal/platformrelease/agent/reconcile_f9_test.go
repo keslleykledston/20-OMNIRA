@@ -9,11 +9,39 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/omnira/omnira/internal/platformrelease/domain"
 )
+
+// revokeOnFirstHealthInspectRunner (F9, achado Codex [P2] rodada 5) entrega a revogação ao
+// ledger local exatamente durante a PRIMEIRA chamada de `docker inspect` com o formato de
+// saúde (ou seja, DENTRO de WaitHealthy, chamada por revalidateHealthBeforeSuccess) — nunca
+// antes, nunca por um goroutine concorrente/timing frágil. Delega qualquer outra chamada
+// (docker ps, inspect por {{.Config.Image}}) ao runner real (fakeRunner), preservando o
+// comportamento normal de resolução de container/digest.
+type revokeOnFirstHealthInspectRunner struct {
+	inner        runner
+	ledger       *Ledger
+	releaseID    string
+	inspectCalls int
+}
+
+func (r *revokeOnFirstHealthInspectRunner) run(ctx context.Context, name string, args ...string) (string, string, error) {
+	if name == "docker" && len(args) > 0 && args[0] == "inspect" && strings.Contains(strings.Join(args, " "), "{{.State.Running}}") {
+		r.inspectCalls++
+		if r.inspectCalls == 1 {
+			if err := r.ledger.RevokeRelease(ctx, r.releaseID, "CVE crítico descoberto durante a revalidação final de saúde"); err != nil {
+				return "", "", err
+			}
+			return "false|starting", "", nil
+		}
+		return "true|healthy", "", nil
+	}
+	return r.inner.run(ctx, name, args...)
+}
 
 func TestExecute_RevokedRelease_BeforeAnyMutation_ClassifiesAsR0(t *testing.T) {
 	ctx := context.Background()
@@ -226,5 +254,72 @@ func TestExecute_RevokedDuringObserveWindow_NeverCommitsSucceeded(t *testing.T) 
 	}
 	if got.State != domain.StateRecoveryRequired {
 		t.Fatalf("uma revogação chegada durante a janela de observação final nunca deveria permitir SUCCEEDED — esperava RECOVERY_REQUIRED, veio %s", got.State)
+	}
+}
+
+// TestExecute_RevokedDuringFinalHealthRevalidation_NeverCommitsSucceeded é a prova central do
+// achado Codex [P2] (rodada 5): a checagem de revogação adicionada depois de
+// TestExecute_RevokedDuringObserveWindow_NeverCommitsSucceeded ficava ANTES de
+// revalidateHealthBeforeSuccess — mas essa função pode BLOQUEAR por até HealthTimeout por
+// unidade (WaitHealthy), uma janela real onde a revogação ainda pode chegar. Prova: avança
+// manualmente até o checkpoint de OBSERVING completar (mesma técnica das duas provas
+// anteriores), simula o "crash", e na retomada troca o runner do Compose por
+// revokeOnFirstHealthInspectRunner — que entrega a revogação exatamente na primeira chamada
+// de `docker inspect` de saúde DENTRO de revalidateHealthBeforeSuccess, antes de responder
+// "healthy". Confirma RECOVERY_REQUIRED, nunca SUCCEEDED.
+func TestExecute_RevokedDuringFinalHealthRevalidation_NeverCommitsSucceeded(t *testing.T) {
+	ctx := context.Background()
+	manifest := testManifest("expand_only")
+	fr := fakeRunnerForManifest(manifest)
+	compose := &ComposeAdapter{r: fr, Project: "test", OverrideDir: t.TempDir()}
+	exec, ledger, h := testExecutor(t, &fakeMigrateRunner{}, &fakeBackupRunner{}, compose)
+	exec.ObserveWindow = 5 * time.Millisecond
+
+	run, err := ledger.CreateRun(ctx, h, "run-1", "idem-1", "{}", domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for _, target := range []domain.RunState{
+		domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying,
+		domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying, domain.StateHealthChecking,
+	} {
+		next, action := exec.actionFor(stateBefore(target), run.RunID, manifest)
+		if action != nil {
+			if err := exec.runStep(ctx, h, run.RunID, stepForState(next), action); err != nil {
+				t.Fatalf("runStep %s: %v", target, err)
+			}
+		}
+		if err := ledger.TransitionRun(ctx, h, run.RunID, target); err != nil {
+			t.Fatalf("TransitionRun %s: %v", target, err)
+		}
+	}
+	nextObs, actionObs := exec.actionFor(domain.StateHealthChecking, run.RunID, manifest)
+	if err := exec.runStep(ctx, h, run.RunID, stepForState(nextObs), actionObs); err != nil {
+		t.Fatalf("runStep (preparar Observing): %v", err)
+	}
+	if err := ledger.TransitionRun(ctx, h, run.RunID, domain.StateObserving); err != nil {
+		t.Fatalf("TransitionRun Observing: %v", err)
+	}
+	nextSucc, actionSucc := exec.actionFor(domain.StateObserving, run.RunID, manifest)
+	if nextSucc != domain.StateSucceeded {
+		t.Fatalf("esperava next=SUCCEEDED a partir de Observing, veio %s", nextSucc)
+	}
+	if err := exec.runStep(ctx, h, run.RunID, stepForState(nextSucc), actionSucc); err != nil {
+		t.Fatalf("runStep (ação de Observing): %v", err)
+	}
+	// CRASH simulado aqui: checkpoint de Observing já "completed", transição para SUCCEEDED
+	// nunca persistida. Troca o runner: a PRÓXIMA revalidateHealthBeforeSuccess (incondicional
+	// na retomada) vai entregar a revogação durante sua própria chamada de WaitHealthy.
+	compose.r = &revokeOnFirstHealthInspectRunner{inner: fr, ledger: ledger, releaseID: manifest.ReleaseID}
+
+	if err := exec.Execute(ctx, h, run.RunID, manifest); err != nil {
+		t.Fatalf("Execute (retomada) não deveria retornar erro quando a recuperação em si é bem-sucedida: %v", err)
+	}
+	got, err := ledger.GetRun(ctx, run.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.State != domain.StateRecoveryRequired {
+		t.Fatalf("uma revogação chegada DURANTE revalidateHealthBeforeSuccess (WaitHealthy) nunca deveria permitir SUCCEEDED — esperava RECOVERY_REQUIRED, veio %s", got.State)
 	}
 }
