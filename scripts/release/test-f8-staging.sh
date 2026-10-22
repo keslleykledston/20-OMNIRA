@@ -313,8 +313,17 @@ OMNIRA_DATABASE_URL="$APP_URL" OMNIRA_ENV=test OMNIRA_AUTH_MODE=mock OMNIRA_DEV_
 echo $! > "$WORK/api.pid"
 for i in $(seq 1 60); do curl -sf --max-time 2 "http://127.0.0.1:${APIPORT}/internal/health/live" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf --max-time 2 "http://127.0.0.1:${APIPORT}/internal/health/live" >/dev/null || { echo "FATAL: api não subiu"; tail -30 "$EVIDENCE/api.log"; exit 1; }
-kill -0 "$(cat "$WORK/api.pid")" 2>/dev/null || { echo "FATAL: health check respondeu 200 mas o PID que lançamos ($(cat "$WORK/api.pid")) não está vivo — porta ${APIPORT} provavelmente já ocupada por OUTRO processo, validaríamos a API errada"; tail -30 "$EVIDENCE/api.log"; exit 1; }
-log "   api em 127.0.0.1:${APIPORT} (pid $(cat "$WORK/api.pid"), confirmado vivo)"
+API_PID=$(cat "$WORK/api.pid")
+kill -0 "$API_PID" 2>/dev/null || { echo "FATAL: health check respondeu 200 mas o PID que lançamos ($API_PID) não está vivo — porta ${APIPORT} provavelmente já ocupada por OUTRO processo, validaríamos a API errada"; tail -30 "$EVIDENCE/api.log"; exit 1; }
+# achado Codex: `kill -0` só prova que o PID existe, nunca que ELE é quem de fato abriu o
+# socket de escuta — se a porta já tivesse outro serviço, o health 200 podia vir dessa OUTRA
+# instalação enquanto NOSSO processo ainda inicializa (DB/NATS) sem ter tentado bind ainda,
+# login/GetInstallation validariam a instalação ERRADA sem nunca exercitar esta API/ledger.
+# `ss -ltnp` real (via sudo, já usado pelo resto do script) mostra o PID que de fato DETÉM o
+# socket LISTEN nesta porta — compara contra o PID que lançamos, nunca confia só em kill -0.
+LISTEN_PID=$(sudo -n ss -ltnp 2>/dev/null | grep ":${APIPORT} " | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+[ "$LISTEN_PID" = "$API_PID" ] || { echo "FATAL: o socket LISTEN em 127.0.0.1:${APIPORT} pertence ao PID $LISTEN_PID, não ao nosso ($API_PID) — porta ocupada por outro processo, validaríamos a API errada"; tail -30 "$EVIDENCE/api.log"; exit 1; }
+log "   api em 127.0.0.1:${APIPORT} (pid $API_PID, confirmado vivo E dono real do socket LISTEN)"
 
 LOGIN_RAW=$(curl -s -o /tmp/f8-login-body.$$ -w '%{http_code}' -X POST "http://127.0.0.1:${APIPORT}/api/v1/auth/dev/login" -H 'Content-Type: application/json' -d "{\"email\":\"${OPERATOR_EMAIL}\"}")
 LOGIN_BODY=$(cat /tmp/f8-login-body.$$); rm -f /tmp/f8-login-body.$$
