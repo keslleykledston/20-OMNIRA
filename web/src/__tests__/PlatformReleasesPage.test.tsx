@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Outlet, Route, Routes } from 'react-router-dom'
@@ -478,6 +478,46 @@ describe('PlatformReleasesPage — pagination (Codex round 5)', () => {
     // comes back so the person can re-fetch what is actually after the (new) first page.
     await waitFor(() => expect(screen.queryByText('run-older-1')).toBeNull())
     expect(await screen.findByRole('button', { name: 'Carregar mais execuções' })).toBeInTheDocument()
+  })
+
+  it('discards a "load more" response for the OLD first-page boundary that resolves after a reset (Codex round 7)', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, i) => run('SUCCEEDED', `run-first-${i}`))
+    const staleSecondPage = [run('SUCCEEDED', 'run-stale')]
+    let currentFirstPage = firstPage
+    let resolveSecondPage: (() => void) | undefined
+    vi.mocked(axios.get).mockImplementation((url: string, config?: any) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) return Promise.resolve({ data: installation() })
+      if (u.endsWith('/platform/releases')) return Promise.resolve({ data: { items: [] } })
+      if (u.endsWith('/platform/updates/runs')) {
+        const before = config?.params?.before as string | undefined
+        if (!before) return Promise.resolve({ data: { items: currentFirstPage } })
+        // The "load more" request for the OLD boundary hangs until the test explicitly
+        // resolves it — AFTER the first-page refresh (and its reset) has already happened.
+        return new Promise((resolve) => { resolveSecondPage = () => resolve({ data: { items: staleSecondPage } }) })
+      }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    const { queryClient } = renderAtWithClient(<PlatformReleasesPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('tab', { name: 'Atualizações' }))
+    await screen.findByText('run-first-0')
+    await user.click(screen.getByRole('button', { name: 'Carregar mais execuções' }))
+    await waitFor(() => expect(resolveSecondPage).toBeDefined())
+
+    // The first page refreshes (bumping the generation) WHILE that request is still in flight.
+    currentFirstPage = [run('DEPLOYING', 'run-new'), ...firstPage.slice(0, 49)]
+    await queryClient.invalidateQueries({ queryKey: ['platform-runs'] })
+    await screen.findByText('run-new')
+
+    // Only NOW does the stale, old-boundary response arrive.
+    await act(async () => {
+      resolveSecondPage!()
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    // It must never reappear: onSuccess compares its own generation against the current one.
+    expect(screen.queryByText('run-stale')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Carregar mais execuções' })).toBeInTheDocument()
   })
 })
 

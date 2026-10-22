@@ -81,12 +81,21 @@ export default function PlatformReleasesPage() {
   // than PAGE_SIZE never offers the button at all).
   const [extraReleasesHasMore, setExtraReleasesHasMore] = useState<boolean | null>(null)
   const hasMoreReleases = extraReleasesHasMore ?? (releases.data?.length ?? 0) >= PAGE_SIZE
+  // Achado Codex [P2] (7a rodada): a reset acima por si só não bastava — se o "load more" já
+  // estivesse EM VOO (cursor calculado a partir da fronteira ANTIGA) no exato momento em que a
+  // primeira página muda, a resposta chegava DEPOIS da reset e a reinseria no acumulado, criando
+  // de volta o mesmo buraco silencioso. Toda resposta carrega a geração em que foi PEDIDA; se a
+  // geração atual já avançou quando ela chega, é descartada.
+  const releasesGenerationRef = useRef(0)
   const loadMoreReleases = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      const generation = releasesGenerationRef.current
       const last = (olderReleases.length ? olderReleases : releases.data ?? [])[olderReleases.length ? olderReleases.length - 1 : (releases.data?.length ?? 1) - 1]
-      return platformReleasesAPI.list(last?.ingested_at)
+      const page = await platformReleasesAPI.list(last?.ingested_at)
+      return { page, generation }
     },
-    onSuccess: (page) => {
+    onSuccess: ({ page, generation }) => {
+      if (generation !== releasesGenerationRef.current) return
       setOlderReleases((prev) => [...prev, ...page])
       setExtraReleasesHasMore(page.length >= PAGE_SIZE)
     },
@@ -102,10 +111,13 @@ export default function PlatformReleasesPage() {
   const prevTopReleaseIdRef = useRef<string | undefined>(undefined)
   const topReleaseId = releases.data?.[0]?.release_id
   useEffect(() => {
-    if (prevTopReleaseIdRef.current !== undefined && topReleaseId !== undefined && topReleaseId !== prevTopReleaseIdRef.current && olderReleases.length > 0) {
-      setOlderReleases([])
-      setExtraReleasesHasMore(null)
-      showToast('O catálogo foi atualizado — carregue mais de novo se precisar ver releases mais antigas.', 'info')
+    if (prevTopReleaseIdRef.current !== undefined && topReleaseId !== undefined && topReleaseId !== prevTopReleaseIdRef.current) {
+      releasesGenerationRef.current += 1
+      if (olderReleases.length > 0) {
+        setOlderReleases([])
+        setExtraReleasesHasMore(null)
+        showToast('O catálogo foi atualizado — carregue mais de novo se precisar ver releases mais antigas.', 'info')
+      }
     }
     prevTopReleaseIdRef.current = topReleaseId
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -114,12 +126,16 @@ export default function PlatformReleasesPage() {
   const [olderRuns, setOlderRuns] = useState<PlatformUpdateRun[]>([])
   const [extraRunsHasMore, setExtraRunsHasMore] = useState<boolean | null>(null)
   const hasMoreRuns = extraRunsHasMore ?? (runs.data?.length ?? 0) >= PAGE_SIZE
+  const runsGenerationRef = useRef(0)
   const loadMoreRuns = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      const generation = runsGenerationRef.current
       const last = (olderRuns.length ? olderRuns : runs.data ?? [])[olderRuns.length ? olderRuns.length - 1 : (runs.data?.length ?? 1) - 1]
-      return platformRunsAPI.list(last?.created_at)
+      const page = await platformRunsAPI.list(last?.created_at)
+      return { page, generation }
     },
-    onSuccess: (page) => {
+    onSuccess: ({ page, generation }) => {
+      if (generation !== runsGenerationRef.current) return
       setOlderRuns((prev) => [...prev, ...page])
       setExtraRunsHasMore(page.length >= PAGE_SIZE)
     },
@@ -130,10 +146,13 @@ export default function PlatformReleasesPage() {
   const prevTopRunIdRef = useRef<string | undefined>(undefined)
   const topRunId = runs.data?.[0]?.id
   useEffect(() => {
-    if (prevTopRunIdRef.current !== undefined && topRunId !== undefined && topRunId !== prevTopRunIdRef.current && olderRuns.length > 0) {
-      setOlderRuns([])
-      setExtraRunsHasMore(null)
-      showToast('O histórico foi atualizado — carregue mais de novo se precisar ver execuções mais antigas.', 'info')
+    if (prevTopRunIdRef.current !== undefined && topRunId !== undefined && topRunId !== prevTopRunIdRef.current) {
+      runsGenerationRef.current += 1
+      if (olderRuns.length > 0) {
+        setOlderRuns([])
+        setExtraRunsHasMore(null)
+        showToast('O histórico foi atualizado — carregue mais de novo se precisar ver execuções mais antigas.', 'info')
+      }
     }
     prevTopRunIdRef.current = topRunId
     // eslint-disable-next-line react-hooks/exhaustive-deps
