@@ -92,13 +92,21 @@ CREATE TABLE IF NOT EXISTS revoked_releases (
 -- confirmar com sucesso o estado ATUAL do Postgres. RevocationSyncFresh compara contra
 -- signing.yaml anti_replay.revocation.max_cache_age_seconds (300s) — "nunca revogada" só é
 -- confiável enquanto esta marca for recente; mais antiga que isso é fail-closed, nunca
--- "presumo que está tudo bem". NENHUMA linha (achado Codex [P1] rodada 9) é tratada como
--- "nunca sincronizado" — nunca "obsoleto" — para nunca bloquear permanentemente uma
--- instalação standalone (OMNIRA_PLATFORM_RELEASE_API_ENABLED=false, ADR-0054) onde nenhum
--- processo jamais chama MarkRevocationSynced.
+-- "presumo que está tudo bem".
+--
+-- standalone (achado Codex [P1] rodada 10 da fatia de retenção/GC, corrigindo a rodada 9):
+-- NENHUMA linha NUNCA pode significar "fresco" por decreto — uma instalação GERENCIADA
+-- (API habilitada em algum lugar) cuja primeira sincronização simplesmente ainda não
+-- aconteceu (ex. a API ficou fora do ar durante o bootstrap) ficaria assim indefinidamente
+-- "confiável" sem NUNCA ter confirmado o estado real do Postgres — exatamente o oposto do
+-- que esta tabela existe para garantir. Só uma instalação standalone DE VERDADE
+-- (OMNIRA_AGENT_STANDALONE=true, decisão EXPLÍCITA do operador, nunca inferida pela simples
+-- ausência de uma linha) grava standalone=1 (MarkStandalone, chamado uma vez no startup do
+-- daemon) e é tratada como fresca para sempre, sem depender de nenhuma sincronização real.
 CREATE TABLE IF NOT EXISTS revocation_sync (
-  id        INTEGER PRIMARY KEY CHECK (id = 1),
-  synced_at TEXT NOT NULL
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  synced_at  TEXT NOT NULL,
+  standalone INTEGER NOT NULL DEFAULT 0
 );
 
 -- F9 (monitoramento, "status do agente"): o lock de agent_lock só existe ENQUANTO um run está
@@ -701,7 +709,7 @@ func (l *Ledger) IsReleaseRevoked(ctx context.Context, releaseID string) (revoke
 // pode avançar este relógio).
 func (l *Ledger) MarkRevocationSynced(ctx context.Context) error {
 	_, err := l.db.ExecContext(ctx,
-		`INSERT INTO revocation_sync (id, synced_at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET synced_at = excluded.synced_at`,
+		`INSERT INTO revocation_sync (id, synced_at, standalone) VALUES (1, ?, 0) ON CONFLICT(id) DO UPDATE SET synced_at = excluded.synced_at`,
 		time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("agent: marcar sincronização de revogação: %w", err)
@@ -709,35 +717,49 @@ func (l *Ledger) MarkRevocationSynced(ctx context.Context) error {
 	return nil
 }
 
-// RevocationSyncFresh (F9, achado Codex [P1] rodada 7) responde se a última sincronização
-// bem-sucedida com o Postgres (MarkRevocationSynced) é mais recente que maxAge —
-// signing.yaml anti_replay.revocation.max_cache_age_seconds (300s). "Não revogada" só pode
-// ser confiada enquanto este relógio estiver fresco: se a API ficou fora do ar por mais tempo
-// do que isso, uma revogação pode ter acontecido no Postgres sem NUNCA ter sido verificada
-// por este ledger — IsReleaseRevoked responderia "false" por simples ausência de dados, nunca
-// por confirmação real. lastSync é devolvido mesmo quando fresh=false, só para contexto em
-// mensagens de erro/log — o chamador nunca decide nada a partir dele diretamente.
+// MarkStandalone (F9, achado Codex [P1] rodada 10 da fatia de retenção/GC) registra, UMA
+// ÚNICA VEZ e por decisão EXPLÍCITA do operador (OMNIRA_AGENT_STANDALONE=true, chamado pelo
+// daemon no startup — ver apps/update-agent), que esta instalação NUNCA terá uma API
+// sincronizando revogações, e portanto "nenhuma linha em revocation_sync" para ela é
+// legitimamente "fresco para sempre", nunca "obsoleto". Idempotente; nunca sobrescreve
+// synced_at de uma sincronização real que já tenha acontecido antes (ex. a flag foi
+// adicionada depois de a instalação já ter sido gerenciada por um tempo).
+func (l *Ledger) MarkStandalone(ctx context.Context) error {
+	_, err := l.db.ExecContext(ctx,
+		`INSERT INTO revocation_sync (id, synced_at, standalone) VALUES (1, ?, 1) ON CONFLICT(id) DO UPDATE SET standalone = 1`,
+		time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("agent: marcar instalação standalone: %w", err)
+	}
+	return nil
+}
+
+// RevocationSyncFresh (F9, achados Codex [P1] rodadas 7 e 10) responde se a última
+// sincronização bem-sucedida com o Postgres (MarkRevocationSynced) é mais recente que
+// maxAge — signing.yaml anti_replay.revocation.max_cache_age_seconds (300s) — OU se esta
+// instalação foi marcada standalone de propósito (MarkStandalone), caso em que é sempre
+// fresca. "Não revogada" só pode ser confiada enquanto este relógio estiver fresco: se a API
+// ficou fora do ar por mais tempo do que isso, uma revogação pode ter acontecido no Postgres
+// sem NUNCA ter sido verificada por este ledger — IsReleaseRevoked responderia "false" por
+// simples ausência de dados, nunca por confirmação real.
+//
+// NENHUMA linha (achado Codex [P1] rodada 10, corrigindo a rodada 9) agora é FAIL-CLOSED —
+// nunca mais "fresco por decreto". A rodada 9 tratava a ausência de linha como fresca para
+// nunca bloquear uma instalação standalone — mas isso também fazia uma instalação GERENCIADA
+// (API habilitada em algum lugar) cuja PRIMEIRA sincronização simplesmente ainda não
+// aconteceu (ex. API fora do ar durante o bootstrap) ficar "confiável" indefinidamente, sem
+// NUNCA ter confirmado o estado real do Postgres. Só MarkStandalone (decisão explícita do
+// operador) pode tornar "nenhuma linha"/"nunca sincronizado" fresco; sem essa marca, é
+// obsoleto desde o início — e o agente/updatectl recusam operações perigosas até a primeira
+// sincronização real acontecer (ou até o operador confirmar standalone de propósito).
+// lastSync é devolvido mesmo quando fresh=false, só para contexto em mensagens de erro/log —
+// o chamador nunca decide nada a partir dele diretamente.
 func (l *Ledger) RevocationSyncFresh(ctx context.Context, maxAge time.Duration) (fresh bool, lastSync time.Time, err error) {
 	var raw string
-	err = l.db.QueryRowContext(ctx, `SELECT synced_at FROM revocation_sync WHERE id = 1`).Scan(&raw)
+	var standalone bool
+	err = l.db.QueryRowContext(ctx, `SELECT synced_at, standalone FROM revocation_sync WHERE id = 1`).Scan(&raw, &standalone)
 	if errors.Is(err, sql.ErrNoRows) {
-		// F9, achado Codex [P1] rodadas 7 e 9: NENHUMA linha significa "esta instalação
-		// nunca teve uma sincronização de verdade com o Postgres" — nunca "obsoleta" (que
-		// implicaria já ter tido uma referência confiável e tê-la perdido). Duas situações
-		// legítimas caem aqui: (a) a janela estreita entre um ledger novo/recém-upgradado e
-		// a primeira sincronização real (updatemgr.reconcileRevocationsToLedger ainda não
-		// rodou nenhuma vez); (b) uma instalação standalone — ADR-0054, OMNIRA_PLATFORM_
-		// RELEASE_API_ENABLED=false por padrão — onde NENHUM processo jamais chama
-		// MarkRevocationSynced, e nunca vai. Bloquear a operação normal do agente/updatectl
-		// (incluindo 'updatectl rollback', desenhado para funcionar SEM Postgres) só porque
-		// nenhuma sincronização aconteceu ainda tornaria o agente permanentemente inoperável
-		// nesse modo suportado — contrário à independência do agente em relação ao Postgres
-		// que é o ponto central deste pacote (ver comentário no topo do arquivo). "Nunca
-		// sincronizado" não é um sinal de segurança (não é uma revogação conhecida sendo
-		// escondida), é ausência de uma fonte de verdade — tratado como fresco: o chamador
-		// segue com a checagem normal de IsReleaseRevoked, que ainda bloqueia corretamente
-		// qualquer revogação que JÁ tenha sido entregue a este ledger.
-		return true, time.Time{}, nil
+		return false, time.Time{}, nil
 	}
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("agent: ler sincronização de revogação: %w", err)
@@ -745,6 +767,9 @@ func (l *Ledger) RevocationSyncFresh(ctx context.Context, maxAge time.Duration) 
 	lastSync, err = time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("agent: sincronização de revogação com timestamp ilegível: %w", err)
+	}
+	if standalone {
+		return true, lastSync, nil
 	}
 	return time.Since(lastSync) <= maxAge, lastSync, nil
 }

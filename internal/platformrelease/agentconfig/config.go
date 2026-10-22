@@ -31,6 +31,13 @@ type Config struct {
 	PollInterval   time.Duration
 	HealthTimeout  time.Duration
 	ObserveWindow  time.Duration
+	// Standalone (F9, achado Codex [P1] rodada 10 da fatia de retenção/GC): decisão
+	// EXPLÍCITA do operador de que esta instalação NUNCA terá uma Update Manager API
+	// sincronizando revogações — nunca inferida pela simples ausência de sincronização
+	// (que passaria a ser indistinguível de uma instalação GERENCIADA cuja primeira
+	// sincronização simplesmente ainda não aconteceu). Ver Ledger.MarkStandalone/
+	// RevocationSyncFresh.
+	Standalone bool
 
 	ComposeBaseFiles   colonSeparatedList
 	ComposeOverrideDir string
@@ -85,6 +92,8 @@ func FlagSet(fs *flag.FlagSet) *Config {
 		"tempo máximo esperando um container ficar saudável")
 	fs.DurationVar(&c.ObserveWindow, "observe-window", envDuration("OMNIRA_AGENT_OBSERVE_WINDOW", 2*time.Minute),
 		"janela de observação pós-deploy antes de declarar SUCCEEDED (especificação §7.2)")
+	fs.BoolVar(&c.Standalone, "standalone", envBool("OMNIRA_AGENT_STANDALONE", false),
+		"confirma EXPLICITAMENTE que esta instalação nunca terá uma Update Manager API sincronizando revogações (ADR-0054) — nunca habilitar numa instalação gerenciada")
 
 	c.ComposeBaseFiles = colonSeparatedList(strings.Split(
 		envStr("OMNIRA_AGENT_COMPOSE_BASE_FILES", "docker-compose.yml:docker-compose.override.yml"), ":"))

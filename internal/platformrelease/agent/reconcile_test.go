@@ -130,6 +130,18 @@ func testExecutor(t *testing.T, migrate MigrateRunner, backup BackupRunner, comp
 		t.Fatalf("OpenLedger: %v", err)
 	}
 	t.Cleanup(func() { ledger.Close() })
+	// F9, achado Codex [P1] rodada 10 (fatia de retenção/GC): desde essa rodada, "nenhuma
+	// sincronização de revogação ainda" é fail-closed por padrão (nunca mais "fresco por
+	// decreto") — só uma instalação EXPLICITAMENTE marcada standalone, ou que já sincronizou
+	// ao menos uma vez, é tratada como confiável. A GRANDE maioria dos testes deste arquivo
+	// não é sobre revogação/frescor — são sobre outros comportamentos do agente — então
+	// começam com uma sincronização "agora" por padrão (nunca standalone: isso quebraria
+	// TestExecute_StaleRevocationSync_RefusesToApplyNewSteps, que precisa que o relógio de
+	// IDADE ainda importe depois de um backdate). Testes que precisam EXATAMENTE do estado
+	// "nunca sincronizado"/"standalone" constroem o ledger deles mesmos, sem usar este helper.
+	if err := ledger.MarkRevocationSynced(context.Background()); err != nil {
+		t.Fatalf("MarkRevocationSynced: %v", err)
+	}
 	h, err := ledger.AcquireLock(context.Background(), "inst-1", "holder-a", time.Minute)
 	if err != nil {
 		t.Fatalf("AcquireLock: %v", err)
@@ -636,6 +648,12 @@ func TestReconcile_HeartbeatKeepsLockAliveDuringLongObservation(t *testing.T) {
 		t.Fatalf("OpenLedger B: %v", err)
 	}
 	defer ledgerB.Close()
+	// F9, achado Codex [P1] rodada 10 (fatia de retenção/GC): "nenhuma sincronização ainda"
+	// agora é fail-closed por padrão — este teste não é sobre revogação/frescor, então
+	// sincroniza explicitamente (mesmo espírito do default de testExecutor).
+	if err := ledgerA.MarkRevocationSynced(context.Background()); err != nil {
+		t.Fatalf("MarkRevocationSynced: %v", err)
+	}
 
 	manifest := testManifest("expand_only")
 	fr := fakeRunnerForManifest(manifest)
@@ -1354,6 +1372,12 @@ func TestReconcile_StopsQueueAfterRecoveryRequired(t *testing.T) {
 		t.Fatalf("OpenLedger: %v", err)
 	}
 	defer ledger.Close()
+	// F9, achado Codex [P1] rodada 10 (fatia de retenção/GC): "nenhuma sincronização ainda"
+	// agora é fail-closed por padrão — este teste não é sobre revogação/frescor, então
+	// sincroniza explicitamente (mesmo espírito do default de testExecutor).
+	if err := ledger.MarkRevocationSynced(ctx); err != nil {
+		t.Fatalf("MarkRevocationSynced: %v", err)
+	}
 
 	// "docker inspect" sempre reporta "starting" (nunca "healthy") — faz o deploy chegar a
 	// PREPARING/DEPLOYING (snapshot concluído) e então falhar no health check, DEPOIS de

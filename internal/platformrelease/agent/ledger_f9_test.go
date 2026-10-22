@@ -1,17 +1,18 @@
 package agent
 
 // F9 (release/policies/signing.yaml "anti_replay.revocation.max_cache_age_seconds"): prova
-// direta de Ledger.RevocationSyncFresh/MarkRevocationSynced — o relógio que isRevokedOrUnsafe
-// (reconcile.go) consulta antes de confiar em "não revogada".
+// direta de Ledger.RevocationSyncFresh/MarkRevocationSynced/MarkStandalone — o relógio que
+// isRevokedOrUnsafe (reconcile.go) consulta antes de confiar em "não revogada".
 //
-// Achado Codex [P1] (rodada 9): um ledger SEM NENHUMA sincronização registrada (nenhuma linha
-// em revocation_sync) nunca é tratado como "obsoleto" — é o caso legítimo de uma instalação
-// standalone (OMNIRA_PLATFORM_RELEASE_API_ENABLED=false por padrão, ADR-0054) onde NENHUM
-// processo jamais chama MarkRevocationSynced, e nunca vai; bloquear a operação normal do
-// agente/updatectl (incluindo 'updatectl rollback', desenhado para funcionar SEM Postgres)
-// nesse modo suportado tornaria o agente permanentemente inoperável. Só depois que uma
-// sincronização de VERDADE aconteceu (MarkRevocationSynced chamado ao menos uma vez) é que o
-// relógio passa a poder envelhecer e, se ficar velho demais, bloquear.
+// Achado Codex [P1] (rodada 10, corrigindo a rodada 9): "nenhuma sincronização ainda" é
+// FAIL-CLOSED por padrão, nunca "fresco por decreto" — a rodada 9 tratava isso como fresco
+// para nunca bloquear uma instalação standalone, mas isso também deixava uma instalação
+// GERENCIADA (API habilitada em algum lugar) cuja PRIMEIRA sincronização simplesmente ainda
+// não aconteceu (ex. API fora do ar durante o bootstrap) "confiável" indefinidamente, sem
+// NUNCA ter confirmado o estado real do Postgres. Só MarkStandalone — decisão EXPLÍCITA do
+// operador (OMNIRA_AGENT_STANDALONE=true) — pode tornar essa ausência de sincronização
+// fresca para sempre; sem essa marca, só MarkRevocationSynced (uma sincronização de verdade)
+// destrava o relógio.
 
 import (
 	"context"
@@ -36,7 +37,7 @@ func backdateRevocationSync(t *testing.T, ledger *Ledger, age time.Duration) {
 	}
 }
 
-func TestLedger_RevocationSyncFresh_NeverSynced_TreatedAsFreshNeverAsStale(t *testing.T) {
+func TestLedger_RevocationSyncFresh_NeverSynced_FailsClosedByDefault(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "ledger.db")
 	ledger, err := OpenLedger(path)
@@ -45,17 +46,44 @@ func TestLedger_RevocationSyncFresh_NeverSynced_TreatedAsFreshNeverAsStale(t *te
 	}
 	defer ledger.Close()
 
-	// Nenhuma sincronização aconteceu ainda (nem MarkRevocationSynced, nem backdate) — o
-	// caso real de uma instalação standalone, ou da janela antes da primeira sincronização.
+	// Nenhuma sincronização aconteceu ainda, e nunca foi marcado standalone — o caso real de
+	// uma instalação GERENCIADA cuja primeira sincronização simplesmente ainda não
+	// aconteceu. Achado Codex [P1] (rodada 10): isso é fail-closed, nunca fresco por decreto.
 	fresh, lastSync, err := ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
 	if err != nil {
-		t.Fatalf("RevocationSyncFresh (nunca sincronizado): %v", err)
+		t.Fatalf("RevocationSyncFresh (nunca sincronizado, não-standalone): %v", err)
 	}
-	if !fresh {
-		t.Error("um ledger que NUNCA sincronizou deveria ser tratado como fresco (gate não se aplica), nunca como obsoleto")
+	if fresh {
+		t.Error("um ledger que NUNCA sincronizou e NUNCA foi marcado standalone deveria ser obsoleto (fail-closed), nunca fresco por decreto")
 	}
 	if !lastSync.IsZero() {
 		t.Errorf("lastSync deveria ser zero quando nunca houve sincronização, veio %s", lastSync)
+	}
+
+	// MarkStandalone — decisão EXPLÍCITA do operador — torna essa mesma ausência de
+	// sincronização fresca para sempre, a partir de agora.
+	if err := ledger.MarkStandalone(ctx); err != nil {
+		t.Fatalf("MarkStandalone: %v", err)
+	}
+	fresh, _, err = ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	if err != nil {
+		t.Fatalf("RevocationSyncFresh (depois de MarkStandalone): %v", err)
+	}
+	if !fresh {
+		t.Error("depois de MarkStandalone, o relógio deveria ser fresco mesmo sem nenhuma sincronização real")
+	}
+
+	// MarkStandalone continua fresco mesmo com o tempo passando — standalone nunca envelhece.
+	backdateRevocationSync(t, ledger, maxRevocationSyncAge+time.Minute)
+	if _, err := ledger.db.Exec(`UPDATE revocation_sync SET standalone = 1 WHERE id = 1`); err != nil {
+		t.Fatalf("restaurar standalone=1 após backdate: %v", err)
+	}
+	fresh, _, err = ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
+	if err != nil {
+		t.Fatalf("RevocationSyncFresh (standalone, relógio antigo): %v", err)
+	}
+	if !fresh {
+		t.Error("uma instalação standalone nunca deveria ficar obsoleta, independente da idade do relógio")
 	}
 }
 

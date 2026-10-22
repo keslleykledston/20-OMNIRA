@@ -641,11 +641,17 @@ func TestExecute_RollbackTarget_NeverSynced_StandaloneAgentStillRollsBack(t *tes
 	exec, ledger, h := testExecutor(t, &fakeMigrateRunner{}, &fakeBackupRunner{}, compose)
 	exec.HealthTimeout = 50 * time.Millisecond
 
-	// Confirma a premissa do teste: este ledger NUNCA sincronizou (nem MarkRevocationSynced,
-	// nem qualquer backdate) — exatamente o estado real de uma instalação standalone.
+	// Achado Codex [P1] (rodada 10, corrigindo a rodada 9): "nunca sincronizado" sozinho NÃO
+	// é mais suficiente — testExecutor já sincroniza por padrão (para os testes que não são
+	// sobre isso). Simula o estado REAL de uma instalação standalone: MarkStandalone,
+	// decisão EXPLÍCITA do operador (OMNIRA_AGENT_STANDALONE=true) — nunca a mera ausência
+	// de sincronização.
+	if err := ledger.MarkStandalone(ctx); err != nil {
+		t.Fatalf("MarkStandalone: %v", err)
+	}
 	fresh, _, err := ledger.RevocationSyncFresh(ctx, maxRevocationSyncAge)
 	if err != nil || !fresh {
-		t.Fatalf("premissa do teste: ledger nunca sincronizado deveria ser fresco, fresh=%v err=%v", fresh, err)
+		t.Fatalf("premissa do teste: ledger marcado standalone deveria ser fresco, fresh=%v err=%v", fresh, err)
 	}
 
 	manifest := testManifest("expand_only")
