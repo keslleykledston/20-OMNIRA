@@ -41,6 +41,8 @@ DB_NAME="omnira_f8"
 # da seção 6 (ex. erro de build Go, migração) — deixando registry/Postgres/NATS órfãos. Vazio
 # por padrão: o `[ -f "$LEDGER_PATH" ]` em cleanup() simplesmente nunca bate.
 LEDGER_PATH=""
+LOCAL_IMAGES=()  # mesma razão de LEDGER_PATH="" acima — declarado cedo para cleanup() nunca
+# expandir um array indefinido sob `set -u` se o setup falhar antes da seção 1 (registry).
 
 log() { echo "$*"; }
 section() { echo; echo "== $* =="; }
@@ -89,6 +91,12 @@ cleanup() {
   "${DOCKER[@]}" ps -aq --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null | xargs -r "${DOCKER[@]}" rm -fv >/dev/null 2>&1
   "${DOCKER[@]}" network ls -q --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null | xargs -r "${DOCKER[@]}" network rm >/dev/null 2>&1
   "${DOCKER[@]}" rm -fv "$REGISTRY_NAME" "$PG_NAME" "$NATS_NAME" >/dev/null 2>&1
+  # achado Codex: as 4 imagens de teste (tag de build + digest pós-push, ambas em
+  # LOCAL_IMAGES) nunca eram removidas do Docker local compartilhado — toda rodada (passou ou
+  # falhou) acumulava imagens no host, podendo esgotar disco com o tempo.
+  if [ "${#LOCAL_IMAGES[@]}" -gt 0 ]; then
+    "${DOCKER[@]}" rmi -f "${LOCAL_IMAGES[@]}" >/dev/null 2>&1
+  fi
   rm -rf "/tmp/omnira-f8-override-${PROJECT}"
   if [ -n "${KEEP_WORK:-}" ]; then
     echo "KEEP_WORK definido — mantendo $WORK para inspeção"
@@ -137,17 +145,24 @@ HEALTHCHECK --interval=1s --timeout=20s --retries=5 --start-period=1s CMD /healt
 DOCKEREOF
 
 declare -A DIGESTS
+# achado Codex: imagens de teste construídas/empurradas por esta execução nunca eram
+# removidas (cleanup só tira containers/rede) — ficavam acumulando no Docker local
+# compartilhado deste host a cada rodada (passou ou falhou), podendo esgotar o disco. Toda
+# referência (tag de build E digest pós-push) vai em LOCAL_IMAGES (declarado no topo do
+# script) para `docker rmi -f` em cleanup().
 build_push() {
   local tag="$1" version="$2" delay="$3" mode="$4"
   local ref="127.0.0.1:${REG_PORT}/omnira-f8-unit:${tag}"
   "${DOCKER[@]}" build --build-arg "VERSION=${version}" --build-arg "HEALTH_DELAY=${delay}" --build-arg "HEALTH_MODE=${mode}" \
     -t "$ref" "$WORK/img" >"$EVIDENCE/build-$tag.log" 2>&1 || { echo "FATAL: build $tag falhou (ver $EVIDENCE/build-$tag.log)"; exit 1; }
+  LOCAL_IMAGES+=("$ref")
   local push_out
   push_out=$("${DOCKER[@]}" push "$ref" 2>&1) || { echo "FATAL: push $tag falhou"; echo "$push_out"; exit 1; }
   local digest
   digest=$(echo "$push_out" | grep -oE 'sha256:[0-9a-f]{64}' | tail -1)
   [ -n "$digest" ] || { echo "FATAL: sem digest para $tag"; echo "$push_out"; exit 1; }
   DIGESTS[$tag]="127.0.0.1:${REG_PORT}/omnira-f8-unit@${digest}"
+  LOCAL_IMAGES+=("${DIGESTS[$tag]}")
   log "   $tag -> ${DIGESTS[$tag]}"
 }
 build_push v1 v1 0 ok
@@ -604,6 +619,21 @@ else
   report_row "3-db-incompativel-R3" "-" "$RTO3" "FAIL(estado=$ST3, checkpoints/digest não confirmam)" "cenario3-reconcile.log"; FAILS=$((FAILS+1))
 fi
 "$WORK/bin/updatectl" acknowledge-recovery --installation-id="$INSTALLATION_ID" --ledger-path="$LEDGER_PATH" --run="$RUN3" >/dev/null 2>&1
+
+# achado Codex: o Cenário 3 deixa de propósito a imagem BROKEN implantada (RECOVERY_REQUIRED,
+# nunca revertida — é exatamente o ponto do cenário R3). Sem reparar isso antes do Cenário 4,
+# o snapshot capturado ali seria o estado QUEBRADO — se o processo B do Cenário 4 algum dia
+# tomasse o caminho de rollback (em vez de concluir o deploy novo), reverteria para a imagem
+# broken, e aceitar ROLLED_BACK como PASS sem checar saúde de verdade deixaria essa falha
+# passar batido. Reimplanta o baseline v1 (reaproveitando o mesmo HARNESS real) e confirma
+# SUCCEEDED antes de seguir — o Cenário 4 sempre começa de um estado genuinamente saudável.
+M_REPAIR="$WORK/m-repair-before-4.json"
+build_local_manifest "omnira-9.9.$$-repair" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M_REPAIR"
+RUN_REPAIR=$(HARNESS create-run --manifest="$M_REPAIR" | grep -oE 'run_id=\S+' | cut -d= -f2)
+HARNESS reconcile > "$EVIDENCE/repair-before-cenario4.log" 2>&1
+ST_REPAIR=$(harness_run_state "$RUN_REPAIR")
+[ "$ST_REPAIR" = "SUCCEEDED" ] || { echo "FATAL: reparo pré-Cenário-4 não chegou a SUCCEEDED (estado=$ST_REPAIR) — ver repair-before-cenario4.log"; cat "$EVIDENCE/repair-before-cenario4.log"; exit 1; }
+log "   baseline v1 reimplantado com sucesso antes do Cenário 4 (estado anterior do Cenário 3, broken, nunca propagado)"
 
 section "Cenário 4: kill -9 real do agente em pleno apply -> recuperação via lock/fencing/heartbeat"
 T0=$(date +%s.%N)
