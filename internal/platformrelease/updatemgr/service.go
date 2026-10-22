@@ -682,14 +682,30 @@ func (s *Service) DeleteReleaseCatalogEntry(ctx context.Context, operator uuid.U
 	if err := s.refreshPendingRun(ctx, operator); err != nil {
 		return false, err
 	}
-	// Achado Codex [P2] (rodada 6 desta fatia): abre o ledger UMA VEZ aqui para poder
-	// adquirir agent_lock dentro da MESMA transação Postgres abaixo — ver o comentário no
-	// AcquireLock mais adiante.
+	// Achado Codex [P2] (rodada 6 desta fatia, estendido na rodada 7): abre o ledger e
+	// adquire agent_lock AQUI — ANTES de s.tx, nunca dentro do callback — e só libera
+	// DEPOIS que s.tx retorna (ou seja, depois que WithTenantSession já deu COMMIT ou
+	// ROLLBACK na transação Postgres). Um defer registrado DENTRO do callback (achado da
+	// rodada 6, agora corrigido) libera o lock no instante em que o callback RETORNA, que é
+	// ANTES do commit real — deixando uma janela estreita onde `updatectl start` (que nunca
+	// passa pelos advisory locks do Postgres abaixo) podia adquirir o lock já livre e criar
+	// um run para releaseID enquanto o DELETE ainda não era durável. Detém o MESMO lock que
+	// o daemon/updatectl usam: se um deploy real está em andamento (holder com heartbeat
+	// válido), AcquireLock recusa aqui, e GC corretamente não pode proceder até ele terminar.
 	ledger, lerr := agent.OpenLedger(s.ledgerPath)
 	if lerr != nil {
 		return false, fmt.Errorf("verificar o ledger local antes de permitir GC: %w", lerr)
 	}
 	defer ledger.Close()
+	h, lockErr := ledger.AcquireLock(ctx, s.installationID, s.holder, s.lease)
+	if lockErr != nil {
+		return false, fmt.Errorf("adquirir o lock do ledger local antes de permitir GC: %w", lockErr)
+	}
+	defer ledger.ReleaseLock(context.Background(), h)
+	protected, perr := protectedReleaseIDsFromOpenLedger(ctx, ledger, s.installationID)
+	if perr != nil {
+		return false, perr
+	}
 	err = s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
 		if err := authorize(c, q, operator); err != nil {
 			return err
@@ -704,22 +720,6 @@ func (s *Service) DeleteReleaseCatalogEntry(ctx context.Context, operator uuid.U
 		// apontar para uma release que já não existe mais no catálogo.
 		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "platform-installation-runs:"+s.installationID); err != nil {
 			return err
-		}
-		// Achado Codex [P2] (rodada 6 desta fatia): sem deter agent_lock durante a checagem
-		// de proveniência E o DELETE, `updatectl start` (que nunca passa pelo advisory lock
-		// do Postgres acima) podia criar um run NOVO para releaseID exatamente na janela
-		// entre protectedReleaseIDsFromOpenLedger e o DELETE comitar — slipando por todas as
-		// checagens. Detém o MESMO lock que o daemon/updatectl usam: se um deploy real está
-		// em andamento (holder com heartbeat válido), AcquireLock recusa aqui, e GC
-		// corretamente não pode proceder até ele terminar.
-		h, lockErr := ledger.AcquireLock(c, s.installationID, s.holder, s.lease)
-		if lockErr != nil {
-			return fmt.Errorf("adquirir o lock do ledger local antes de permitir GC: %w", lockErr)
-		}
-		defer ledger.ReleaseLock(context.Background(), h)
-		protected, perr := protectedReleaseIDsFromOpenLedger(c, ledger, s.installationID)
-		if perr != nil {
-			return perr
 		}
 		var prevHash, prevReleaseID string
 		rerr := q.QueryRow(c, `SELECT request_hash, release_id FROM platform_release_gc_requests WHERE operator_id = $1 AND idempotency_key = $2`, operator, idempotencyKey).
