@@ -235,6 +235,44 @@ describe('PlatformReleasesPage — closing tracking sticks (Codex round 2)', () 
     await new Promise((r) => setTimeout(r, 10))
     expect(screen.queryByText('Acompanhando run-1')).toBeNull()
   })
+
+  it('closing tracking also sticks for a run STARTED during this visit (no active run existed on load, so reentry\'s own ref was never set — Codex round 3)', async () => {
+    const user = userEvent.setup()
+    // No active run on load: the auto-resume effect never fires, so its ref alone cannot be
+    // what prevents the reopen — trackRun must mark it on every path that selects a run.
+    runs = []
+    vi.mocked(axios.post).mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/platform/updates/plans')) {
+        return {
+          data: {
+            id: 'plan-1', release_id: 'rel-2026.10.0', preflight_status: 'PASS',
+            preflight_detail: { version_known: true, version_compatible: true, agent_protocol_ok: true, reasons: [] },
+            created_by: 'op-1', created_at: '2026-10-20T10:04:00Z', expires_at: '2026-10-20T10:19:00Z',
+          },
+        }
+      }
+      if (String(url).endsWith('/platform/updates/runs')) {
+        const created = run('LOCKED')
+        runs = [created]
+        eventsByRun = { 'run-1': [{ seq: 0, kind: 'run.locked', detail: {}, created_at: '2026-10-20T10:05:00Z' }] }
+        return { data: created }
+      }
+      throw new Error(`unexpected POST ${url}`)
+    })
+    renderAt(<PlatformReleasesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Detalhes' }))
+    await user.click(screen.getByRole('button', { name: 'Rodar preflight' }))
+    await screen.findByText('PASS')
+    await user.click(screen.getByRole('button', { name: 'Iniciar atualização (escopo global)' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Confirmar atualização de escopo global' })
+    await user.click(within(dialog).getByRole('button', { name: 'Iniciar atualização' }))
+    await screen.findByText('Acompanhando run-1')
+
+    await user.click(screen.getByRole('button', { name: 'Fechar acompanhamento' }))
+    expect(screen.queryByText('Acompanhando run-1')).toBeNull()
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.queryByText('Acompanhando run-1')).toBeNull()
+  })
 })
 
 describe('PlatformReleasesPage — terminal transition (Codex round 2)', () => {

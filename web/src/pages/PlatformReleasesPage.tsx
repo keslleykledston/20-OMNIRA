@@ -81,13 +81,23 @@ export default function PlatformReleasesPage() {
   // state): achado real do Codex — sem isto, clicar em "Fechar acompanhamento" (que também zera
   // trackedRunId) fazia este efeito reabrir o MESMO run na hora, e "fechar" nunca funcionava
   // enquanto o run continuasse ativo.
+  //
+  // Achado Codex [P2] (2a rodada): a ref só era marcada DENTRO deste efeito — se a tela abriu
+  // sem nenhum run ativo (ref nunca marcada) e a pessoa iniciar uma atualização NESTA mesma
+  // visita (StartRun chama trackRun diretamente, nunca este efeito), fechar o acompanhamento
+  // reabria o MESMO run de novo, pelo mesmo motivo original. trackRun agora é o ÚNICO jeito de
+  // escolher um run (reentrada automática OU escolha manual), e sempre marca a ref — reentrada
+  // automática só pode acontecer uma vez por visita à tela, não importa por qual caminho.
   const autoResumedRef = useRef(false)
+  const trackRun = (id: string | null) => {
+    autoResumedRef.current = true
+    setTrackedRunId(id)
+  }
   useEffect(() => {
     if (autoResumedRef.current || trackedRunId || !runs.data) return
     const active = runs.data.find((r) => !isTerminalRunState(r.state))
     if (active) {
-      autoResumedRef.current = true
-      setTrackedRunId(active.id)
+      trackRun(active.id)
       setSection('atualizacoes')
     }
   }, [runs.data, trackedRunId])
@@ -167,7 +177,7 @@ export default function PlatformReleasesPage() {
             onSelect={setSelectedRelease}
             onIngest={() => setIngestOpen(true)}
             onRunStarted={(run) => {
-              setTrackedRunId(run.id)
+              trackRun(run.id)
               setSection('atualizacoes')
               void qc.invalidateQueries({ queryKey: ['platform-runs'] })
             }}
@@ -179,7 +189,7 @@ export default function PlatformReleasesPage() {
           <UpdatesSection
             runs={runs}
             trackedRunId={trackedRunId}
-            onTrack={setTrackedRunId}
+            onTrack={trackRun}
           />
         )}
       </div>
