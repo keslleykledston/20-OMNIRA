@@ -92,6 +92,25 @@ export default function PlatformReleasesPage() {
     },
     onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
   })
+  // Achado Codex [P2] (6a rodada): se a primeira página mudar (nova release ingerida — ou, no
+  // caso de runs, um novo run aparecendo via o polling de 10s) DEPOIS de já ter carregado mais
+  // páginas, a antiga última entrada da primeira página cai num buraco: some da página 1
+  // (empurrada pela entrada nova) e nunca estava na página 2 (que começa ONDE a antiga página 1
+  // terminava). Detectado pela mudança do item do TOPO (o único jeito de uma entrada nova
+  // aparecer, já que a ordem é por ingested_at/created_at, que nunca muda para uma entrada já
+  // existente) — reinicia o que foi carregado a mais em vez de arriscar um buraco silencioso.
+  const prevTopReleaseIdRef = useRef<string | undefined>(undefined)
+  const topReleaseId = releases.data?.[0]?.release_id
+  useEffect(() => {
+    if (prevTopReleaseIdRef.current !== undefined && topReleaseId !== undefined && topReleaseId !== prevTopReleaseIdRef.current && olderReleases.length > 0) {
+      setOlderReleases([])
+      setExtraReleasesHasMore(null)
+      showToast('O catálogo foi atualizado — carregue mais de novo se precisar ver releases mais antigas.', 'info')
+    }
+    prevTopReleaseIdRef.current = topReleaseId
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topReleaseId])
+
   const [olderRuns, setOlderRuns] = useState<PlatformUpdateRun[]>([])
   const [extraRunsHasMore, setExtraRunsHasMore] = useState<boolean | null>(null)
   const hasMoreRuns = extraRunsHasMore ?? (runs.data?.length ?? 0) >= PAGE_SIZE
@@ -106,6 +125,19 @@ export default function PlatformReleasesPage() {
     },
     onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
   })
+  // Mesmo achado acima, para o histórico: um run novo (via o polling de 10s) empurra a antiga
+  // última entrada da primeira página para o mesmo buraco silencioso.
+  const prevTopRunIdRef = useRef<string | undefined>(undefined)
+  const topRunId = runs.data?.[0]?.id
+  useEffect(() => {
+    if (prevTopRunIdRef.current !== undefined && topRunId !== undefined && topRunId !== prevTopRunIdRef.current && olderRuns.length > 0) {
+      setOlderRuns([])
+      setExtraRunsHasMore(null)
+      showToast('O histórico foi atualizado — carregue mais de novo se precisar ver execuções mais antigas.', 'info')
+    }
+    prevTopRunIdRef.current = topRunId
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topRunId])
 
   const [section, setSection] = useState<SectionId>('catalogo')
   const [selectedRelease, setSelectedRelease] = useState<string | null>(null)

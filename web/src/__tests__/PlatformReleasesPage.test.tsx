@@ -35,6 +35,24 @@ function renderAt(ui: ReactElement, path = '/', routePath = '*') {
   )
 }
 
+// Like renderAt, but hands back the QueryClient — to force a refetch of the first page
+// deterministically (never waiting on the real 10s refetchInterval in a test).
+function renderAtWithClient(ui: ReactElement, path = '/', routePath = '*') {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route element={<FakeShell />}>
+            <Route path={routePath} element={ui} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+  return { ...view, queryClient }
+}
+
 vi.mock('axios')
 const unauthorized = vi.hoisted(() => vi.fn())
 vi.mock('../lib/session', async (orig) => ({ ...(await orig<typeof import('../lib/session')>()), handleUnauthorized: unauthorized }))
@@ -426,6 +444,40 @@ describe('PlatformReleasesPage — pagination (Codex round 5)', () => {
     expect(await screen.findByText('run-older-1')).toBeInTheDocument()
     expect(screen.getByText('run-first-0')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Carregar mais execuções' })).toBeNull()
+  })
+
+  it('resets the accumulated older runs (never leaves a silent gap) when a new run shifts the first page\'s boundary', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, i) => run('SUCCEEDED', `run-first-${i}`))
+    const secondPage = [run('SUCCEEDED', 'run-older-1')]
+    let currentFirstPage = firstPage
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) return { data: installation() }
+      if (u.endsWith('/platform/releases')) return { data: { items: [] } }
+      if (u.endsWith('/platform/updates/runs')) {
+        const before = config?.params?.before as string | undefined
+        return { data: { items: before ? secondPage : currentFirstPage } }
+      }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    const { queryClient } = renderAtWithClient(<PlatformReleasesPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('tab', { name: 'Atualizações' }))
+    await screen.findByText('run-first-0')
+    await user.click(screen.getByRole('button', { name: 'Carregar mais execuções' }))
+    expect(await screen.findByText('run-older-1')).toBeInTheDocument()
+
+    // A NEW run appears at the top of the first page (e.g. just started, or synced by the
+    // 10s poll) — the item that used to be first-page's last entry is pushed into the gap
+    // between the (refreshed) first page and the already-fetched second page.
+    currentFirstPage = [run('DEPLOYING', 'run-new'), ...firstPage.slice(0, 49)]
+    await queryClient.invalidateQueries({ queryKey: ['platform-runs'] })
+
+    await screen.findByText('run-new')
+    // The stale second page is discarded rather than silently hiding the gap — the button
+    // comes back so the person can re-fetch what is actually after the (new) first page.
+    await waitFor(() => expect(screen.queryByText('run-older-1')).toBeNull())
+    expect(await screen.findByRole('button', { name: 'Carregar mais execuções' })).toBeInTheDocument()
   })
 })
 
