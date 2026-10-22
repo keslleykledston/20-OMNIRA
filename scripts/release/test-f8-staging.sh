@@ -36,6 +36,11 @@ PG_NAME="omnira-$RUN-pg"
 NATS_NAME="omnira-$RUN-nats"
 PROJECT="omnira-$RUN-staging"
 DB_NAME="omnira_f8"
+# achado Codex: sob `set -u`, cleanup() (registrada via trap ANTES desta variável existir)
+# expandiria LEDGER_PATH indefinida e abortaria a limpeza inteira se o setup falhasse antes
+# da seção 6 (ex. erro de build Go, migração) — deixando registry/Postgres/NATS órfãos. Vazio
+# por padrão: o `[ -f "$LEDGER_PATH" ]` em cleanup() simplesmente nunca bate.
+LEDGER_PATH=""
 
 log() { echo "$*"; }
 section() { echo; echo "== $* =="; }
@@ -55,12 +60,20 @@ cleanup() {
   mkdir -p "$ARTIFACTS_DIR"
   [ -f "$WORK/report-final.md" ] && cp "$WORK/report-final.md" "$ARTIFACTS_DIR/"
   [ -d "$EVIDENCE" ] && cp -r "$EVIDENCE" "$ARTIFACTS_DIR/evidence"
-  [ -f "$LEDGER_PATH" ] && cp "$LEDGER_PATH" "$ARTIFACTS_DIR/ledger.db"
+  # achado Codex: a API real ainda tem o ledger SQLite aberto em modo WAL neste ponto — runs e
+  # checkpoints recém-committed podem estar só em ledger.db-wal, nunca em ledger.db; copiar só
+  # o .db (e só depois matar a API) arrisca um snapshot sem nem as tabelas. Mata a API PRIMEIRO
+  # (ela fecha o SQLite ao sair) e só então copia .db junto dos sidecars -wal/-shm, se existirem.
+  [ -f "$WORK/api.pid" ] && kill "$(cat "$WORK/api.pid")" 2>/dev/null && wait "$(cat "$WORK/api.pid")" 2>/dev/null
+  if [ -n "$LEDGER_PATH" ] && [ -f "$LEDGER_PATH" ]; then
+    cp "$LEDGER_PATH" "$ARTIFACTS_DIR/ledger.db"
+    [ -f "$LEDGER_PATH-wal" ] && cp "$LEDGER_PATH-wal" "$ARTIFACTS_DIR/ledger.db-wal"
+    [ -f "$LEDGER_PATH-shm" ] && cp "$LEDGER_PATH-shm" "$ARTIFACTS_DIR/ledger.db-shm"
+  fi
   echo "evidência persistida em $ARTIFACTS_DIR (fora de \$WORK, sobrevive a esta limpeza)"
   "${DOCKER[@]}" ps -aq --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null | xargs -r "${DOCKER[@]}" rm -fv >/dev/null 2>&1
   "${DOCKER[@]}" network ls -q --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null | xargs -r "${DOCKER[@]}" network rm >/dev/null 2>&1
   "${DOCKER[@]}" rm -fv "$REGISTRY_NAME" "$PG_NAME" "$NATS_NAME" >/dev/null 2>&1
-  [ -f "$WORK/api.pid" ] && kill "$(cat "$WORK/api.pid")" 2>/dev/null
   [ -f "$WORK/agent.pid" ] && kill -9 "$(cat "$WORK/agent.pid")" 2>/dev/null
   rm -rf "/tmp/omnira-f8-override-${PROJECT}"
   if [ -n "${KEEP_WORK:-}" ]; then
@@ -493,14 +506,23 @@ RUN3=$(HARNESS create-run --manifest="$M3" | grep -oE 'run_id=\S+' | cut -d= -f2
 HARNESS reconcile > "$EVIDENCE/cenario3-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO3=$(echo "$T1 - $T0" | bc)
 ST3=$(harness_run_state "$RUN3")
+CKPT3=$(harness_checkpoints "$RUN3"); echo "$CKPT3" > "$EVIDENCE/cenario3-checkpoints.log"
 log "   run $RUN3 (api quebrada, R3 declarado): estado=$ST3 (RTO ${RTO3}s)"
-if [ "$ST3" = "RECOVERY_REQUIRED" ]; then
-  log "   ${GRN}OK${NC}: isRollbackSafe recusou rollback automático (recovery_class=R3) -> RECOVERY_REQUIRED, evidência preservada, nunca autodestrutivo"
+# achado Codex: RECOVERY_REQUIRED sozinho não prova que o deploy da imagem broken foi
+# tentado/o health check real falhou/o rollback automático foi de fato RECUSADO (uma falha de
+# migração pós-snapshot também termina em RECOVERY_REQUIRED para um manifesto R3, assim como
+# um rollback tentado-mas-falho). Confirma os checkpoints reais 'health...failed' e
+# 'recovery_decision failed ... recovery_class=R3' e que o deploy broken ficou NO LUGAR
+# (nenhuma mutação de rollback aconteceu — nunca autodestrutivo).
+API_CID3=$("${DOCKER[@]}" ps -q --filter "label=com.docker.compose.project=${PROJECT}" --filter "label=com.docker.compose.service=api" --filter "label=com.docker.compose.oneoff=False" | head -1)
+API_DIGEST3=$("${DOCKER[@]}" inspect --format '{{.Config.Image}}' "$API_CID3" 2>/dev/null)
+if [ "$ST3" = "RECOVERY_REQUIRED" ] && echo "$CKPT3" | grep -q "health.*failed" && echo "$CKPT3" | grep -q "recovery_decision failed.*recovery_class=R3" && [ "$API_DIGEST3" = "${DIGESTS[broken]}" ]; then
+  log "   ${GRN}OK${NC}: isRollbackSafe recusou rollback automático (recovery_class=R3) -> RECOVERY_REQUIRED, deploy broken permanece no lugar (digest confirmado), evidência preservada, nunca autodestrutivo"
   report_row "3-db-incompativel-R3 (health timeout + R3 declarado)" "R3" "$RTO3" "PASS" "cenario3-reconcile.log"
 else
-  cat "$EVIDENCE/cenario3-reconcile.log"
-  report_row "3-db-incompativel-R3" "-" "$RTO3" "FAIL(estado=$ST3, esperava RECOVERY_REQUIRED)" "cenario3-reconcile.log"; FAILS=$((FAILS+1))
-  log "   reconhecendo RECOVERY_REQUIRED pendente para não bloquear os próximos cenários"
+  cat "$EVIDENCE/cenario3-reconcile.log"; echo "$CKPT3"
+  log "   digest atual do unit api: $API_DIGEST3 (esperava ${DIGESTS[broken]}, nunca revertido)"
+  report_row "3-db-incompativel-R3" "-" "$RTO3" "FAIL(estado=$ST3, checkpoints/digest não confirmam)" "cenario3-reconcile.log"; FAILS=$((FAILS+1))
 fi
 "$WORK/bin/updatectl" acknowledge-recovery --installation-id="$INSTALLATION_ID" --ledger-path="$LEDGER_PATH" --run="$RUN3" >/dev/null 2>&1
 
