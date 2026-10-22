@@ -494,6 +494,23 @@ func releaseSafeToDelete(ctx context.Context, q platformdb.Querier, releaseID st
 	if !pastRetention {
 		reasons = append(reasons, "ainda dentro da janela de retenção do canal (release/policies/channels.yaml)")
 	}
+	// Achado Codex [P1] (rodada 1 desta fatia): platform_installations.current_release_id
+	// NUNCA tem foreign key para platform_releases (de propósito — ver o comentário da
+	// coluna) porque SetInstallationVersion/updatectl podem registrar a versão instalada
+	// SEM nenhum plano/run correspondente no Postgres (ex. uma recuperação manual R3/R4, ou
+	// o bootstrap inicial de uma instalação). Sem esta checagem EXPLÍCITA, uma release assim
+	// passava pelas três checagens abaixo (revogação/run/plano, todas zero) e era REMOVIDA
+	// do catálogo mesmo sendo a release REALMENTE instalada agora — deixando
+	// current_release_id apontando para nada E, pior, tornando essa release IMPOSSÍVEL de
+	// revogar depois (RevokeRelease exige a linha do catálogo existir) se um CVE for
+	// descoberto para o que está genuinamente rodando.
+	var currentReleaseID *string
+	if err := q.QueryRow(ctx, `SELECT current_release_id FROM platform_installations`).Scan(&currentReleaseID); err != nil {
+		return false, nil, err
+	}
+	if currentReleaseID != nil && *currentReleaseID == releaseID {
+		reasons = append(reasons, "release atualmente instalada (platform_installations.current_release_id) — nunca removida do catálogo, mesmo sem run/plano correspondente")
+	}
 	var n int
 	if err := q.QueryRow(ctx, `SELECT count(*) FROM platform_release_revocations WHERE release_id = $1`, releaseID).Scan(&n); err != nil {
 		return false, nil, err
@@ -540,6 +557,14 @@ func (s *Service) DeleteReleaseCatalogEntry(ctx context.Context, operator uuid.U
 			return err
 		}
 		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, operator.String()+"/"+idempotencyKey); err != nil {
+			return err
+		}
+		// Achado Codex [P1]: o MESMO lock que SetInstallationVersion/refreshPendingRun usam
+		// para serializar escritas em platform_installations — sem isto, uma chamada
+		// concorrente podia marcar ESTA release como current_release_id depois da checagem
+		// de releaseSafeToDelete abaixo, mas antes do DELETE comitar, deixando a instalação
+		// apontar para uma release que já não existe mais no catálogo.
+		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "platform-installation-runs:"+s.installationID); err != nil {
 			return err
 		}
 		var prevHash, prevReleaseID string

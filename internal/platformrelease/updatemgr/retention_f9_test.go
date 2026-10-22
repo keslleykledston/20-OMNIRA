@@ -168,3 +168,54 @@ func TestUpdateMgr_DeleteReleaseCatalogEntry_SucceedsWhenPastRetentionAndUnrefer
 		t.Error("replay da MESMA chave deveria devolver deleted=true")
 	}
 }
+
+// TestUpdateMgr_DeleteReleaseCatalogEntry_RefusesWhenCurrentlyInstalled é a prova central do
+// achado Codex [P1] (rodada 1 desta fatia): platform_installations.current_release_id NUNCA
+// tem foreign key para platform_releases — SetInstallationVersion (ex. recuperação manual
+// R3/R4, ou o bootstrap inicial de uma instalação) pode registrar uma release como
+// ATUALMENTE instalada SEM nenhum plano/run correspondente no Postgres. Sem a checagem
+// explícita, essa release passava pelas outras três checagens (revogação/run/plano, todas
+// zero) e era removida — deixando a instalação apontar para uma release inexistente E
+// tornando-a impossível de revogar depois se um CVE for descoberto para o que está
+// genuinamente rodando.
+func TestUpdateMgr_DeleteReleaseCatalogEntry_RefusesWhenCurrentlyInstalled(t *testing.T) {
+	w := newWorld(t)
+	svc := newService(t, w)
+	op := w.operator("op")
+
+	m := manifestJSONChannel(t, "omnira-9.9.305", domain.ChannelCandidate, []string{"0.1.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0305", m); err != nil {
+		t.Fatal(err)
+	}
+	// Registra como instalada SEM nenhum plano/run — exatamente o caso real que o achado
+	// aponta (uma recuperação manual, ou o bootstrap inicial, nunca passa por CreatePlan/
+	// StartRun).
+	if _, err := svc.SetInstallationVersion(w.ctx, op, "setver-key-f9-0305", "9.9.305", "omnira-9.9.305"); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(`UPDATE platform_releases SET ingested_at = now() - interval '400 days' WHERE release_id = $1`, "omnira-9.9.305")
+
+	candidates, err := svc.ListRetentionCandidates(w.ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *updatemgr.RetentionCandidate
+	for i := range candidates {
+		if candidates[i].ReleaseID == "omnira-9.9.305" {
+			found = &candidates[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("omnira-9.9.305 deveria aparecer no relatório")
+	}
+	if found.SafeToDelete {
+		t.Error("a release ATUALMENTE instalada nunca deveria ser safe_to_delete, mesmo passada da retenção e sem run/plano/revogação")
+	}
+
+	if _, err := svc.DeleteReleaseCatalogEntry(w.ctx, op, "gc-key-f9-0305", "omnira-9.9.305"); !errors.Is(err, updatemgr.ErrInvalid) {
+		t.Errorf("esperava ErrInvalid (release atualmente instalada), veio %v", err)
+	}
+	if n := w.count(`SELECT count(*) FROM platform_releases WHERE release_id = $1`, "omnira-9.9.305"); n != 1 {
+		t.Errorf("a release atualmente instalada nunca deveria ser removida, achei %d linhas", n)
+	}
+}
