@@ -9,6 +9,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -321,5 +322,84 @@ func TestExecute_RevokedDuringFinalHealthRevalidation_NeverCommitsSucceeded(t *t
 	}
 	if got.State != domain.StateRecoveryRequired {
 		t.Fatalf("uma revogação chegada DURANTE revalidateHealthBeforeSuccess (WaitHealthy) nunca deveria permitir SUCCEEDED — esperava RECOVERY_REQUIRED, veio %s", got.State)
+	}
+}
+
+// TestExecute_RollbackTarget_RevokedAfterSucceeding_ForcesRecoveryRequired é a prova central
+// do achado Codex [P1] (rodada 6): a checagem de revogação em recover() só olhava a release
+// ENTRANDO — nunca a release de DESTINO de um rollback automático. Cenário: release A é
+// instalada com sucesso (run-A, SUCCEEDED), DEPOIS é revogada (ex. CVE descoberto após o
+// fato), e então release B falha depois de mutar (deploy nunca fica saudável) — o rollback
+// "normal" reverteria de volta para A. Prova que isso NUNCA acontece: RECOVERY_REQUIRED, e
+// Compose.Rollback (um segundo "docker compose up", detectável por applyCount) nunca chega a
+// ser chamado de verdade.
+func TestExecute_RollbackTarget_RevokedAfterSucceeding_ForcesRecoveryRequired(t *testing.T) {
+	ctx := context.Background()
+	manifestA := testManifest("expand_only")
+	manifestA.ReleaseID = "omnira-A"
+	manifestB := testManifest("expand_only")
+	manifestB.ReleaseID = "omnira-B"
+	manifestB.Artifacts = []domain.Artifact{
+		{Unit: domain.UnitAPI, Image: "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("1", 64)},
+		{Unit: domain.UnitWorker, Image: "ghcr.io/omnira/omnira-worker@sha256:" + strings.Repeat("2", 64)},
+		{Unit: domain.UnitWeb, Image: "ghcr.io/omnira/omnira-web@sha256:" + strings.Repeat("3", 64)},
+	}
+
+	compose := &ComposeAdapter{r: fakeRunnerForManifest(manifestA), Project: "test", OverrideDir: t.TempDir()}
+	exec, ledger, h := testExecutor(t, &fakeMigrateRunner{}, &fakeBackupRunner{}, compose)
+	exec.HealthTimeout = 50 * time.Millisecond
+
+	// Run-A: happy path completo, saúde boa o tempo todo — termina SUCCEEDED normalmente,
+	// deixando um run SUCCEEDED rastreado no ledger para esta instalação.
+	rawA, err := json.Marshal(manifestA)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestA: %v", err)
+	}
+	runA, err := ledger.CreateRun(ctx, h, "run-A", "idem-A", string(rawA), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-A: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runA.RunID, manifestA); err != nil {
+		t.Fatalf("Execute run-A: %v", err)
+	}
+	gotA, err := ledger.GetRun(ctx, runA.RunID)
+	if err != nil {
+		t.Fatalf("GetRun run-A: %v", err)
+	}
+	if gotA.State != domain.StateSucceeded {
+		t.Fatalf("run-A deveria suceder normalmente antes do cenário do teste começar, veio %s", gotA.State)
+	}
+
+	// SÓ DEPOIS de A suceder, revoga A — simula um CVE descoberto após o fato.
+	if err := ledger.RevokeRelease(ctx, manifestA.ReleaseID, "CVE crítico descoberto depois do sucesso de A"); err != nil {
+		t.Fatalf("RevokeRelease: %v", err)
+	}
+
+	// Run-B: igual a TestExecute_FailureWithCompatibleStrategy_RollsBackCode — o deploy nunca
+	// fica saudável na primeira tentativa (applyCount<2), forçando recover(). Sem o achado
+	// Codex corrigido, isRollbackSafe(manifestB)=true (mesmo database_strategy) deixaria
+	// recover() chamar Compose.Rollback de volta para A — exatamente o que não pode acontecer.
+	wrapped := &rollbackSucceedsRunner{fakeRunner: fakeRunnerForManifest(manifestB)}
+	compose.r = wrapped
+	rawB, err := json.Marshal(manifestB)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestB: %v", err)
+	}
+	runB, err := ledger.CreateRun(ctx, h, "run-B", "idem-B", string(rawB), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-B: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runB.RunID, manifestB); err != nil {
+		t.Fatalf("Execute run-B não deveria retornar erro quando a recuperação em si é bem-sucedida: %v", err)
+	}
+	gotB, err := ledger.GetRun(ctx, runB.RunID)
+	if err != nil {
+		t.Fatalf("GetRun run-B: %v", err)
+	}
+	if gotB.State != domain.StateRecoveryRequired {
+		t.Fatalf("rollback automático de volta para uma release REVOGADA (A) nunca deveria completar — esperava RECOVERY_REQUIRED, veio %s", gotB.State)
+	}
+	if wrapped.applyCount >= 2 {
+		t.Errorf("Compose.Rollback nunca deveria ter sido chamado de verdade (reinstalaria a release revogada A) — applyCount=%d", wrapped.applyCount)
 	}
 }

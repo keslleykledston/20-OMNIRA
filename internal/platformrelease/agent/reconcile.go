@@ -976,6 +976,38 @@ func (e *Executor) recover(ctx context.Context, h *LockHandle, runID string, man
 		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
 	}
 
+	// Achado Codex [P1], F9 (rodada 6): a checagem de revogação acima só olha a release
+	// ENTRANDO (manifest.ReleaseID) — mas `snap` restaura os digests da release que estava
+	// rodando ANTES desta tentativa. Se essa release ANTERIOR foi revogada depois de já ter
+	// sido substituída (ex. release A revogada por CVE, depois release B falha e tentaria
+	// reverter de volta para A), um rollback "seguro" pelos critérios de compatibilidade de
+	// dados reinstalaria de volta uma release REVOGADA — exatamente o que R4 proíbe, só que
+	// pela porta de trás do rollback em vez da instalação direta.
+	//
+	// found=false (nenhum run SUCCEEDED anterior rastreado por este ledger — ex. a primeira
+	// release já instalada por este agente, cujo "antes" foi definido fora deste sistema, no
+	// provisionamento do host) NUNCA é tratado como ambíguo: não há release_id nenhum para
+	// checar, exatamente a mesma situação de ANTES desta checagem existir. Só um ERRO de
+	// verdade na própria identificação (ledger ilegível, manifesto corrompido de um run que
+	// EXISTE) é fail-closed — aí sim "não posso confirmar que é seguro" vira RECOVERY_REQUIRED.
+	targetReleaseID, found, terr := e.rollbackTargetReleaseID(ctx, run)
+	if terr != nil {
+		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+			fmt.Sprintf("não foi possível identificar com segurança a release que o rollback automático restauraria — RECOVERY_REQUIRED (fail-closed): %v", terr))
+		return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+	}
+	if found {
+		if revoked, reason, err := e.Ledger.IsReleaseRevoked(ctx, targetReleaseID); err != nil {
+			_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+				fmt.Sprintf("falha ao verificar revogação da release de destino do rollback (%s) — RECOVERY_REQUIRED (fail-closed): %v", targetReleaseID, err))
+			return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+		} else if revoked {
+			_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
+				fmt.Sprintf("R4: a release de destino do rollback automático (%s) está REVOGADA (%s) — RECOVERY_REQUIRED, nunca reinstalar uma release revogada mesmo via rollback", targetReleaseID, reason))
+			return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRecoveryRequired)
+		}
+	}
+
 	_, units := rolloutUnits(manifest)
 	if err := e.Compose.Rollback(ctx, snap, units); err != nil {
 		// O próprio Rollback recusa (nunca inventa um digest) se alguma unit não tiver um
@@ -999,6 +1031,41 @@ func (e *Executor) recover(ctx context.Context, h *LockHandle, runID string, man
 	}
 	_ = e.Ledger.RecordCheckpointDone(ctx, h, runID, "recovery_decision", "rollback de código para o snapshot anterior aplicado e confirmado saudável")
 	return e.Ledger.TransitionRun(ctx, h, runID, domain.StateRolledBack)
+}
+
+// rollbackTargetReleaseID (F9, achado Codex [P1] rodada 6) identifica a release que `snap`
+// restauraria num rollback automático: a release do run SUCCEEDED mais recente desta
+// instalação, criado ANTES do run atual — a última versão que de fato estava rodando antes
+// desta tentativa começar. found=false (sem erro) significa "nenhum run SUCCEEDED anterior
+// rastreado por este ledger" — o caso legítimo da primeira release já instalada por este
+// agente, cujo "antes" nunca foi uma release deste sistema (provisionamento do host) e
+// portanto não tem release_id nenhum para checar contra revogação; o chamador segue sem gate
+// extra, exatamente como antes desta checagem existir. Um erro de verdade (ledger ilegível,
+// manifesto corrompido de um run que EXISTE) é outra coisa — "não posso confirmar que é
+// seguro reverter", nunca "assumo que está tudo bem" — e o chamador trata como fail-closed.
+func (e *Executor) rollbackTargetReleaseID(ctx context.Context, run *RunRecord) (releaseID string, found bool, err error) {
+	runs, err := e.Ledger.AllRuns(ctx, run.InstallationID)
+	if err != nil {
+		return "", false, fmt.Errorf("listar runs da instalação: %w", err)
+	}
+	var previous *RunRecord
+	for i := range runs {
+		r := &runs[i]
+		if r.RunID == run.RunID || r.State != domain.StateSucceeded || !r.CreatedAt.Before(run.CreatedAt) {
+			continue
+		}
+		if previous == nil || r.CreatedAt.After(previous.CreatedAt) {
+			previous = r
+		}
+	}
+	if previous == nil {
+		return "", false, nil
+	}
+	m, err := domain.ParseManifest([]byte(previous.ManifestJSON))
+	if err != nil {
+		return "", false, fmt.Errorf("parsear manifesto do run anterior %s: %w", previous.RunID, err)
+	}
+	return m.ReleaseID, true, nil
 }
 
 // snapshotFromCheckpoint recupera o Snapshot serializado pela ação de PREPARING (StepSnapshot)
