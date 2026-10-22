@@ -89,13 +89,17 @@ const installation = (version = '2026.09.0'): PlatformInstallation => ({
   updated_at: '2026-10-20T09:00:00Z',
 })
 
-const run = (state: string, id = 'run-1'): PlatformUpdateRun => ({
+// actor_id defaults to the SAME id setSession() uses ('u-1') — most tests don't care who
+// started the run, and the retry-dispatch restriction (Codex round 12) hides the retry button
+// for anyone else, so tests that DO need the default "I started this" behavior would otherwise
+// silently break.
+const run = (state: string, id = 'run-1', actorId = 'u-1'): PlatformUpdateRun => ({
   id,
   plan_id: 'plan-1',
   release_id: 'rel-2026.10.0',
   state,
   idempotency_key: 'key-1',
-  actor_id: 'op-1',
+  actor_id: actorId,
   created_at: '2026-10-20T10:05:00Z',
   updated_at: '2026-10-20T10:05:00Z',
 })
@@ -213,6 +217,27 @@ describe('PlatformReleasesPage — golden path', () => {
     expect(await screen.findByText('BLOCK')).toBeInTheDocument()
     expect(screen.getByText(/compatibility.from_versions não inclui/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Iniciar atualização (escopo global)' })).toBeNull()
+  })
+
+  it('shows the backup evidence warning even on a PASS plan — it never blocks, but must never be silently hidden (Codex round 12)', async () => {
+    const user = userEvent.setup()
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        id: 'plan-1', release_id: 'rel-2026.10.0', preflight_status: 'PASS',
+        preflight_detail: {
+          version_known: true, version_compatible: true, agent_protocol_ok: true, reasons: [],
+          backup_evidence: { present: false, warn: 'nenhuma evidência de backup registrada — não bloqueia em F6 (gate de promoção stable é F9), mas revise antes de aprovar' },
+        },
+        created_by: 'op-1', created_at: '2026-10-20T10:04:00Z', expires_at: '2026-10-20T10:19:00Z',
+      },
+    })
+    renderAt(<PlatformReleasesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Detalhes' }))
+    await user.click(screen.getByRole('button', { name: 'Rodar preflight' }))
+    expect(await screen.findByText('PASS')).toBeInTheDocument()
+    expect(screen.getByText(/nenhuma evidência de backup registrada/)).toBeInTheDocument()
+    // still PASS: the warning is informational, the confirm button is still offered.
+    expect(screen.getByRole('button', { name: 'Iniciar atualização (escopo global)' })).toBeInTheDocument()
   })
 
   it('reuses the SAME Idempotency-Key when retrying StartRun after a transient failure (Codex round 9)', async () => {
@@ -466,6 +491,16 @@ describe('PlatformReleasesPage — retry dispatch for a stuck REQUESTED run (Cod
     await waitFor(() => expect(posted.length).toBe(1))
     expect(posted[0].url).toMatch(/\/platform\/updates\/runs$/)
     expect(posted[0].key).toBe(run('REQUESTED').idempotency_key)
+  })
+
+  it('never offers the retry button to an operator who did not create the reservation (Codex round 12)', async () => {
+    // StartRun resolves replay by (operator_id, idempotency_key) — a DIFFERENT operator reusing
+    // the same key would miss that record server-side and hit the active-run gate instead.
+    runs = [run('REQUESTED', 'run-1', 'other-operator')]
+    renderAt(<PlatformReleasesPage />)
+    await screen.findByText('Acompanhando run-1')
+    expect(screen.queryByRole('button', { name: 'Tentar despachar novamente' })).toBeNull()
+    expect(screen.getByText(/Só quem reservou esta atualização/)).toBeInTheDocument()
   })
 })
 

@@ -53,12 +53,24 @@ export interface PlatformBackupRecord {
   created_at: string
 }
 
+// WARN-only, never blocks (o gate real de evidência de backup é F9 — ver
+// release/policies/backup.yaml): a especificação exige mostrar isto ANTES da confirmação, nunca
+// só o PASS/BLOCK, já que uma release pode passar o preflight (PASS) com backup ausente ou
+// desatualizado e o `warn` é a única pista disso.
+export interface PlatformBackupEvidenceSummary {
+  present: boolean
+  age_hours?: number
+  verified?: boolean
+  fresh?: boolean
+  warn?: string
+}
+
 export interface PlatformUpdatePlanDetail {
   version_known: boolean
   version_compatible: boolean
   agent_protocol_ok: boolean
   reasons: string[]
-  backup_evidence?: unknown
+  backup_evidence?: PlatformBackupEvidenceSummary
 }
 
 export interface PlatformUpdatePlan {

@@ -26,7 +26,7 @@ import {
   type TabItem,
 } from '../components/primitives'
 import type { usePlatformOperator } from '../hooks/usePlatformOperator'
-import { handleUnauthorized, isUnauthorized } from '../lib/session'
+import { currentUserId, handleUnauthorized, isUnauthorized } from '../lib/session'
 import { showToast } from '../lib/toast'
 import {
   describePlatformReleaseError,
@@ -557,6 +557,16 @@ function ReleaseDetail({ release, installedVersion, onRunStarted }: { release: P
                   {plan.preflight_detail.reasons.map((reason, i) => <li key={i}>{reason}</li>)}
                 </ul>
               )}
+              {/* Achado Codex [P2] (12a rodada): backup_evidence é SÓ aviso (nunca bloqueia em
+                  F6 — o gate real é F9), então um plano PASS com backup ausente/desatualizado
+                  não aparecia em `reasons`. Sem isto, a pessoa via PASS e podia confirmar sem
+                  nunca ver o aviso que o próprio servidor já calculou. Mostrado SEMPRE que
+                  existir, PASS ou BLOCK, antes do botão de confirmar. */}
+              {plan.preflight_detail.backup_evidence?.warn && (
+                <div className="mt-2 rounded-control border border-status-warning-border bg-status-warning-soft p-3 text-body-sm text-status-warning-strong">
+                  {plan.preflight_detail.backup_evidence.warn}
+                </div>
+              )}
               <p className="mt-2 text-body-sm text-text-tertiary">Plano válido até {new Date(plan.expires_at).toLocaleString('pt-BR')}.</p>
               {plan.preflight_status === 'PASS' && (
                 <div className="mt-4">
@@ -782,9 +792,21 @@ function RunTracking({ runId, onClose }: { runId: string; onClose: () => void })
             <p className="text-body-sm text-status-warning-strong">
               Esta atualização foi reservada, mas o despacho ao Update Agent ainda não foi confirmado (pode ter falhado de forma transitória).
             </p>
-            <Button className="mt-2" size="sm" variant="secondary" onClick={() => retryDispatch.mutate()} isLoading={retryDispatch.isPending}>
-              Tentar despachar novamente
-            </Button>
+            {/* Achado Codex [P2] (12a rodada): StartRun resolve o replay por (operator_id,
+                idempotency_key) — reusar a MESMA chave sob um operador DIFERENTE do que
+                reservou o pedido nunca acha esse registro e cai no gate de "run ativo" em vez
+                de retomar. Só quem reservou pode retomar por este caminho; outro operador
+                precisa saber de quem é para pedir, ou (pendência) um caminho de recuperação
+                que não dependa de quem fez o pedido original. */}
+            {r.actor_id === currentUserId() ? (
+              <Button className="mt-2" size="sm" variant="secondary" onClick={() => retryDispatch.mutate()} isLoading={retryDispatch.isPending}>
+                Tentar despachar novamente
+              </Button>
+            ) : (
+              <p className="mt-2 text-body-sm text-status-warning-strong">
+                Só quem reservou esta atualização (operador {r.actor_id}) pode despachá-la de novo por aqui.
+              </p>
+            )}
           </div>
         )}
         {r.state === 'RECOVERY_REQUIRED' && (
