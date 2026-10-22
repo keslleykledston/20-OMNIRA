@@ -325,8 +325,14 @@ LISTEN_PID=$(sudo -n ss -ltnp 2>/dev/null | grep ":${APIPORT} " | grep -oE 'pid=
 [ "$LISTEN_PID" = "$API_PID" ] || { echo "FATAL: o socket LISTEN em 127.0.0.1:${APIPORT} pertence ao PID $LISTEN_PID, não ao nosso ($API_PID) — porta ocupada por outro processo, validaríamos a API errada"; tail -30 "$EVIDENCE/api.log"; exit 1; }
 log "   api em 127.0.0.1:${APIPORT} (pid $API_PID, confirmado vivo E dono real do socket LISTEN)"
 
-LOGIN_RAW=$(curl -s -o /tmp/f8-login-body.$$ -w '%{http_code}' -X POST "http://127.0.0.1:${APIPORT}/api/v1/auth/dev/login" -H 'Content-Type: application/json' -d "{\"email\":\"${OPERATOR_EMAIL}\"}")
-LOGIN_BODY=$(cat /tmp/f8-login-body.$$); rm -f /tmp/f8-login-body.$$
+# achado Codex: um arquivo temporário em /tmp com nome previsível ($$) nunca é seguro para um
+# token de operador — em host compartilhado, outro usuário pode lê-lo (umask comum 022) ou um
+# symlink pré-criado pode redirecionar a escrita do curl para outro arquivo; apagar depois não
+# evita nenhuma das duas corridas. Sem arquivo nenhum: body+status no MESMO stdout do curl,
+# igual ao helper api() já usa.
+LOGIN_FULL=$(curl -s -w '\n%{http_code}' -X POST "http://127.0.0.1:${APIPORT}/api/v1/auth/dev/login" -H 'Content-Type: application/json' -d "{\"email\":\"${OPERATOR_EMAIL}\"}")
+LOGIN_RAW=$(echo "$LOGIN_FULL" | tail -1)
+LOGIN_BODY=$(echo "$LOGIN_FULL" | sed '$d')
 TOKEN=$(echo "$LOGIN_BODY" | jq -r .token 2>/dev/null)
 [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] || { echo "FATAL: dev-login não devolveu token (status $LOGIN_RAW): $LOGIN_BODY"; exit 1; }
 AUTH=(-H "Authorization: Bearer $TOKEN")
