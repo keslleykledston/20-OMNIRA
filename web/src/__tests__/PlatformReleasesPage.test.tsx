@@ -375,6 +375,60 @@ describe('PlatformReleasesPage — checkpoint detail and event-fetch errors (Cod
   })
 })
 
+describe('PlatformReleasesPage — pagination (Codex round 5)', () => {
+  it('"Carregar mais releases" fetches the next page by the before cursor and appends it, never replacing the first page', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, i) => release(`rel-first-${i}`))
+    const secondPage = [release('rel-older-1')]
+    releases = firstPage
+    let lastBefore: string | undefined
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) return { data: installation() }
+      if (u.endsWith('/platform/releases')) {
+        const before = config?.params?.before as string | undefined
+        lastBefore = before
+        return { data: { items: before ? secondPage : firstPage } }
+      }
+      if (u.endsWith('/platform/updates/runs')) return { data: { items: [] } }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    renderAt(<PlatformReleasesPage />)
+    await screen.findByText('rel-first-0')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Carregar mais releases' }))
+    expect(await screen.findByText('rel-older-1')).toBeInTheDocument()
+    // the cursor sent is the LAST item of the page already shown (ingested_at), never undefined again
+    expect(lastBefore).toBe(firstPage[firstPage.length - 1].ingested_at)
+    expect(screen.getByText('rel-first-0')).toBeInTheDocument()
+    // the second page had fewer than 50 items: no further "load more" is offered
+    expect(screen.queryByRole('button', { name: 'Carregar mais releases' })).toBeNull()
+  })
+
+  it('"Carregar mais execuções" fetches the next page of run history by the before cursor', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, i) => run('SUCCEEDED', `run-first-${i}`))
+    const secondPage = [run('SUCCEEDED', 'run-older-1')]
+    runs = firstPage
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) return { data: installation() }
+      if (u.endsWith('/platform/releases')) return { data: { items: [] } }
+      if (u.endsWith('/platform/updates/runs')) {
+        const before = config?.params?.before as string | undefined
+        return { data: { items: before ? secondPage : firstPage } }
+      }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    renderAt(<PlatformReleasesPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('tab', { name: 'Atualizações' }))
+    await screen.findByText('run-first-0')
+    await user.click(screen.getByRole('button', { name: 'Carregar mais execuções' }))
+    expect(await screen.findByText('run-older-1')).toBeInTheDocument()
+    expect(screen.getByText('run-first-0')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Carregar mais execuções' })).toBeNull()
+  })
+})
+
 describe('PlatformReleasesPage — switching selection does not leak stale state (Codex round 1)', () => {
   it('selecting a different release resets the previous one\'s preflight plan', async () => {
     const user = userEvent.setup()

@@ -70,6 +70,43 @@ export default function PlatformReleasesPage() {
   const releases = useQuery({ queryKey: ['platform-releases'], queryFn: () => platformReleasesAPI.list(), enabled: installation.isSuccess, retry: false })
   const runs = useQuery({ queryKey: ['platform-runs'], queryFn: () => platformRunsAPI.list(), enabled: installation.isSuccess, retry: false, refetchInterval: 10_000 })
 
+  // Achado Codex [P2]: as duas listas só mostravam a primeira página (50), sem nenhum jeito de
+  // ver releases/runs mais antigos — o cursor `before` já existe no cliente e no servidor, só
+  // não era usado. "Carregar mais" ACRESCENTA à primeira página (releases/runs acima), nunca a
+  // substitui: a reentrada e o polling de 10s continuam lendo só a primeira página, intactos.
+  const PAGE_SIZE = 50
+  const [olderReleases, setOlderReleases] = useState<PlatformRelease[]>([])
+  // null until the first "load more" click: before that, whether there IS more is derived
+  // straight from the first page's own size (never an optimistic guess — a first page smaller
+  // than PAGE_SIZE never offers the button at all).
+  const [extraReleasesHasMore, setExtraReleasesHasMore] = useState<boolean | null>(null)
+  const hasMoreReleases = extraReleasesHasMore ?? (releases.data?.length ?? 0) >= PAGE_SIZE
+  const loadMoreReleases = useMutation({
+    mutationFn: () => {
+      const last = (olderReleases.length ? olderReleases : releases.data ?? [])[olderReleases.length ? olderReleases.length - 1 : (releases.data?.length ?? 1) - 1]
+      return platformReleasesAPI.list(last?.ingested_at)
+    },
+    onSuccess: (page) => {
+      setOlderReleases((prev) => [...prev, ...page])
+      setExtraReleasesHasMore(page.length >= PAGE_SIZE)
+    },
+    onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
+  })
+  const [olderRuns, setOlderRuns] = useState<PlatformUpdateRun[]>([])
+  const [extraRunsHasMore, setExtraRunsHasMore] = useState<boolean | null>(null)
+  const hasMoreRuns = extraRunsHasMore ?? (runs.data?.length ?? 0) >= PAGE_SIZE
+  const loadMoreRuns = useMutation({
+    mutationFn: () => {
+      const last = (olderRuns.length ? olderRuns : runs.data ?? [])[olderRuns.length ? olderRuns.length - 1 : (runs.data?.length ?? 1) - 1]
+      return platformRunsAPI.list(last?.created_at)
+    },
+    onSuccess: (page) => {
+      setOlderRuns((prev) => [...prev, ...page])
+      setExtraRunsHasMore(page.length >= PAGE_SIZE)
+    },
+    onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
+  })
+
   const [section, setSection] = useState<SectionId>('catalogo')
   const [selectedRelease, setSelectedRelease] = useState<string | null>(null)
   const [trackedRunId, setTrackedRunId] = useState<string | null>(null)
@@ -173,6 +210,10 @@ export default function PlatformReleasesPage() {
         {section === 'catalogo' && (
           <CatalogSection
             releases={releases}
+            olderReleases={olderReleases}
+            hasMoreReleases={hasMoreReleases}
+            onLoadMore={() => loadMoreReleases.mutate()}
+            isLoadingMore={loadMoreReleases.isPending}
             selectedRelease={selectedRelease}
             onSelect={setSelectedRelease}
             onIngest={() => setIngestOpen(true)}
@@ -188,6 +229,10 @@ export default function PlatformReleasesPage() {
         {section === 'atualizacoes' && (
           <UpdatesSection
             runs={runs}
+            olderRuns={olderRuns}
+            hasMoreRuns={hasMoreRuns}
+            onLoadMore={() => loadMoreRuns.mutate()}
+            isLoadingMore={loadMoreRuns.isPending}
             trackedRunId={trackedRunId}
             onTrack={trackRun}
           />
@@ -261,6 +306,10 @@ function IngestForm({ isPending, onSubmit, onCancel }: { isPending: boolean; onS
 
 function CatalogSection({
   releases,
+  olderReleases,
+  hasMoreReleases,
+  onLoadMore,
+  isLoadingMore,
   selectedRelease,
   onSelect,
   onIngest,
@@ -268,6 +317,10 @@ function CatalogSection({
   installedVersion,
 }: {
   releases: ReturnType<typeof useQuery<PlatformRelease[]>>
+  olderReleases: PlatformRelease[]
+  hasMoreReleases: boolean
+  onLoadMore: () => void
+  isLoadingMore: boolean
   selectedRelease: string | null
   onSelect: (id: string | null) => void
   onIngest: () => void
@@ -276,7 +329,7 @@ function CatalogSection({
 }) {
   if (releases.isLoading) return <LoadingState message="Carregando catálogo…" />
   if (releases.isError) return <ErrorState message="Não foi possível carregar o catálogo de releases." action={{ label: 'Tentar novamente', onClick: () => void releases.refetch() }} />
-  const items = releases.data ?? []
+  const items = [...(releases.data ?? []), ...olderReleases]
   const selected = items.find((r) => r.release_id === selectedRelease) ?? null
 
   return (
@@ -314,6 +367,11 @@ function CatalogSection({
             ))}
           </TableBody>
         </Table>
+      )}
+      {items.length > 0 && hasMoreReleases && (
+        <div className="flex justify-center">
+          <Button variant="secondary" size="sm" onClick={onLoadMore} isLoading={isLoadingMore}>Carregar mais releases</Button>
+        </div>
       )}
       {selected && (
         // key: trocar de release precisa de um ReleaseDetail NOVO, nunca o plano/confirmação
@@ -425,16 +483,24 @@ function ReleaseDetail({ release, installedVersion, onRunStarted }: { release: P
 
 function UpdatesSection({
   runs,
+  olderRuns,
+  hasMoreRuns,
+  onLoadMore,
+  isLoadingMore,
   trackedRunId,
   onTrack,
 }: {
   runs: ReturnType<typeof useQuery<PlatformUpdateRun[]>>
+  olderRuns: PlatformUpdateRun[]
+  hasMoreRuns: boolean
+  onLoadMore: () => void
+  isLoadingMore: boolean
   trackedRunId: string | null
   onTrack: (id: string | null) => void
 }) {
   if (runs.isLoading) return <LoadingState message="Carregando histórico de atualizações…" />
   if (runs.isError) return <ErrorState message="Não foi possível carregar o histórico de atualizações." action={{ label: 'Tentar novamente', onClick: () => void runs.refetch() }} />
-  const items = runs.data ?? []
+  const items = [...(runs.data ?? []), ...olderRuns]
 
   return (
     <div className="space-y-6">
@@ -474,6 +540,11 @@ function UpdatesSection({
               ))}
             </TableBody>
           </Table>
+        )}
+        {items.length > 0 && hasMoreRuns && (
+          <div className="mt-4 flex justify-center">
+            <Button variant="secondary" size="sm" onClick={onLoadMore} isLoading={isLoadingMore}>Carregar mais execuções</Button>
+          </div>
         )}
       </div>
     </div>
