@@ -978,25 +978,30 @@ func (e *Executor) recover(ctx context.Context, h *LockHandle, runID string, man
 
 	_, units := rolloutUnits(manifest)
 
-	// Achado Codex [P1], F9 (rodada 6, estendido na rodada 7): a checagem de revogação acima
-	// só olha a release ENTRANDO (manifest.ReleaseID) — mas `snap` restaura os digests das
-	// releases que estavam rodando ANTES desta tentativa, UMA POR UNIT. rolloutUnits permite
-	// releases que tocam só um SUBCONJUNTO dos workloads — "a release do run SUCCEEDED mais
-	// recente" NÃO é necessariamente quem implantou o digest de CADA unit sendo revertida
-	// (ex. release A atualiza só a API; release B, depois, atualiza só o web; A é revogada;
-	// release C falha tentando atualizar a API de novo — o rollback da API restauraria o
-	// digest de A, nunca de B, mesmo que B seja o SUCCEEDED mais recente no geral). Por isso
-	// rollbackTargetReleaseIDs resolve a proveniência POR UNIT, nunca por "a última release
-	// instalada, seja o que for que ela tenha tocado".
+	// Achado Codex [P1], F9 (rodada 6, estendido nas rodadas 7 e 8): a checagem de revogação
+	// acima só olha a release ENTRANDO (manifest.ReleaseID) — mas `snap` restaura os digests
+	// das releases que estavam rodando ANTES desta tentativa, UMA POR UNIT. rolloutUnits
+	// permite releases que tocam só um SUBCONJUNTO dos workloads — "a release do run
+	// SUCCEEDED mais recente" NÃO é necessariamente quem implantou o digest de CADA unit
+	// sendo revertida (ex. release A atualiza só a API; release B, depois, atualiza só o
+	// web; A é revogada; release C falha tentando atualizar a API de novo — o rollback da
+	// API restauraria o digest de A, nunca de B, mesmo que B seja o SUCCEEDED mais recente
+	// no geral). Por isso rollbackTargetReleaseIDs resolve a proveniência POR UNIT, nunca por
+	// "a última release instalada, seja o que for que ela tenha tocado" — E confirma contra o
+	// digest REAL em `snap`, nunca assume que o SUCCEEDED mais recente que tocou a unit é
+	// necessariamente quem deixou o digest atual rodando (um RECOVERY_REQUIRED reconhecido
+	// fora de banda, ou uma correção manual direta no host, pode deixar rodando um digest que
+	// nenhum run SUCCEEDED jamais registrou).
 	//
-	// found=false para uma unit (sem erro) — nenhum run SUCCEEDED anterior rastreado por
-	// este ledger que tenha tocado essa unit (ex. a primeira release já instalada por este
-	// agente para essa unit, cujo "antes" foi definido fora deste sistema, no
-	// provisionamento do host) — NUNCA é tratado como ambíguo: não há release_id nenhum para
-	// checar, exatamente a mesma situação de ANTES desta checagem existir. Só um ERRO de
-	// verdade na própria identificação (ledger ilegível, manifesto corrompido de um run que
-	// EXISTE) é fail-closed — aí sim "não posso confirmar que é seguro" vira RECOVERY_REQUIRED.
-	targets, terr := e.rollbackTargetReleaseIDs(ctx, run, units)
+	// Uma unit AUSENTE do mapa devolvido (sem erro) é o caso legítimo de NENHUM run SUCCEEDED
+	// rastreado por este ledger ter tocado essa unit ainda (ex. a primeira release já
+	// instalada por este agente para essa unit, cujo "antes" foi definido fora deste
+	// sistema, no provisionamento do host) — não há release_id nenhum para checar contra
+	// revogação; o chamador segue sem gate extra para essa unit, exatamente como antes desta
+	// checagem existir. Qualquer OUTRA ambiguidade (unit tocada por histórico conhecido, mas
+	// nenhum digest bate com o real; ledger ilegível; manifesto corrompido) é fail-closed —
+	// "não posso confirmar que é seguro" vira RECOVERY_REQUIRED para TODO o rollback.
+	targets, terr := e.rollbackTargetReleaseIDs(ctx, run, units, snap)
 	if terr != nil {
 		_ = e.Ledger.RecordCheckpointFailed(ctx, h, runID, "recovery_decision",
 			fmt.Sprintf("não foi possível identificar com segurança as releases que o rollback automático restauraria — RECOVERY_REQUIRED (fail-closed): %v", terr))
@@ -1067,25 +1072,35 @@ func (e *Executor) isRevokedOrUnsafe(ctx context.Context, releaseID string) (blo
 	return e.Ledger.IsReleaseRevoked(ctx, releaseID)
 }
 
-// rollbackTargetReleaseIDs (F9, achado Codex [P1] rodadas 6 e 7) identifica, POR UNIT sendo
-// revertida, a release que de fato implantou o digest que `snap` restauraria — nunca assume
-// que "a release do run SUCCEEDED mais recente" cobre TODAS as units: rolloutUnits permite
-// releases que tocam só um SUBCONJUNTO dos workloads (release A só atualiza a API, release B
-// só atualiza o web — revertendo a API depois de uma falha de C restaura o digest de A, nunca
-// de B, mesmo que B seja o SUCCEEDED mais recente no geral). Para cada unit em `units`,
-// percorre o histórico de runs da instalação em ordem DECRESCENTE de CreatedAt (mais recente
-// primeiro) e usa o primeiro run SUCCEEDED, anterior ao run atual, cujo PRÓPRIO manifesto
-// declara essa unit em Rollout.Workloads — a release que de fato a implantou por último.
+// rollbackTargetReleaseIDs (F9, achado Codex [P1] rodadas 6, 7 e 8) identifica, POR UNIT
+// sendo revertida, a release que de fato implantou o digest que `snap` restauraria — nunca
+// assume que "a release do run SUCCEEDED mais recente" cobre TODAS as units: rolloutUnits
+// permite releases que tocam só um SUBCONJUNTO dos workloads (release A só atualiza a API,
+// release B só atualiza o web — revertendo a API depois de uma falha de C restaura o digest
+// de A, nunca de B, mesmo que B seja o SUCCEEDED mais recente no geral). Para cada unit em
+// `units`, percorre o histórico de runs da instalação em ordem DECRESCENTE de CreatedAt (mais
+// recente primeiro) e usa o primeiro run SUCCEEDED, anterior ao run atual, cujo PRÓPRIO
+// manifesto declara essa unit E cujo digest declarado para essa unit BATE com
+// snap.Digests[unit] — achado Codex da rodada 8: "o SUCCEEDED mais recente que tocou esta
+// unit" NUNCA é suficiente por si só, porque um RECOVERY_REQUIRED reconhecido fora de banda
+// (AcknowledgeRecovery, ver ledger.go — um operador confirma que investigou e autorizou
+// seguir, nunca que um digest específico ficou rodando) ou uma correção manual direta no host
+// podem deixar rodando um digest que NENHUM run SUCCEEDED jamais registrou como "o atual"
+// para essa unit; sem confirmar o digest, o rollback poderia atribuir a unit à release ERRADA
+// e deixar passar (ou bloquear por engano) uma revogação.
 //
-// Uma unit AUSENTE do mapa devolvido (sem erro) é o caso legítimo de nenhum run SUCCEEDED
+// Uma unit AUSENTE do mapa devolvido (sem erro) é o caso legítimo de NENHUM run SUCCEEDED
 // rastreado por este ledger ter tocado essa unit ainda (ex. a primeira release já instalada
 // por este agente para essa unit, cujo "antes" foi definido fora deste sistema, no
 // provisionamento do host) — não há release_id nenhum para checar contra revogação; o
 // chamador segue sem gate extra para essa unit, exatamente como antes desta checagem existir.
-// Um erro de verdade (ledger ilegível, manifesto corrompido de um run que EXISTE) é outra
-// coisa — "não posso confirmar que é seguro reverter", nunca "assumo que está tudo bem" — e o
-// chamador trata como fail-closed para TODO o rollback, nunca só para a unit afetada.
-func (e *Executor) rollbackTargetReleaseIDs(ctx context.Context, run *RunRecord, units []Unit) (map[Unit]string, error) {
+// Qualquer OUTRA ambiguidade — a unit FOI tocada por histórico conhecido, mas nenhum desses
+// runs tem o digest que `snap` de fato reporta agora — é tratada como um ERRO (fail-closed),
+// nunca como "nada a checar": "não posso confirmar que é seguro reverter", nunca "assumo que
+// está tudo bem". Um erro de verdade na própria leitura (ledger ilegível, manifesto
+// corrompido de um run que EXISTE) é outra coisa do mesmo tipo — o chamador trata ambos como
+// fail-closed para TODO o rollback, nunca só para a unit afetada.
+func (e *Executor) rollbackTargetReleaseIDs(ctx context.Context, run *RunRecord, units []Unit, snap *Snapshot) (map[Unit]string, error) {
 	runs, err := e.Ledger.AllRuns(ctx, run.InstallationID)
 	if err != nil {
 		return nil, fmt.Errorf("listar runs da instalação: %w", err)
@@ -1093,6 +1108,7 @@ func (e *Executor) rollbackTargetReleaseIDs(ctx context.Context, run *RunRecord,
 	sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt.After(runs[j].CreatedAt) })
 
 	remaining := make(map[Unit]bool, len(units))
+	everTouched := make(map[Unit]bool, len(units))
 	for _, u := range units {
 		remaining[u] = true
 	}
@@ -1109,12 +1125,21 @@ func (e *Executor) rollbackTargetReleaseIDs(ctx context.Context, run *RunRecord,
 		if perr != nil {
 			return nil, fmt.Errorf("parsear manifesto do run anterior %s: %w", r.RunID, perr)
 		}
-		_, touched := rolloutUnits(m)
+		digests, touched := rolloutUnits(m)
 		for _, u := range touched {
-			if remaining[u] {
+			if !remaining[u] {
+				continue
+			}
+			everTouched[u] = true
+			if digests[u] == snap.Digests[u] {
 				result[u] = m.ReleaseID
 				delete(remaining, u)
 			}
+		}
+	}
+	for u := range remaining {
+		if everTouched[u] {
+			return nil, fmt.Errorf("unit %s: o digest atual (%q) não corresponde a nenhuma release SUCCEEDED conhecida desta instalação — proveniência do rollback não pode ser confirmada", u, snap.Digests[u])
 		}
 	}
 	return result, nil

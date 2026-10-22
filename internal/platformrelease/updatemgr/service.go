@@ -137,12 +137,12 @@ func (s *Service) WithVerifier(v SignatureVerifier) *Service { s.verifier = v; r
 
 // StartRevocationDeliveryLoop (F9, achado Codex [P1] rodada 4): reentrega periodicamente
 // qualquer revogação ainda pendente (delivered_to_agent=false) ao ledger local —
-// INDEPENDENTE de qualquer tráfego de operador. redeliverPendingRevocations, chamada por
+// INDEPENDENTE de qualquer tráfego de operador. reconcileRevocationsToLedger, chamada por
 // refreshPendingRun, já dava entrega eventual a cada CreatePlan/StartRun/GetInstallation/
 // ListRuns real — mas um ambiente sem NENHUMA chamada de operador nesse intervalo (ex. um
 // agente autônomo aplicando runs já despachados, sem qualquer `updatectl` ou UI sendo usados)
 // nunca veria uma revogação cuja escrita síncrona ao ledger local falhou. Chamado uma única
-// vez no startup do processo (apps/api/cmd/omnira-api), nunca por request — redeliverPendingRevocations
+// vez no startup do processo (apps/api/cmd/omnira-api), nunca por request — reconcileRevocationsToLedger
 // é idempotente e barata o suficiente (SELECT vazio na maioria dos ticks) para rodar num
 // intervalo curto sem custo real. Retorna uma stop() idempotente que bloqueia até o laço
 // encerrar; o chamador também pode só cancelar ctx (ex. no shutdown normal do processo).
@@ -159,7 +159,7 @@ func (s *Service) StartRevocationDeliveryLoop(ctx context.Context, interval time
 				return
 			case <-ticker.C:
 				err := s.tx(loopCtx, func(c context.Context, q platformdb.Querier) error {
-					return redeliverPendingRevocations(c, q, s.ledgerPath)
+					return reconcileRevocationsToLedger(c, q, s.ledgerPath)
 				})
 				if err != nil && !errors.Is(err, context.Canceled) {
 					log.Printf("updatemgr: StartRevocationDeliveryLoop: %v", err)
@@ -652,7 +652,7 @@ func (s *Service) RevokeRelease(ctx context.Context, operator uuid.UUID, idempot
 		// Achado Codex [P1]: registra a OBRIGAÇÃO de entrega ao ledger local na MESMA
 		// transação da revogação em si — nunca uma segunda escrita "melhor esforço" sem
 		// rastro, que um crash entre as duas deixaria permanentemente perdida. A entrega
-		// real (abaixo, fora desta transação) e o retry (redeliverPendingRevocations,
+		// real (abaixo, fora desta transação) e o retry (reconcileRevocationsToLedger,
 		// chamado por refreshPendingRun) são o que FECHAM esta obrigação.
 		if _, err := q.Exec(c, `INSERT INTO platform_release_revocation_delivery (release_id) VALUES ($1)`, releaseID); err != nil {
 			return err
@@ -672,7 +672,7 @@ func (s *Service) RevokeRelease(ctx context.Context, operator uuid.UUID, idempot
 	}
 	// Tenta a entrega imediatamente (caminho feliz: sem nenhuma falha, o operador nunca
 	// percebe que existiu uma "obrigação" separada) — mas o que FECHA a garantia de verdade
-	// é redeliverPendingRevocations, chamado por refreshPendingRun em quase toda operação
+	// é reconcileRevocationsToLedger, chamado por refreshPendingRun em quase toda operação
 	// real desta API, nunca só esta tentativa síncrona. Achado Codex (ao testar): a
 	// atualização de delivered_to_agent precisa rodar numa sessão AUTORIZADA (s.tx, mesmo
 	// padrão de toda mutação deste serviço) — uma escrita direta no pool, fora de
@@ -690,7 +690,7 @@ func (s *Service) RevokeRelease(ctx context.Context, operator uuid.UUID, idempot
 
 // deliverRevocationToLedger (F9) é a ÚNICA função que escreve no ledger local E marca
 // delivered_to_agent=true no Postgres — usada tanto pela tentativa síncrona de RevokeRelease
-// quanto pelo retry em redeliverPendingRevocations, nunca duplicada entre as duas. `q` precisa
+// quanto pelo retry em reconcileRevocationsToLedger, nunca duplicada entre as duas. `q` precisa
 // vir de uma sessão JÁ autorizada (s.tx) — ver achado Codex no comentário de RevokeRelease. As
 // duas escritas (ledger, depois Postgres) nunca são atômicas entre si — mas isso é seguro
 // aqui: se o ledger grava e o Postgres falha em marcar delivered_to_agent, o PIOR caso é
@@ -711,51 +711,56 @@ func deliverRevocationToLedger(ctx context.Context, ledgerPath string, q platfor
 	return nil
 }
 
-// redeliverPendingRevocations (F9) é a garantia REAL de entrega confiável: reentrega QUALQUER
-// revogação ainda marcada delivered_to_agent=false — nunca depende só da tentativa síncrona
-// de RevokeRelease, que pode ter falhado por um crash/timeout exatamente entre o commit do
-// Postgres e a escrita no ledger (achado Codex [P1]). Chamada por refreshPendingRun, que já
-// roda em quase toda operação real desta API (CreatePlan, StartRun, GetInstallation,
-// ListRuns) — entrega eventual, sem precisar de um worker de fundo separado. `q` é o MESMO
-// Querier, JÁ autorizado, da transação de refreshPendingRun — nunca uma sessão nova. "Nenhuma
-// pendência" e "ledger indisponível neste ambiente" nunca são erros fatais aqui — a próxima
+// reconcileRevocationsToLedger (F9) é a garantia REAL de entrega confiável: entrega TODA
+// release revogada conhecida pelo Postgres, nunca só as marcadas delivered_to_agent=false —
+// achado Codex [P1] (rodada 8): um ledger SQLite restaurado de um backup ANTERIOR a uma
+// revogação já confirmada entregue (delivered_to_agent=true permanente) perderia essa
+// revogação PARA SEMPRE, porque uma consulta filtrada por "pendente" nunca a encontraria de
+// novo — o relógio de sincronização seguiria avançando, certificando como "em dia" um espelho
+// que na verdade está incompleto. Reentregar o conjunto COMPLETO a cada chamada é seguro e
+// barato (Ledger.RevokeRelease é um UPSERT idempotente; revogação é um evento raro — nunca um
+// volume alto) e elimina essa classe de problema por completo: não importa o que o ledger
+// local perdeu ou nunca teve, a PRÓXIMA reconciliação sempre o restaura a partir da fonte de
+// verdade. Chamada por refreshPendingRun, que já roda em quase toda operação real desta API
+// (CreatePlan, StartRun, GetInstallation, ListRuns), e por StartRevocationDeliveryLoop. `q` é
+// o MESMO Querier, JÁ autorizado, da transação do chamador — nunca uma sessão nova. "Nenhuma
+// revogação" e "ledger indisponível neste ambiente" nunca são erros fatais aqui — a próxima
 // chamada tenta de novo.
-func redeliverPendingRevocations(ctx context.Context, q platformdb.Querier, ledgerPath string) error {
-	rows, err := q.Query(ctx, `SELECT d.release_id, r.reason FROM platform_release_revocation_delivery d
-		JOIN platform_release_revocations r ON r.release_id = d.release_id WHERE d.delivered_to_agent = false`)
+func reconcileRevocationsToLedger(ctx context.Context, q platformdb.Querier, ledgerPath string) error {
+	rows, err := q.Query(ctx, `SELECT release_id, reason FROM platform_release_revocations`)
 	if err != nil {
-		return fmt.Errorf("listar revogações pendentes de entrega: %w", err)
+		return fmt.Errorf("listar revogações: %w", err)
 	}
-	type pending struct{ releaseID, reason string }
-	var items []pending
+	type revocation struct{ releaseID, reason string }
+	var items []revocation
 	for rows.Next() {
-		var p pending
-		if err := rows.Scan(&p.releaseID, &p.reason); err != nil {
+		var r revocation
+		if err := rows.Scan(&r.releaseID, &r.reason); err != nil {
 			rows.Close()
-			return fmt.Errorf("ler revogação pendente de entrega: %w", err)
+			return fmt.Errorf("ler revogação: %w", err)
 		}
-		items = append(items, p)
+		items = append(items, r)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("listar revogações pendentes de entrega: %w", err)
+		return fmt.Errorf("listar revogações: %w", err)
 	}
 	allDelivered := true
-	for _, p := range items {
-		if err := deliverRevocationToLedger(ctx, ledgerPath, q, p.releaseID, p.reason); err != nil {
+	for _, r := range items {
+		if err := deliverRevocationToLedger(ctx, ledgerPath, q, r.releaseID, r.reason); err != nil {
 			// melhor esforço aqui: a PRÓXIMA chamada de refreshPendingRun tenta de novo — mas
 			// loga, porque uma entrega pendente de revogação é um evento de segurança real,
 			// nunca silenciado.
-			log.Printf("updatemgr: reentrega da revogação de %s ao ledger local falhou (nova tentativa na próxima operação): %v", p.releaseID, err)
+			log.Printf("updatemgr: reconciliação da revogação de %s com o ledger local falhou (nova tentativa na próxima operação): %v", r.releaseID, err)
 			allDelivered = false
 		}
 	}
 	// Achado Codex [P1], F9 (rodada 7): só avança o relógio de revocation_sync (consultado
 	// pelo agente via Ledger.RevocationSyncFresh antes de confiar em "não revogada") quando
-	// esta chamada confirmou, de verdade, que o estado do Postgres foi refletido neste
-	// ledger — o SELECT acima já teve sucesso (ou já teríamos retornado um erro antes de
-	// chegar aqui) e toda pendência encontrada foi entregue. Se alguma entrega falhou, NUNCA
-	// marca synced — o relógio deve continuar envelhecendo até uma tentativa futura ter
+	// esta chamada confirmou, de verdade, que o estado COMPLETO do Postgres foi refletido
+	// neste ledger — o SELECT acima já teve sucesso (ou já teríamos retornado um erro antes
+	// de chegar aqui) e toda revogação conhecida foi entregue. Se alguma entrega falhou,
+	// NUNCA marca synced — o relógio deve continuar envelhecendo até uma tentativa futura ter
 	// sucesso de verdade, nunca fingir que está em dia.
 	if allDelivered {
 		ledger, lerr := agent.OpenLedger(ledgerPath)
@@ -1626,8 +1631,8 @@ func (s *Service) refreshPendingRun(ctx context.Context, operator uuid.UUID) err
 		// GetInstallation, ListRuns), dando entrega confiável e eventual sem precisar de um
 		// worker de fundo separado. Melhor esforço: uma falha aqui nunca bloqueia o resto
 		// desta função (o preflight/dispatch que a chamou), só loga e tenta de novo depois.
-		if err := redeliverPendingRevocations(c, q, s.ledgerPath); err != nil {
-			log.Printf("updatemgr: redeliverPendingRevocations: %v", err)
+		if err := reconcileRevocationsToLedger(c, q, s.ledgerPath); err != nil {
+			log.Printf("updatemgr: reconcileRevocationsToLedger: %v", err)
 		}
 		// Achado Codex [P1]: isto precisa rodar INCONDICIONALMENTE, mesmo sem nenhum run
 		// pendente no Postgres — um run criado por `updatectl start` pode ter concluído sem

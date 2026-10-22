@@ -542,3 +542,82 @@ func TestExecute_RollbackTarget_PartialWorkloadRelease_ChecksPerUnitProvenance(t
 		t.Errorf("Compose.Rollback nunca deveria ter sido chamado de verdade (reinstalaria o digest revogado de A na API) — applyCount=%d", wrapped.applyCount)
 	}
 }
+
+// TestExecute_RollbackTarget_SnapshotDigestNotTrackedByAnySucceededRun_FailsClosed é a prova
+// central do achado Codex [P1] (rodada 8): rollbackTargetReleaseIDs não pode aceitar "o
+// SUCCEEDED mais recente que tocou esta unit" sem confirmar que o digest que ELE implantou
+// bate com o que `snap` de fato reporta agora. Cenário: release A sucede na API; uma
+// "correção fora de banda" (RECOVERY_REQUIRED reconhecido manualmente, ou um ajuste direto no
+// host) deixa a API rodando um digest que NENHUMA release SUCCEEDED jamais registrou; release
+// D tenta atualizar a API de novo e falha depois de mutar. A proveniência do rollback é
+// AMBÍGUA (A tocou a API, mas o digest de A não bate com o que está rodando) — isso precisa
+// ser fail-closed, nunca "A não está revogada, pode reverter".
+func TestExecute_RollbackTarget_SnapshotDigestNotTrackedByAnySucceededRun_FailsClosed(t *testing.T) {
+	ctx := context.Background()
+
+	manifestA := testManifest("expand_only")
+	manifestA.ReleaseID = "omnira-A"
+	manifestA.Rollout.Workloads = []domain.BuildUnit{domain.UnitAPI}
+	manifestA.Artifacts = []domain.Artifact{
+		{Unit: domain.UnitAPI, Image: "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("a", 64)},
+	}
+	manifestD := testManifest("expand_only")
+	manifestD.ReleaseID = "omnira-D"
+	manifestD.Rollout.Workloads = []domain.BuildUnit{domain.UnitAPI}
+	manifestD.Artifacts = []domain.Artifact{
+		{Unit: domain.UnitAPI, Image: "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("d", 64)},
+	}
+
+	compose := &ComposeAdapter{r: fakeRunnerForManifest(manifestA), Project: "test", OverrideDir: t.TempDir()}
+	exec, ledger, h := testExecutor(t, &fakeMigrateRunner{}, &fakeBackupRunner{}, compose)
+	exec.HealthTimeout = 50 * time.Millisecond
+
+	rawA, err := json.Marshal(manifestA)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestA: %v", err)
+	}
+	runA, err := ledger.CreateRun(ctx, h, "run-A", "idem-A", string(rawA), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-A: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runA.RunID, manifestA); err != nil {
+		t.Fatalf("Execute run-A: %v", err)
+	}
+	if gotA, err := ledger.GetRun(ctx, runA.RunID); err != nil || gotA.State != domain.StateSucceeded {
+		t.Fatalf("run-A deveria suceder, state=%v err=%v", gotA, err)
+	}
+
+	// "Correção fora de banda": o digest atual da API passa a ser ALGO que NENHUM run
+	// SUCCEEDED jamais registrou (nem A, nem D) — simula um RECOVERY_REQUIRED reconhecido
+	// fora de banda ou uma correção manual direta no host.
+	frD := fakeRunnerForManifest(manifestD)
+	for k := range frD.stdoutByFormat {
+		if strings.Contains(k, "{{.Config.Image}}") {
+			frD.stdoutByFormat[k] = "ghcr.io/omnira/omnira-api@sha256:" + strings.Repeat("x", 64)
+		}
+	}
+	wrapped := &rollbackSucceedsRunner{fakeRunner: frD}
+	compose.r = wrapped
+
+	rawD, err := json.Marshal(manifestD)
+	if err != nil {
+		t.Fatalf("json.Marshal manifestD: %v", err)
+	}
+	runD, err := ledger.CreateRun(ctx, h, "run-D", "idem-D", string(rawD), domain.StateLocked)
+	if err != nil {
+		t.Fatalf("CreateRun run-D: %v", err)
+	}
+	if err := exec.Execute(ctx, h, runD.RunID, manifestD); err != nil {
+		t.Fatalf("Execute run-D não deveria retornar erro quando a recuperação em si é bem-sucedida: %v", err)
+	}
+	gotD, err := ledger.GetRun(ctx, runD.RunID)
+	if err != nil {
+		t.Fatalf("GetRun run-D: %v", err)
+	}
+	if gotD.State != domain.StateRecoveryRequired {
+		t.Fatalf("digest atual não rastreado por nenhuma release SUCCEEDED deveria ser fail-closed (proveniência ambígua) — esperava RECOVERY_REQUIRED, veio %s", gotD.State)
+	}
+	if wrapped.applyCount >= 2 {
+		t.Errorf("Compose.Rollback nunca deveria ter sido chamado de verdade com proveniência ambígua — applyCount=%d", wrapped.applyCount)
+	}
+}
