@@ -214,6 +214,49 @@ describe('PlatformReleasesPage — golden path', () => {
     expect(screen.getByText(/compatibility.from_versions não inclui/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Iniciar atualização (escopo global)' })).toBeNull()
   })
+
+  it('reuses the SAME Idempotency-Key when retrying StartRun after a transient failure (Codex round 9)', async () => {
+    const user = userEvent.setup()
+    const startKeys: string[] = []
+    let failStart = true
+    vi.mocked(axios.post).mockImplementation(async (url: string, _body: unknown, config?: any) => {
+      const u = String(url)
+      if (u.endsWith('/platform/updates/plans')) {
+        return {
+          data: {
+            id: 'plan-1', release_id: 'rel-2026.10.0', preflight_status: 'PASS',
+            preflight_detail: { version_known: true, version_compatible: true, agent_protocol_ok: true, reasons: [] },
+            created_by: 'op-1', created_at: '2026-10-20T10:04:00Z', expires_at: '2026-10-20T10:19:00Z',
+          },
+        }
+      }
+      if (u.endsWith('/platform/updates/runs')) {
+        startKeys.push(config?.headers?.['Idempotency-Key'])
+        if (failStart) { failStart = false; return Promise.reject({ response: { status: 503, data: 'tente novamente' } }) }
+        return { data: run('LOCKED') }
+      }
+      throw new Error(`unexpected POST ${u}`)
+    })
+
+    renderAt(<PlatformReleasesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Detalhes' }))
+    await user.click(screen.getByRole('button', { name: 'Rodar preflight' }))
+    await screen.findByText('PASS')
+
+    await user.click(screen.getByRole('button', { name: 'Iniciar atualização (escopo global)' }))
+    let dialog = await screen.findByRole('dialog', { name: 'Confirmar atualização de escopo global' })
+    await user.click(within(dialog).getByRole('button', { name: 'Iniciar atualização' }))
+    await waitFor(() => expect(startKeys.length).toBe(1)) // first attempt failed
+
+    // Retry: open the confirmation again and confirm — same logical request.
+    await user.click(screen.getByRole('button', { name: 'Iniciar atualização (escopo global)' }))
+    dialog = await screen.findByRole('dialog', { name: 'Confirmar atualização de escopo global' })
+    await user.click(within(dialog).getByRole('button', { name: 'Iniciar atualização' }))
+    await waitFor(() => expect(startKeys.length).toBe(2))
+
+    expect(startKeys[0]).toBe(startKeys[1])
+    expect(startKeys[0]).toBeTruthy()
+  })
 })
 
 describe('PlatformReleasesPage — reentry with a run in progress', () => {

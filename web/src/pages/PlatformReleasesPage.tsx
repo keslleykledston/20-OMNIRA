@@ -58,6 +58,25 @@ const TAB_ITEMS: TabItem<SectionId>[] = [
   { id: 'atualizacoes', label: 'Atualizações' },
 ]
 
+// Achado Codex [P2] (8a rodada/9a rodada de revisão): `crypto.randomUUID()` chamado DENTRO de
+// cada mutationFn gera uma chave NOVA em toda tentativa, inclusive num retry depois de uma
+// falha de rede/timeout. Para StartRun especificamente isso é grave: se o servidor já reservou
+// o pedido (REQUESTED) mas o despacho falhou de forma transitória, um retry com chave DIFERENTE
+// nunca re-tenta o MESMO pedido (só Idempotency-Key repetida faz o servidor retomar/responder de
+// novo) — cai no gate de "só um run ativo por instalação" e fica travado sem nenhum caminho de
+// recuperação nesta tela. A mesma chave precisa sobreviver a um retry da MESMA ação; só depois
+// de um SUCESSO (ou de a pessoa desistir e fechar) é que a próxima tentativa é, de verdade, um
+// pedido novo e merece uma chave nova.
+function useStableIdempotencyKey() {
+  const ref = useRef<string | null>(null)
+  const get = () => {
+    if (!ref.current) ref.current = crypto.randomUUID()
+    return ref.current
+  }
+  const spend = () => { ref.current = null }
+  return { get, spend }
+}
+
 export default function PlatformReleasesPage() {
   const qc = useQueryClient()
   // AdminShell já buscou isso para a própria guarda de navegação e repassa o MESMO resultado via
@@ -194,9 +213,11 @@ export default function PlatformReleasesPage() {
     if ([installation.error, releases.error, runs.error].some(isUnauthorized)) handleUnauthorized()
   }, [installation.error, releases.error, runs.error])
 
+  const setVersionKey = useStableIdempotencyKey()
   const setVersionMutation = useMutation({
-    mutationFn: (version: string) => platformInstallationAPI.setVersion(version, crypto.randomUUID()),
+    mutationFn: (version: string) => platformInstallationAPI.setVersion(version, setVersionKey.get()),
     onSuccess: () => {
+      setVersionKey.spend()
       showToast('Versão instalada registrada.')
       setSetVersionOpen(false)
       void qc.invalidateQueries({ queryKey: ['platform-installation'] })
@@ -204,9 +225,11 @@ export default function PlatformReleasesPage() {
     onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
   })
 
+  const ingestKey = useStableIdempotencyKey()
   const ingestMutation = useMutation({
-    mutationFn: (manifest: unknown) => platformReleasesAPI.ingest(manifest as never, crypto.randomUUID()),
+    mutationFn: (manifest: unknown) => platformReleasesAPI.ingest(manifest as never, ingestKey.get()),
     onSuccess: () => {
+      ingestKey.spend()
       showToast('Release adicionada ao catálogo.')
       setIngestOpen(false)
       void qc.invalidateQueries({ queryKey: ['platform-releases'] })
@@ -290,12 +313,12 @@ export default function PlatformReleasesPage() {
         )}
       </div>
 
-      <Modal open={setVersionOpen} title="Registrar versão instalada" onClose={() => setSetVersionOpen(false)}>
-        <SetVersionForm isPending={setVersionMutation.isPending} onSubmit={(v) => setVersionMutation.mutate(v)} onCancel={() => setSetVersionOpen(false)} />
+      <Modal open={setVersionOpen} title="Registrar versão instalada" onClose={() => { setVersionKey.spend(); setSetVersionOpen(false) }}>
+        <SetVersionForm isPending={setVersionMutation.isPending} onSubmit={(v) => setVersionMutation.mutate(v)} onCancel={() => { setVersionKey.spend(); setSetVersionOpen(false) }} />
       </Modal>
 
-      <Modal open={ingestOpen} title="Ingerir release" description="Cole o manifesto (JSON) já obtido de um build assinado. O servidor valida o formato estrito antes de guardar." onClose={() => setIngestOpen(false)}>
-        <IngestForm isPending={ingestMutation.isPending} onSubmit={(m) => ingestMutation.mutate(m)} onCancel={() => setIngestOpen(false)} />
+      <Modal open={ingestOpen} title="Ingerir release" description="Cole o manifesto (JSON) já obtido de um build assinado. O servidor valida o formato estrito antes de guardar." onClose={() => { ingestKey.spend(); setIngestOpen(false) }}>
+        <IngestForm isPending={ingestMutation.isPending} onSubmit={(m) => ingestMutation.mutate(m)} onCancel={() => { ingestKey.spend(); setIngestOpen(false) }} />
       </Modal>
     </div>
   )
@@ -438,19 +461,27 @@ function ReleaseDetail({ release, installedVersion, onRunStarted }: { release: P
   const [confirmOpen, setConfirmOpen] = useState(false)
   const m = release.manifest
 
+  const preflightKey = useStableIdempotencyKey()
   const preflightMutation = useMutation({
-    mutationFn: () => platformPlansAPI.create(release.release_id, crypto.randomUUID()),
-    onSuccess: (p) => setPlan(p),
+    mutationFn: () => platformPlansAPI.create(release.release_id, preflightKey.get()),
+    onSuccess: (p) => { preflightKey.spend(); setPlan(p) },
     onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
   })
+  const startKey = useStableIdempotencyKey()
   const startMutation = useMutation({
-    mutationFn: () => platformRunsAPI.start(plan!.id, crypto.randomUUID()),
+    mutationFn: () => platformRunsAPI.start(plan!.id, startKey.get()),
     onSuccess: (run) => {
+      startKey.spend()
       setConfirmOpen(false)
       showToast('Atualização iniciada.')
       onRunStarted(run)
     },
     onError: (err) => {
+      // O diálogo fecha, mas a CHAVE sobrevive ao erro — achado Codex [P2] (8a/9a rodada):
+      // se o servidor já reservou o pedido (REQUESTED) e o despacho falhou de forma
+      // transitória, clicar em "Iniciar atualização" de novo precisa reusar a MESMA chave
+      // para o servidor retomar o MESMO pedido, nunca criar um segundo em conflito com o
+      // primeiro (gate de "só um run ativo por instalação").
       setConfirmOpen(false)
       showToast(describePlatformReleaseError(err), 'error')
     },
