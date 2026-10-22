@@ -65,6 +65,16 @@ const currentAgentProtocol = 1
 // nos demais canais (dev/candidate) permanece só um WARN informativo, como já era em F6.
 const backupEvidenceMaxAgeHours = 24
 
+// backupEvidenceRestoreVerifiedKind é o ÚNICO valor de RecordBackupEvidence.kind que o gate do
+// canal stable aceita (release/policies/backup.yaml recovery_classes.R3.evidence_sources:
+// scripts/backup-restore-check.sh / scripts/backup-restore-hub-check.sh) — achado Codex [P1]:
+// um `kind="logical_dump"` com `verified=true` só prova que o pg_dump não falhou/não está
+// vazio, nunca que os dados são de fato restauráveis. "verified" e "restore testado" são
+// afirmações DIFERENTES; aceitar a primeira como a segunda seria "inventar proteção"
+// (especificação §4). Candidate/dev continuam aceitando qualquer kind verificado (WARN-only,
+// comportamento de F6 preservado) — só o GATE bloqueante de stable exige este valor exato.
+const backupEvidenceRestoreVerifiedKind = "restore_verified"
+
 // revocationMaxCacheAgeSeconds espelha release/policies/signing.yaml
 // "revocation.max_cache_age_seconds" — documenta que a lista de revogação nunca é cacheada
 // indefinidamente; nesta implementação cada checkRevocation já consulta o Postgres
@@ -606,7 +616,27 @@ func (s *Service) RevokeRelease(ctx context.Context, operator uuid.UUID, idempot
 		}
 		return audit(c, q, operator, "platform.release.revoked", map[string]any{"release_id": releaseID, "reason": reason})
 	})
-	return rec, replayed, err
+	if err != nil {
+		return rec, replayed, err
+	}
+	// Achado Codex [P1]: sem isto, o agente (que nunca consulta o Postgres — ver o comentário
+	// do pacote internal/platformrelease/agent) nunca saberia que esta release foi revogada,
+	// e continuaria aplicando um run já despachado para ela mesmo bem depois da revogação
+	// (anti_replay.revalidate_before_apply exige revalidar no momento do APPLY real, que
+	// acontece no agente, não aqui). Postgres SEMPRE primeiro (já confirmado acima, inclusive
+	// em caso de replay): se este espelho local falhar, a revogação real já está registrada e
+	// visível em todo preflight/dispatch desta API — só o enforcement do agente em runs JÁ
+	// despachados fica temporariamente sem a segunda camada, nunca o contrário (nunca a
+	// aparência de "revogado" sem a revogação real ter acontecido).
+	ledger, lerr := agent.OpenLedger(s.ledgerPath)
+	if lerr != nil {
+		return rec, replayed, fmt.Errorf("updatemgr: release %s revogada no Postgres, mas o espelho local do ledger do agente não pôde ser aberto: %w — o agente pode não recusar um run já despachado até este espelho ser corrigido", releaseID, lerr)
+	}
+	defer ledger.Close()
+	if err := ledger.RevokeRelease(ctx, releaseID, reason); err != nil {
+		return rec, replayed, fmt.Errorf("updatemgr: release %s revogada no Postgres, mas gravar o espelho local do ledger falhou: %w", releaseID, err)
+	}
+	return rec, replayed, nil
 }
 
 // --- Plan (preflight — especificação §7.1) ---
@@ -687,19 +717,14 @@ func checkRevocation(ctx context.Context, q platformdb.Querier, releaseID string
 // é exatamente aí que backup.yaml exige evidência fresca ANTES da promoção). Candidate/dev
 // permanecem no comportamento WARN-only de F6 — nunca bloqueados por este gate, de propósito:
 // backup.yaml declara o gate como exigência de PROMOÇÃO a "stable", nunca de staging/dev.
-func checkStableBackupGate(m *domain.ReleaseManifest, backupDetail map[string]any) (blocked bool, reason string) {
+func checkStableBackupGate(m *domain.ReleaseManifest, restoreVerifiedFresh bool) (blocked bool, reason string) {
 	if m.Channel != domain.ChannelStable {
 		return false, ""
 	}
-	fresh, _ := backupDetail["fresh"].(bool)
-	if fresh {
+	if restoreVerifiedFresh {
 		return false, ""
 	}
-	present, _ := backupDetail["present"].(bool)
-	if !present {
-		return true, "release/policies/backup.yaml: promoção ao canal stable exige evidência de backup/restore registrada — nenhuma evidência foi encontrada"
-	}
-	return true, fmt.Sprintf("release/policies/backup.yaml: promoção ao canal stable exige evidência de backup/restore com no máximo %dh e verificada — a evidência mais recente não satisfaz isso", backupEvidenceMaxAgeHours)
+	return true, fmt.Sprintf("release/policies/backup.yaml: promoção ao canal stable exige evidência de RESTORE (kind=%q, scripts/backup-restore-check.sh ou -hub-check.sh) verificada e com no máximo %dh — um backup apenas tirado (nunca restaurado em teste) não satisfaz isso", backupEvidenceRestoreVerifiedKind, backupEvidenceMaxAgeHours)
 }
 
 // CreatePlan monta o preflight de uma release já ingerida contra o estado REAL da instalação —
@@ -811,10 +836,20 @@ func (s *Service) CreatePlan(ctx context.Context, operator uuid.UUID, idempotenc
 		} else {
 			backupDetail["warn"] = "nenhuma evidência de backup registrada — não bloqueia em F6 (gate de promoção stable é F9), mas revise antes de aprovar"
 		}
+		// Achado Codex [P1]: "fresh" acima aceita QUALQUER kind verificado (um `pg_dump`
+		// bem-sucedido, nunca testado em restore) — release/policies/backup.yaml exige
+		// especificamente evidência de RESTORE (scripts/backup-restore-check.sh ou
+		// -hub-check.sh), não só "o dump não falhou". O gate do canal stable usa esta
+		// consulta SEPARADA, restrita a backupEvidenceRestoreVerifiedKind, nunca a
+		// "fresh" genérico acima (que continua servindo só o WARN informativo de F6).
+		var lastRestoreVerified *time.Time
+		_ = q.QueryRow(c, `SELECT taken_at FROM platform_backup_records WHERE kind = $1 AND verified ORDER BY taken_at DESC LIMIT 1`, backupEvidenceRestoreVerifiedKind).Scan(&lastRestoreVerified)
+		restoreFresh := lastRestoreVerified != nil && time.Since(*lastRestoreVerified).Hours() <= backupEvidenceMaxAgeHours
+		backupDetail["restore_verified_fresh"] = restoreFresh
 		detail["backup_evidence"] = backupDetail
 		// F9 (release/policies/backup.yaml "promotion_gate.stable_channel"): GATE real — nunca
 		// só um WARN — quando a release é do canal "stable".
-		if blocked, reason := checkStableBackupGate(m, backupDetail); blocked {
+		if blocked, reason := checkStableBackupGate(m, restoreFresh); blocked {
 			status = "BLOCK"
 			reasons, _ := detail["reasons"].([]string)
 			detail["reasons"] = append(reasons, reason)

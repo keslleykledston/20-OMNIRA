@@ -103,13 +103,50 @@ func TestUpdateMgr_StableChannel_BackupEvidenceGate_BlocksWithoutFreshEvidence(t
 	}
 }
 
+// TestUpdateMgr_StableChannel_BackupEvidenceGate_LogicalDumpAloneNeverSatisfies é a prova
+// central do achado Codex [P1]: um backup "verified" (pg_dump real, não corrompido) NUNCA
+// satisfaz o gate de stable por si só — release/policies/backup.yaml exige especificamente
+// evidência de RESTORE testado, uma afirmação mais forte que "o dump existe e não está vazio".
+// DECLARADA ANTES de qualquer teste deste arquivo que grave kind="restore_verified"
+// (platform_backup_records é uma tabela GLOBAL sem release_id, compartilhada por TODA função
+// de teste na MESMA execução — comentário já presente em service_integration_test.go; os
+// testes de Go desta suíte rodam em ordem de DECLARAÇÃO dentro do arquivo, nunca em paralelo
+// aqui — então a ordem no arquivo importa de verdade para não poluir este teste com uma
+// evidência de restore genuína inserida por outro teste).
+func TestUpdateMgr_StableChannel_BackupEvidenceGate_LogicalDumpAloneNeverSatisfies(t *testing.T) {
+	w := newWorld(t)
+	svc := newService(t, w)
+	op := w.operator("op")
+
+	w.exec(`UPDATE platform_installations SET current_version = '9.0.0'`)
+	// kind="logical_dump", verified=true, bem recente — tudo que F6 já aceitava como "fresh"
+	// no WARN-only antigo — mas NUNCA um restore testado.
+	if _, _, err := svc.RecordBackupEvidence(w.ctx, op, "backup-key-f9-0010", "logical_dump", time.Now(), true, nil, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	m := manifestJSONChannel(t, "omnira-9.9.110", domain.ChannelStable, []string{"9.0.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0010", m); err != nil {
+		t.Fatal(err)
+	}
+	plan, _, err := svc.CreatePlan(w.ctx, op, "plan-key-f9-0010", "omnira-9.9.110")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PreflightStatus != "BLOCK" {
+		t.Fatalf("um backup 'verified' SEM restore testado nunca deveria satisfazer o gate de stable, veio %s: %s", plan.PreflightStatus, plan.PreflightDetail)
+	}
+}
+
 func TestUpdateMgr_StableChannel_BackupEvidenceGate_PassesWithFreshVerifiedEvidence(t *testing.T) {
 	w := newWorld(t)
 	svc := newService(t, w)
 	op := w.operator("op")
 
 	w.exec(`UPDATE platform_installations SET current_version = '9.0.0'`)
-	if _, _, err := svc.RecordBackupEvidence(w.ctx, op, "backup-key-f9-0001", "logical_dump", time.Now(), true, nil, "", nil); err != nil {
+	// kind precisa ser EXATAMENTE "restore_verified" (achado Codex [P1] — ver
+	// backupEvidenceRestoreVerifiedKind): o gate de stable exige evidência de RESTORE
+	// verdadeiro (scripts/backup-restore-check.sh), nunca só "o pg_dump não falhou".
+	if _, _, err := svc.RecordBackupEvidence(w.ctx, op, "backup-key-f9-0001", "restore_verified", time.Now(), true, nil, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	m := manifestJSONChannel(t, "omnira-9.9.101", domain.ChannelStable, []string{"9.0.0"})
@@ -121,7 +158,7 @@ func TestUpdateMgr_StableChannel_BackupEvidenceGate_PassesWithFreshVerifiedEvide
 		t.Fatal(err)
 	}
 	if plan.PreflightStatus != "PASS" {
-		t.Fatalf("release stable COM evidência fresca/verificada deveria PASS, veio %s: %s", plan.PreflightStatus, plan.PreflightDetail)
+		t.Fatalf("release stable COM evidência de restore fresca/verificada deveria PASS, veio %s: %s", plan.PreflightStatus, plan.PreflightDetail)
 	}
 }
 

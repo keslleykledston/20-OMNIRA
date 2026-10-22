@@ -598,6 +598,21 @@ func (e *Executor) Execute(ctx context.Context, h *LockHandle, runID string, man
 			return fmt.Errorf("agent: run %s está em %s — fora da sequência de execução do agente (trava até SUCCEEDED); isto é responsabilidade do backend/planner, nunca deste agente, e não pode ser tratado como concluído", runID, run.State)
 		}
 
+		// Achado Codex [P1], F9 (signing.yaml "anti_replay.revalidate_before_apply"): StartRun
+		// só revalida revogação no momento do DESPACHO (gravar no ledger) — mas o apply real
+		// (backup/download/migration/deploy) acontece AQUI, que pode ser bem mais tarde (poll
+		// interval, daemon reiniciado depois de ter morrido). Sem esta checagem, uma release
+		// revogada DEPOIS do despacho ainda seria instalada. Consulta o ledger LOCAL (nunca o
+		// Postgres — este agente nunca depende da API estar disponível), e reusa EXATAMENTE a
+		// mesma classificação de recuperação (handleFailure -> recover) que qualquer outra
+		// falha real já usa: R0 se nada mutou ainda, isRollbackSafe/RECOVERY_REQUIRED caso
+		// contrário — nunca uma lógica de bloqueio separada e menos testada.
+		if revoked, reason, err := e.Ledger.IsReleaseRevoked(ctx, manifest.ReleaseID); err != nil {
+			return fmt.Errorf("agent: verificar revogação local antes de aplicar: %w", err)
+		} else if revoked {
+			return e.handleFailure(ctx, h, runID, run.State, manifest, fmt.Errorf("agent: release %s foi REVOGADA (%s) — recusando aplicar qualquer step novo", manifest.ReleaseID, reason))
+		}
+
 		next, action := e.actionFor(run.State, runID, manifest)
 		if action != nil {
 			// O Step registrado é o do PRÓXIMO estado (`next`), nunca do atual: a ação

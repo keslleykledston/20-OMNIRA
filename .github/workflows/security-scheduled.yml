@@ -26,7 +26,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      # @latest era a ÚNICA referência móvel em todas as 4 workflows (achado F9) — uma versão
+      # comprometida/diferente publicada em golang.org/x/vuln rodaria código arbitrário via
+      # `go install` neste runner, mesmo com permissions mínimas (security-events: write ainda
+      # é escrita real no repositório). Fixada numa versão real e conhecida, igual ao padrão de
+      # SHA completo já usado para toda action de terceiro neste arquivo.
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
       - name: govulncheck (SARIF report, never fails this job)
         run: govulncheck -format sarif ./... > govulncheck.sarif || true
       - uses: github/codeql-action/upload-sarif@ce5e7eeac396d720fe2d802714996c8ce561e311 # v3

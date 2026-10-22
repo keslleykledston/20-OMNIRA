@@ -69,6 +69,19 @@ CREATE TABLE IF NOT EXISTS run_checkpoints (
   recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS run_checkpoints_run_id_idx ON run_checkpoints(run_id, id);
+
+-- F9 (release/policies/signing.yaml "anti_replay.revalidate_before_apply"): espelho LOCAL da
+-- revogação registrada no Postgres (updatemgr.Service.RevokeRelease escreve nas duas, nesta
+-- ordem). O agente nunca depende do Postgres/API estarem disponíveis para decidir o próximo
+-- passo seguro (comentário do pacote acima) — sem este espelho local, uma release revogada
+-- DEPOIS do despacho (StartRun) mas ANTES do agente de fato aplicar os steps perigosos (que
+-- pode ser bem depois: poll interval, daemon reiniciado) seria instalada mesmo revogada,
+-- porque Executor.Execute nunca consulta o Postgres diretamente.
+CREATE TABLE IF NOT EXISTS revoked_releases (
+  release_id TEXT PRIMARY KEY,
+  reason     TEXT NOT NULL,
+  revoked_at TEXT NOT NULL
+);
 `
 
 // Ledger é o estado durável do agente para UMA instalação (há uma só instalação real hoje,
@@ -517,6 +530,43 @@ func (l *Ledger) HasUnresolvedRecoveryRequired(ctx context.Context, installation
 		return false, fmt.Errorf("agent: verificar recuperação pendente: %w", err)
 	}
 	return n > 0, nil
+}
+
+// RevokeRelease (F9) grava, no ledger LOCAL, que release_id nunca deve ser aplicado por este
+// agente — espelho do que updatemgr.Service.RevokeRelease já gravou no Postgres (nesta mesma
+// chamada, sempre Postgres primeiro — ver o comentário em Service.RevokeRelease). Idempotente
+// (INSERT OR REPLACE): revogar de novo o MESMO release_id só atualiza reason/revoked_at, nunca
+// falha — mas RevokeRelease do Service já impede uma segunda revogação de verdade (constraint
+// de chave primária na tabela do Postgres), então na prática isto só reexecuta com os MESMOS
+// valores. Nunca exige um LockHandle: não compete pelo recurso que agent_lock protege (quais
+// mutações de Docker/migration estão em andamento), só registra um fato independente.
+func (l *Ledger) RevokeRelease(ctx context.Context, releaseID, reason string) error {
+	_, err := l.db.ExecContext(ctx,
+		`INSERT INTO revoked_releases (release_id, reason, revoked_at) VALUES (?, ?, ?)
+		 ON CONFLICT(release_id) DO UPDATE SET reason = excluded.reason, revoked_at = excluded.revoked_at`,
+		releaseID, reason, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("agent: gravar revogação local de %s: %w", releaseID, err)
+	}
+	return nil
+}
+
+// IsReleaseRevoked (F9) consulta o ledger LOCAL — nunca o Postgres — porque o agente nunca
+// depende da API/Postgres estarem disponíveis para decidir o próximo passo seguro (comentário
+// do pacote). Chamada por Executor.Execute ANTES de qualquer step perigoso, para que uma
+// release revogada DEPOIS do despacho (StartRun) mas ANTES do agente de fato aplicar (poll
+// interval, daemon reiniciado) seja recusada mesmo assim — signing.yaml
+// "anti_replay.revalidate_before_apply" não distingue "revalidar no despacho" de "revalidar no
+// apply real": são o MESMO requisito, e o apply real é aqui, não em StartRun.
+func (l *Ledger) IsReleaseRevoked(ctx context.Context, releaseID string) (revoked bool, reason string, err error) {
+	err = l.db.QueryRowContext(ctx, `SELECT reason FROM revoked_releases WHERE release_id = ?`, releaseID).Scan(&reason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("agent: verificar revogação local de %s: %w", releaseID, err)
+	}
+	return true, reason, nil
 }
 
 // AcknowledgeRecovery marca um run RECOVERY_REQUIRED como resolvido fora de banda — a única
