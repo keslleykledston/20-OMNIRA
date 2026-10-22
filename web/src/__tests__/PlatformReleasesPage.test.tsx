@@ -339,6 +339,42 @@ describe('PlatformReleasesPage — terminal transition (Codex round 2)', () => {
   })
 })
 
+describe('PlatformReleasesPage — checkpoint detail and event-fetch errors (Codex round 4)', () => {
+  it('renders the checkpoint step, status and diagnostic message — never just "checkpoint" and a time', async () => {
+    runs = [run('DEPLOYING')]
+    eventsByRun = {
+      'run-1': [
+        { seq: 0, kind: 'run.locked', detail: {}, created_at: '2026-10-20T10:05:00Z' },
+        { seq: 1, kind: 'checkpoint', detail: { step: 'migrations_expand', status: 'failed', detail: 'migration 000173 timed out' }, created_at: '2026-10-20T10:06:00Z' },
+      ],
+    }
+    renderAt(<PlatformReleasesPage />)
+    await screen.findByText('Acompanhando run-1')
+    expect(await screen.findByText('migrations_expand')).toBeInTheDocument()
+    expect(screen.getByText('falhou')).toBeInTheDocument()
+    expect(screen.getByText('migration 000173 timed out')).toBeInTheDocument()
+    // the raw "checkpoint" kind is never shown on its own for an actual checkpoint event
+    expect(screen.queryByText('checkpoint', { selector: 'span.font-medium' })).toBeNull()
+  })
+
+  it('surfaces an event-fetch failure with a retry action, instead of silently showing an empty or stale trail', async () => {
+    runs = [run('DEPLOYING')]
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) return { data: installation() }
+      if (u.endsWith('/platform/releases')) return { data: { items: releases } }
+      if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
+      if (u.endsWith('/run-1') && !u.includes('/events')) return { data: run('DEPLOYING') }
+      if (u.endsWith('/events')) return Promise.reject({ response: { status: 500, data: 'internal server error' } })
+      return Promise.reject({ response: { status: 404 } })
+    })
+    renderAt(<PlatformReleasesPage />)
+    await screen.findByText('Acompanhando run-1')
+    expect(await screen.findByText(/Não foi possível buscar os eventos mais recentes/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument()
+  })
+})
+
 describe('PlatformReleasesPage — switching selection does not leak stale state (Codex round 1)', () => {
   it('selecting a different release resets the previous one\'s preflight plan', async () => {
     const user = userEvent.setup()

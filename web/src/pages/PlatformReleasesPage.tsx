@@ -487,6 +487,36 @@ function RunStateBadge({ state }: { state: string }) {
   return <Badge variant={variant}>{runStateLabel(state)}</Badge>
 }
 
+const CHECKPOINT_STATUS_LABEL: Record<string, string> = { started: 'iniciado', completed: 'concluído', failed: 'falhou' }
+
+// Achado Codex [P2]: os checkpoints do Update Agent (internal/platformrelease/updatemgr
+// refreshFromLedger) sempre gravam kind="checkpoint" — o passo (step), o resultado (status:
+// started/completed/failed) e a mensagem de diagnóstico ficam só em `detail`. Mostrar apenas
+// "checkpoint" + hora tornava toda linha indistinguível e escondia o motivo de uma falha/
+// recuperação. "run.locked" não tem step/status (é o marcador de despacho, não um checkpoint do
+// agente), então mostra só o kind mesmo.
+function EventLine({ event }: { event: { seq: number; kind: string; detail: Record<string, unknown>; created_at: string } }) {
+  const step = typeof event.detail.step === 'string' ? event.detail.step : undefined
+  const status = typeof event.detail.status === 'string' ? event.detail.status : undefined
+  const detailText = typeof event.detail.detail === 'string' ? event.detail.detail : undefined
+  if (event.kind !== 'checkpoint' || !step) {
+    return (
+      <>
+        <span className="font-medium text-text-primary">{event.kind}</span>{' '}
+        <span className="text-text-tertiary">{new Date(event.created_at).toLocaleString('pt-BR')}</span>
+      </>
+    )
+  }
+  return (
+    <div>
+      <span className="font-medium text-text-primary">{step}</span>{' '}
+      {status && <Badge size="sm" variant={status === 'failed' ? 'danger' : status === 'completed' ? 'success' : 'info'}>{CHECKPOINT_STATUS_LABEL[status] ?? status}</Badge>}{' '}
+      <span className="text-text-tertiary">{new Date(event.created_at).toLocaleString('pt-BR')}</span>
+      {detailText && <p className="mt-1 text-text-secondary">{detailText}</p>}
+    </div>
+  )
+}
+
 // Acompanhamento por polling real (SSE não existe no backend desta fase — ver F6/F7 em
 // IMPLEMENTATION-STATUS.md): refaz a consulta do run e busca só os eventos novos (cursor `after`)
 // enquanto o estado não for terminal; para de perguntar sozinho quando o run termina.
@@ -563,11 +593,18 @@ function RunTracking({ runId, onClose }: { runId: string; onClose: () => void })
             <ol className="mt-2 space-y-2">
               {all.map((e) => (
                 <li key={e.seq} className="rounded-control border border-border-subtle p-3 text-body-sm">
-                  <span className="font-medium text-text-primary">{e.kind}</span>{' '}
-                  <span className="text-text-tertiary">{new Date(e.created_at).toLocaleString('pt-BR')}</span>
+                  <EventLine event={e} />
                 </li>
               ))}
             </ol>
+          )}
+          {events.isError && (
+            <div className="mt-2">
+              <ErrorState
+                message={`Não foi possível buscar os eventos mais recentes: ${describePlatformReleaseError(events.error)}`}
+                action={{ label: 'Tentar novamente', onClick: () => void events.refetch() }}
+              />
+            </div>
           )}
         </div>
       </CardBody>
