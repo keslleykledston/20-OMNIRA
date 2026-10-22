@@ -5,7 +5,7 @@ import { BrandMark } from '../components/BrandMark'
 import { Button, EmptyState, ErrorState, LoadingState } from '../components/primitives'
 import { authAPI } from '../lib/api'
 import { isActing } from '../lib/acting'
-import { hasSession, USER_KEY } from '../lib/session'
+import { handleUnauthorized, hasSession, isUnauthorized, USER_KEY } from '../lib/session'
 import { useAuthStore } from '../lib/store'
 import { useMyHubs } from '../hooks/useMyHubs'
 import { usePlatformOperator } from '../hooks/usePlatformOperator'
@@ -48,6 +48,16 @@ export default function AdminShell() {
     }
   }, [signedIn, acting])
 
+  // Achado Codex [P2] (15a rodada): a sessão expirada (401) é um sinal DEFINITIVO, nunca um
+  // probe "inconclusivo" (achado da 13a rodada, abaixo) — classificá-la como transitória
+  // oferecia um botão "Tentar de novo" que só reenviava a MESMA credencial morta para sempre,
+  // já que o Outlet (e o próprio handleUnauthorized() de PlatformReleasesPage) nunca montava
+  // para agir. Tratado aqui, antes de qualquer classificação de erro, do mesmo jeito que
+  // qualquer outra tela já faz.
+  useEffect(() => {
+    if ([hubs.error, platformOperator.query.error].some(isUnauthorized)) handleUnauthorized()
+  }, [hubs.error, platformOperator.query.error])
+
   const signOut = async () => {
     const res = await authAPI.logout()
     logout()
@@ -73,7 +83,8 @@ export default function AdminShell() {
   // dois do mesmo jeito dizia "Sem acesso ao console" a um operador de plataforma de verdade
   // (sem Hub nenhum) só por causa de um problema transitório, e como o Outlet nunca montava, o
   // estado de erro e o "tentar de novo" de PlatformReleasesPage ficavam inalcançáveis.
-  const platformOperatorProbeInconclusive = platformOperator.query.isError && (platformOperator.query.error as { response?: { status?: number } })?.response?.status !== 404
+  const platformOperatorProbeStatus = (platformOperator.query.error as { response?: { status?: number } } | null)?.response?.status
+  const platformOperatorProbeInconclusive = platformOperator.query.isError && platformOperatorProbeStatus !== 404 && platformOperatorProbeStatus !== 401
 
   return (
     <div className="flex min-h-dvh flex-col bg-canvas">

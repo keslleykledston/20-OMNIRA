@@ -21,7 +21,7 @@ const realLocation = window.location
 let hubs: object[] = []
 // undefined: this session's user is not a platform operator (the server answers 404, same as any
 // other route this mock does not know about — no enumeration oracle, mirrors updatemgr's own 404).
-let installation: object | 'transient-error' | undefined
+let installation: object | 'transient-error' | 'expired-session' | undefined
 
 function client() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -49,6 +49,7 @@ beforeEach(() => {
     if (String(url).endsWith('/hubs')) return { data: { items: hubs } }
     if (String(url).endsWith('/platform/installation')) {
       if (installation === 'transient-error') return Promise.reject({ response: { status: 500 } })
+      if (installation === 'expired-session') return Promise.reject({ response: { status: 401 } })
       if (installation) return { data: installation }
       return Promise.reject({ response: { status: 404 } })
     }
@@ -105,6 +106,15 @@ describe('console shell', () => {
     expect(await screen.findByText('Não foi possível confirmar seu acesso')).toBeInTheDocument()
     expect(screen.queryByText('Sem acesso ao console')).toBeNull()
     expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument()
+  })
+
+  it('an expired session (401 on the probe) is handled as a definitive sign-out, never as a retryable transient error (Codex round 15)', async () => {
+    setSession()
+    hubs = []
+    installation = 'expired-session'
+    inConsole('/plataforma')
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'))
+    expect(screen.queryByText('Não foi possível confirmar seu acesso')).toBeNull()
   })
 
   it('someone who is only a Hub admin (never a platform operator) never sees Plataforma', async () => {
