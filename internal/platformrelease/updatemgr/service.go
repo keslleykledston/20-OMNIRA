@@ -512,28 +512,53 @@ func (s *Service) ListRetentionCandidates(ctx context.Context, operator uuid.UUI
 // expectedDigestsAcrossHistory faz para monitoramento) — para uma ação DESTRUTIVA como GC,
 // proteger demais é sempre seguro; proteger de menos nunca é.
 func (s *Service) protectedReleaseIDsFromLedger(ctx context.Context) (map[string]bool, error) {
+	// Achado Codex [P1] (rodada 3 desta fatia): OpenLedger praticamente NUNCA falha por "o
+	// arquivo ainda não existe" (createSchema cria o arquivo na primeira abertura) — uma
+	// falha aqui significa um problema real (permissão, disco, corrupção). Tratar isso como
+	// "nada protegido" (achado anterior desta função, agora corrigido) deixava GC seguir com
+	// o estado possivelmente obsoleto do Postgres sempre que o ledger — a autoridade de
+	// execução — ficasse ilegível. Para uma ação DESTRUTIVA, "não consigo confirmar" tem que
+	// ser fail-closed, nunca "presumo que está tudo bem".
 	ledger, err := agent.OpenLedger(s.ledgerPath)
 	if err != nil {
-		// Ambiente sem ledger ainda (nenhum run foi criado) — nada protegido por ele, mas
-		// nunca um erro fatal: as outras checagens de releaseSafeToDelete continuam valendo.
-		return map[string]bool{}, nil
+		return nil, fmt.Errorf("verificar o ledger local antes de permitir GC: %w", err)
 	}
 	defer ledger.Close()
+	protected := map[string]bool{}
+	// Achado Codex [P2] (rodada 3 desta fatia): a proveniência histórica (abaixo) só olha
+	// runs TERMINAIS (SUCCEEDED/RECOVERY_REQUIRED) — mas um run ATIVO (LOCKED...OBSERVING,
+	// ainda não SUCCEEDED) pode já ter containers rodando de verdade (ex. DEPLOYING/
+	// HEALTH_CHECKING já aplicou o digest novo). Sem proteger isso, GC podia remover a
+	// release ENTRANDO durante o próprio deploy — current_release_id ainda aponta para a
+	// release ANTERIOR até esta terminar com sucesso.
+	active, err := ledger.ActiveRuns(ctx, s.installationID)
+	if err != nil {
+		return nil, fmt.Errorf("listar runs ativos no ledger local antes de permitir GC: %w", err)
+	}
+	for i := range active {
+		m, perr := domain.ParseManifest([]byte(active[i].ManifestJSON))
+		if perr != nil {
+			return nil, fmt.Errorf("parsear manifesto do run ativo %s antes de permitir GC: %w", active[i].RunID, perr)
+		}
+		protected[m.ReleaseID] = true
+	}
 	all, err := ledger.AllRuns(ctx, s.installationID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listar histórico de runs no ledger local antes de permitir GC: %w", err)
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].UpdatedAt.After(all[j].UpdatedAt) })
-	protected := map[string]bool{}
 	resolvedUnits := map[string]bool{}
 	for i := range all {
 		r := &all[i]
 		if r.State != domain.StateSucceeded && r.State != domain.StateRecoveryRequired {
 			continue
 		}
+		// Achado Codex [P1] (rodada 3 desta fatia): um manifesto histórico ilegível também é
+		// fail-closed, nunca pulado silenciosamente — não dá para confirmar que ele não
+		// protegia alguma unit.
 		m, perr := domain.ParseManifest([]byte(r.ManifestJSON))
 		if perr != nil {
-			continue
+			return nil, fmt.Errorf("parsear manifesto do run histórico %s antes de permitir GC: %w", r.RunID, perr)
 		}
 		touchedAny := false
 		for unit := range agent.ExpectedDigests(m) {

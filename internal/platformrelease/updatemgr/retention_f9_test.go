@@ -9,6 +9,7 @@ package updatemgr_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -301,5 +302,96 @@ func TestUpdateMgr_DeleteReleaseCatalogEntry_RefusesWhenLedgerStillProvidesAUnit
 	}
 	if n := w.count(`SELECT count(*) FROM platform_releases WHERE release_id = $1`, "omnira-9.9.306"); n != 1 {
 		t.Errorf("omnira-9.9.306 nunca deveria ter sido removida, achei %d linhas", n)
+	}
+}
+
+// TestUpdateMgr_DeleteReleaseCatalogEntry_RefusesWhenActiveRunReferencesRelease é a prova
+// central do achado Codex [P2] (rodada 3 desta fatia): um run ATIVO (ainda não SUCCEEDED,
+// ex. DEPLOYING/HEALTH_CHECKING já aplicou o digest novo de verdade) para a release ENTRANDO
+// nunca aparecia na proveniência histórica (que só olha runs TERMINAIS) nem em
+// current_release_id (que só avança quando o run termina com sucesso). Sem proteger isso, GC
+// podia remover a release sendo implantada agora mesmo, no meio do próprio deploy.
+func TestUpdateMgr_DeleteReleaseCatalogEntry_RefusesWhenActiveRunReferencesRelease(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	m := manifestJSONChannel(t, "omnira-9.9.308", domain.ChannelCandidate, []string{"0.1.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0308", m); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run ATIVO, nunca terminal — simula "a implantação está em andamento agora mesmo"
+	// (ex. já passou de DEPLOYING, containers novos já de pé, mas HEALTH_CHECKING/OBSERVING
+	// ainda não concluíram).
+	ledger, err := agent.OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := ledger.AcquireLock(w.ctx, "test-install-1", "test-updatectl", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.CreateRun(w.ctx, h, "run-9.9.308-active", "idem-9.9.308", string(m), domain.StateLocked); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []domain.RunState{domain.StateBackingUp, domain.StateBackupVerified, domain.StateDownloading, domain.StateVerifying, domain.StatePreparing, domain.StateMigratingExpand, domain.StateDeploying} {
+		if err := ledger.TransitionRun(w.ctx, h, "run-9.9.308-active", st); err != nil {
+			t.Fatalf("transição para %s: %v", st, err)
+		}
+	}
+	// Nunca chega a SUCCEEDED/ReleaseLock — o run continua ATIVO de propósito.
+	ledger.Close()
+
+	w.exec(`UPDATE platform_releases SET ingested_at = now() - interval '400 days' WHERE release_id = $1`, "omnira-9.9.308")
+
+	candidates, err := svc.ListRetentionCandidates(w.ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range candidates {
+		if c.ReleaseID == "omnira-9.9.308" && c.SafeToDelete {
+			t.Error("uma release com um run ATIVO (deploy em andamento) nunca deveria ser safe_to_delete")
+		}
+	}
+
+	if _, err := svc.DeleteReleaseCatalogEntry(w.ctx, op, "gc-key-f9-0308", "omnira-9.9.308"); !errors.Is(err, updatemgr.ErrInvalid) {
+		t.Errorf("esperava ErrInvalid (run ativo referenciando a release), veio %v", err)
+	}
+	if n := w.count(`SELECT count(*) FROM platform_releases WHERE release_id = $1`, "omnira-9.9.308"); n != 1 {
+		t.Errorf("omnira-9.9.308 nunca deveria ter sido removida enquanto o deploy está ativo, achei %d linhas", n)
+	}
+}
+
+// TestUpdateMgr_DeleteReleaseCatalogEntry_FailsClosedWhenLedgerUnreadable é a prova central
+// do achado Codex [P1] (rodada 3 desta fatia): um ledger ILEGÍVEL (corrompido, permissão,
+// disco) nunca pode ser tratado como "nada protegido" — para uma ação DESTRUTIVA, "não
+// consigo confirmar" é fail-closed, nunca "presumo que está tudo bem".
+func TestUpdateMgr_DeleteReleaseCatalogEntry_FailsClosedWhenLedgerUnreadable(t *testing.T) {
+	w := newWorld(t)
+	op := w.operator("op")
+	ledgerPath := filepath.Join(t.TempDir(), "ledger.db")
+	// Um arquivo que EXISTE mas não é um banco SQLite válido — simula corrupção real, sem
+	// precisar derrubar permissões/infra de verdade.
+	if err := os.WriteFile(ledgerPath, []byte("isto não é um banco SQLite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := updatemgr.New(w.app, ledgerPath, "test-install-1", "test-api", time.Minute).WithVerifier(testAllowAllVerifier{})
+
+	m := manifestJSONChannel(t, "omnira-9.9.309", domain.ChannelCandidate, []string{"0.1.0"})
+	if _, _, err := svc.IngestRelease(w.ctx, op, "ingest-key-f9-0309", m); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(`UPDATE platform_releases SET ingested_at = now() - interval '400 days' WHERE release_id = $1`, "omnira-9.9.309")
+
+	if _, err := svc.ListRetentionCandidates(w.ctx, op); err == nil {
+		t.Error("ListRetentionCandidates deveria falhar (fail-closed) com um ledger ilegível, nunca reportar silenciosamente 'nada protegido'")
+	}
+	if _, err := svc.DeleteReleaseCatalogEntry(w.ctx, op, "gc-key-f9-0309", "omnira-9.9.309"); err == nil {
+		t.Error("DeleteReleaseCatalogEntry deveria falhar (fail-closed) com um ledger ilegível, nunca remover a release sem confirmar sua proveniência")
+	}
+	if n := w.count(`SELECT count(*) FROM platform_releases WHERE release_id = $1`, "omnira-9.9.309"); n != 1 {
+		t.Errorf("omnira-9.9.309 nunca deveria ter sido removida com o ledger ilegível, achei %d linhas", n)
 	}
 }
