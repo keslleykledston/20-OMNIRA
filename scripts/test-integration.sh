@@ -71,6 +71,24 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# From a linked worktree (git worktree add), the repo root's .git is a FILE
+# pointing at an absolute path outside the repo root (e.g.
+# /opt/omnira/20-OMNIRA/.git/worktrees/release-engineering). The per-package
+# `docker run` below only bind-mounts the repo root at /app, so that pointer
+# dangles inside the container and even `git config --global` fails
+# ("fatal: not a git repository: ...") before `go test` ever runs — git's
+# repository discovery walks up from cwd and resolves the worktree pointer
+# unconditionally. Bind-mounting git's real common dir at the SAME absolute
+# path makes the pointer resolve inside the container too. A plain (non
+# -worktree) checkout has its common dir already inside the repo root, so
+# this stays empty there and nothing changes for that case.
+GIT_COMMON_DIR="$(realpath "$(git rev-parse --git-common-dir)")"
+EXTRA_GIT_MOUNTS=()
+case "${GIT_COMMON_DIR}" in
+  "$(pwd)"/*) ;; # already inside the repo root mount — nothing extra needed
+  *) EXTRA_GIT_MOUNTS=(-v "${GIT_COMMON_DIR}:${GIT_COMMON_DIR}:ro") ;;
+esac
+
 LABEL_KEY="com.omnira.integration-test"
 
 # Exact-match cleanup: selects only container(s) carrying BOTH
@@ -314,7 +332,7 @@ for pkg in "${PACKAGES[@]}"; do
   # names), so packages sharing this one disposable NATS server stay safe to
   # run concurrently if a future revision parallelizes this loop.
   if docker run --rm --network host \
-      -v "$(pwd)":/app -w /app -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false \
+      -v "$(pwd)":/app "${EXTRA_GIT_MOUNTS[@]}" -w /app -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false \
       -e OMNIRA_INTEGRATION_TEST=1 \
       -e OMNIRA_SESSION_CTX_KEY="${SESSION_CTX_KEY_TEST}" \
       -e OMNIRA_INTEGRATION_RUN_ID="${RUN_ID}" \
