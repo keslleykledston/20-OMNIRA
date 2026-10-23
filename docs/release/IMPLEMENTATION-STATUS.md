@@ -1828,3 +1828,100 @@ Próxima fase: F11 (aceitação e entrega — bateria final, ACCEPTANCE-REPORT.m
 **Veredito: PASS**
 
 ---
+
+## F11 — Aceitação e entrega
+
+```
+Fase: F11 (última fase)
+Baseline SHA: baa3234 (último commit de F10 nesta mesma branch)
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+HEAD ao final: 4ca0ce1 (2 commits desde o baseline)
+Implementação:
+  Fase de aceitação/consolidação — reexecução real da bateria final descrita na spec §12 contra
+  o estado atual do repositório (não só repetição de números já documentados), correção dos
+  gaps reais que essa reexecução encontrou, e produção de docs/release/ACCEPTANCE-REPORT.md +
+  docs/release/PR-DESCRIPTION-DRAFT.md.
+
+  1) scripts/test-integration.sh (suíte canônica de integração real-Postgres do repo,
+     pré-existente, não específica deste programa): falhava ao rodar a partir deste worktree —
+     `.git` de um worktree é um arquivo apontando para um caminho ABSOLUTO fora da raiz montada
+     no container de teste (/opt/omnira/20-OMNIRA/.git/worktrees/release-engineering), então a
+     descoberta de repositório do git falhava ("fatal: not a git repository") antes mesmo de
+     `git config --global --add safe.directory` ou `go test` rodarem. Corrigido montando também
+     o git-common-dir real (git rev-parse --git-common-dir + realpath, para funcionar tanto num
+     worktree quanto num checkout normal) no mesmo caminho absoluto dentro do container. 2
+     rodadas Codex limpas (achado de rodada 1: git-common-dir sem realpath fica relativo —
+     corrigido). Validado rodando de verdade contra um Postgres 16 descartável:
+     internal/platformrelease/updatemgr, internal/platformrelease/agent e
+     internal/tenancy/adapters PASS (136 tabelas com FORCE RLS confirmadas, omnira_app sem
+     bypass); internal/hub/adapters reproduz só a mesma falha pré-existente e não relacionada já
+     documentada em F6 (TestDelegatedRealtimeStreams).
+  2) scripts/release/test-f8-staging.sh: reexecução ponta a ponta (primeira desde que F9/F10
+     passaram a existir) encontrou um achado real de sequenciamento — o seed de migrations do
+     staging aplicava migrations reais só até 000173 e usava sua própria marker de teste
+     coincidentemente numerada "000174", colidindo com as migrations REAIS 000174/000175 que F9
+     acrescentou ao repositório; a API real quebrava imediatamente no startup
+     (StartRevocationDeliveryLoop: relation "platform_release_revocations" does not exist).
+     Corrigido: seed real até 000175, marker de teste renumerada para 000176 (primeiro número
+     livre). 2 rodadas Codex limpas. Reexecutado de verdade: Cenário 0 e Cenário 1 (baseline,
+     migration 000176 genuinamente pendente aplicada de verdade pelo agent.Executor real,
+     f8_staging_marker confirmada no Postgres) voltam a PASS.
+  3) Limitação nova encontrada na mesma reexecução, documentada e NÃO corrigida (ver
+     justificativa): rollbackTargetReleaseIDs (F9, internal/platformrelease/agent/reconcile.go)
+     reparseia o ManifestJSON de runs ANTERIORES via domain.ParseManifest (exige host
+     "ghcr.io/...") para confirmar a proveniência de um rollback automático. Os manifestos do
+     f8harness usam o registry local descartável e nunca passaram por esse parser na criação
+     (bypass documentado desde F8, para testar sem credenciais GHCR reais) — a partir do
+     Cenário 2 (primeiro que decide rollback automático com um run SUCCEEDED anterior já no
+     ledger), o re-parse falha e a instalação cai em RECOVERY_REQUIRED/LOCKED, bloqueando
+     2/3/4/5 em cascata. Não é regressão de produção: todo manifesto real já foi
+     domain.ParseManifest-validado na ingestão (IngestRelease/updatectl start), então o
+     re-parse em produção sempre sucede — confirmado contra os 6 testes dedicados reais em
+     reconcile_f9_test.go (TestExecute_RollbackTarget_*), reconfirmados PASS nesta sessão.
+     Resolver de verdade exigiria credenciais de publish no GHCR real do projeto
+     (BLOCKED_EXTERNAL, mesma causa raiz do programa inteiro) ou alterar DNS/daemon Docker do
+     host (proibido — afetaria a stack real deste mesmo host). Documentado como
+     BLOCKED_EXTERNAL na seção F8 (Pendências) e em docs/release/ACCEPTANCE-REPORT.md §2.6 —
+     nunca simulado como se tivesse passado.
+  4) Bateria final completa reexecutada e consolidada em docs/release/ACCEPTANCE-REPORT.md:
+     go build ./... limpo; go test ./... (108 pacotes ok, 0 FAIL, incluindo os dois testes
+     gated por sudo real — achado positivo: sudo -n amplo disponível nesta sessão, com a
+     ressalva de que não é a regra de sudoers ESTREITA de produção); Vitest (1208 testes, 0
+     falha real em isolamento — 19 falhas sob contenção de recursos quando os 117 arquivos
+     rodam juntos, todas confirmadas flaky/pré-existentes e não ligadas a este programa,
+     incluindo uma incompatibilidade jsdom@30/undici já presente em main antes deste programa);
+     tools/validate-specs.sh (OpenAPI/AsyncAPI) OK; auditoria de GitHub Actions de F9
+     reconfirmada inalterada (.github/workflows/ sem commit desde 0bb7df5).
+  5) docs/release/ACCEPTANCE-REPORT.md: matriz de fases, bateria reexecutada com evidência,
+     BLOCKED_EXTERNAL consolidado (5 itens, todos com a causa raiz já conhecida desde F0 +
+     o achado novo do item 3), limites de rollback consolidados, estado real do repositório.
+  6) docs/release/PR-DESCRIPTION-DRAFT.md: texto pronto para abertura de PR quando autorizado —
+     NENHUM git push, NENHUM gh pr create executado nesta sessão.
+Arquivos:
+  docs/release/ACCEPTANCE-REPORT.md (novo)
+  docs/release/PR-DESCRIPTION-DRAFT.md (novo)
+  scripts/test-integration.sh (mount do git-common-dir real)
+  scripts/release/test-f8-staging.sh (realinhamento de migrations 000173/000174 -> 000175/000176)
+  docs/release/IMPLEMENTATION-STATUS.md (esta seção + addendum na seção F8)
+Migrations: nenhuma nova (fase de aceitação/correção de scripts de teste).
+Contratos: nenhum novo; revalidados (tools/validate-specs.sh OK).
+Testes executados: ver docs/release/ACCEPTANCE-REPORT.md §2 (todos executados de verdade nesta
+  sessão, nunca assumidos de memória de fases anteriores sem reconfirmação).
+Rodadas de revisão (Codex, por fatia, `codex exec review --uncommitted`):
+  1) scripts/test-integration.sh (git-common-dir): 2 rodadas, 1 achado real corrigido (path
+     relativo sem realpath) — convergência na rodada 2.
+  2) scripts/release/test-f8-staging.sh (migrations 000173/174 -> 000175/176): 2 rodadas, 0
+     achados — convergência imediata.
+Pendências/BLOCKED_EXTERNAL: ver docs/release/ACCEPTANCE-REPORT.md §3 (consolidado, 5 itens,
+  nenhum item novo de causa raiz — só a extensão documentada do item 3 acima).
+Próxima fase: nenhuma — F0-F11 completas. Abertura de PR/push depende de autorização explícita
+  do usuário (não dada nesta sessão); criação do GitHub Environment, credenciais GHCR/Cosign e
+  instalação do systemd unit em produção dependem de um operador autorizado com acesso que esta
+  sessão não tem.
+```
+
+**Veredito: PASS** (programa completo F0–F11; itens de §3 do ACCEPTANCE-REPORT.md permanecem
+BLOCKED_EXTERNAL, documentados com o passo exato para um operador autorizado, nunca fingidos
+como feitos)
+
+---
