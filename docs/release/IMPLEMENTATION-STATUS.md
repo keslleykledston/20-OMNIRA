@@ -1308,7 +1308,11 @@ Migrations: nenhuma migration REAL nova (a migration de teste 000174_f8_staging_
 Contratos: nenhum novo; nenhuma mudança no OpenAPI/AsyncAPI (fase é só staging/teste).
 Testes executados (execução real `scripts/release/test-f8-staging.sh`, rodada limpa confirmada
   em 2026-10-22T11:04:17Z, execução `f8-2963183` — todas as 7 linhas PASS, a última de várias
-  rodadas idênticas após a convergência da revisão Codex):
+  rodadas idênticas após a convergência da revisão Codex; **nota F11**: esta tabela descreve a
+  última execução limpa ANTES de F9 existir — depois de F9 acrescentar `rollbackTargetReleaseIDs`,
+  uma reexecução ponta a ponta não reproduz mais as linhas 2/3/4 verbatim por uma incompatibilidade
+  de registry documentada na Pendências/BLOCKED_EXTERNAL acima e detalhada na seção F11; a tabela
+  é mantida como registro histórico fiel do que foi medido naquele momento, nunca reescrita):
   | Linha | Classe de recuperação observada | RTO real medido | Evidência |
   |---|---|---|---|
   | 0b — API real autenticada (GetInstallation, ledger vazio) | — | — | GET real responde 200; PID que lançamos confirmado dono do socket LISTEN (ss -ltnp) |
@@ -1446,6 +1450,32 @@ Pendências/BLOCKED_EXTERNAL:
     vazio) — nunca fingida. Resolver de verdade exigiria credenciais de publish no GHCR real do
     projeto (BLOCKED_EXTERNAL) ou alterar DNS/daemon Docker do host (proibido, afetaria a
     stack real).
+  - **Achado em F11** (reexecução ponta a ponta desta suíte depois de F9 existir): a MESMA
+    classe de incompatibilidade acima (domain.ParseManifest exige "ghcr.io/...", manifestos do
+    f8harness usam o registry local) agora também atinge `rollbackTargetReleaseIDs`
+    (internal/platformrelease/agent/reconcile.go) — função nova de F9 que resolve a proveniência
+    do rollback automático reparseando o `ManifestJSON` de runs ANTERIORES da mesma instalação.
+    Resultado real reproduzido nesta sessão: a partir do Cenário 2 (o primeiro que precisa
+    decidir um rollback automático depois de já existir um run SUCCEEDED anterior no ledger),
+    `rollbackTargetReleaseIDs` recusa com "parsear manifesto do run anterior ...: release
+    manifest: artifacts[].image ... não é uma referência ghcr.io por digest sha256", e a
+    instalação cai em RECOVERY_REQUIRED/LOCKED em vez de ROLLED_BACK — bloqueando também os
+    Cenários 3 e 4 em cascata (dependem de um reparo prévio que também precisa desse rollback).
+    Cenários 0, 1 e 5 (nenhum depende de rollback automático com histórico prévio) continuam
+    reproduzíveis ponta a ponta sem alteração. **Não é regressão de produção**: em produção todo
+    manifesto já persistido passou por `domain.ParseManifest` real na ingestão (IngestRelease ou
+    `updatectl start`), então o re-parse em `rollbackTargetReleaseIDs` sempre teria sucesso; só o
+    f8harness cria manifestos que nunca passaram por esse parser (bypass documentado desde F8,
+    ver cabeçalho de scripts/release/f8harness/main.go). A LÓGICA de `rollbackTargetReleaseIDs`
+    em si permanece coberta por 6 testes dedicados reais (ledger real, sem mock) em
+    internal/platformrelease/agent/reconcile_f9_test.go
+    (TestExecute_RollbackTarget_RevokedAfterSucceeding_ForcesRecoveryRequired e as outras 5
+    `TestExecute_RollbackTarget_*`) — reconfirmados PASS nesta sessão (F11). Resolver de verdade
+    teria o mesmo custo/risco já registrado acima para GetInstallation (credenciais GHCR reais
+    ou alterar DNS/daemon Docker do host, ambos fora do alcance desta sessão) — não contornado
+    por não haver uma checagem "ledger vazio" equivalente aqui sem comprometer o próprio
+    propósito do Cenário 2 (testar o rollback automático de verdade). Ver seção F11 para o
+    relato completo da reexecução.
   - Disco insuficiente dedicado (tmpfs/quota pequena forçando ENOSPC no backup): NÃO construído
     como cenário próprio nesta rodada — mas o cenário 3 (R3) e rodadas anteriores desta mesma
     sessão já produziram, de forma real e não planejada, uma falha de backup genuína (erro de

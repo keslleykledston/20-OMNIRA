@@ -218,11 +218,16 @@ log "   postgres em 127.0.0.1:${PG_PORT} / nats em 127.0.0.1:${NATS_PORT}"
 
 MIGRATIONS_GOOD="$WORK/migrations-good"
 cp -r migrations "$MIGRATIONS_GOOD"
-cat > "$MIGRATIONS_GOOD/000174_f8_staging_marker.up.sql" <<'SQLEOF'
+# F9 (release-engineering) acrescentou migrations REAIS 000174/000175 ao repo (platform_release_
+# revocations / platform_release_gc_requests) — a API real precisa delas existirem desde o
+# startup (StartRevocationDeliveryLoop consulta platform_release_revocations incondicionalmente),
+# então não podem mais ser o "174 pendente" deste teste. A marker sintética deste script passa a
+# ser 000176, o primeiro número livre acima do que o repo real já tem.
+cat > "$MIGRATIONS_GOOD/000176_f8_staging_marker.up.sql" <<'SQLEOF'
 CREATE TABLE f8_staging_marker (id INT PRIMARY KEY, note TEXT NOT NULL);
 INSERT INTO f8_staging_marker (id, note) VALUES (1, 'F8 staging: migration real aplicada pelo Update Agent de verdade');
 SQLEOF
-cat > "$MIGRATIONS_GOOD/000174_f8_staging_marker.down.sql" <<'SQLEOF'
+cat > "$MIGRATIONS_GOOD/000176_f8_staging_marker.down.sql" <<'SQLEOF'
 DROP TABLE IF EXISTS f8_staging_marker;
 SQLEOF
 
@@ -230,18 +235,20 @@ OWNER_URL="postgres://omnira:pw@127.0.0.1:${PG_PORT}/${DB_NAME}?sslmode=disable"
 APP_URL="postgres://omnira_app:omnira_app@127.0.0.1:${PG_PORT}/${DB_NAME}?sslmode=disable"
 SESSION_CTX_KEY="c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4"
 
-section "2b. aplicando migrations reais SÓ até 000173 (deixa 000174 pendente para o agente real aplicar)"
+section "2b. aplicando migrations reais SÓ até 000175 (deixa 000176 pendente para o agente real aplicar)"
 MIGRATE() {
   PGHOST=127.0.0.1 PGPORT="$PG_PORT" PGUSER=omnira PGPASSWORD=pw PGDATABASE="$DB_NAME" \
     OMNIRA_SESSION_CTX_KEY="$SESSION_CTX_KEY" SESSION_CTX_MODE=enforce MIGRATIONS_DIR="$MIGRATIONS_GOOD" \
     bash tools/migrate-sql.sh "$@"
 }
-# achado Codex: aplicar TUDO aqui (incl. 000174) antes de qualquer run começar faz todo
+# achado Codex: aplicar TUDO aqui (incl. 000176) antes de qualquer run começar faz todo
 # cenário exercitar só a VERIFICAÇÃO de checksum e uma aplicação no-op — uma regressão que
-# pulasse aplicar migrations pendentes de verdade passaria batido. Deixa 000174 (a marker de
+# pulasse aplicar migrations pendentes de verdade passaria batido. Deixa 000176 (a marker de
 # teste) genuinamente PENDENTE; o Cenário 1 (baseline) é quem primeiro a aplica de verdade,
-# via o agent.Executor real, e sua asserção confirma a tabela/linha reais no Postgres.
-MIGRATE_TARGET=000173 MIGRATE up >"$EVIDENCE/migrate-up.log" 2>&1 || { echo "FATAL: migrate up (ver $EVIDENCE/migrate-up.log)"; cat "$EVIDENCE/migrate-up.log"; exit 1; }
+# via o agent.Executor real, e sua asserção confirma a tabela/linha reais no Postgres. Todas as
+# migrations REAIS do repo (até 000175) são aplicadas aqui porque a API real já depende delas
+# para funcionar, não só para o fluxo de release/update.
+MIGRATE_TARGET=000175 MIGRATE up >"$EVIDENCE/migrate-up.log" 2>&1 || { echo "FATAL: migrate up (ver $EVIDENCE/migrate-up.log)"; cat "$EVIDENCE/migrate-up.log"; exit 1; }
 tail -5 "$EVIDENCE/migrate-up.log"
 
 # ---------------------------------------------------------------------------------------------
@@ -471,7 +478,7 @@ cat > "$MANIFEST_WIRING" <<JSON
   ],
   "modules_changed": ["platform_release"],
   "compatibility": {"from_versions": ["2.4.0"], "min_agent_protocol": 1, "database_strategy": "expand_only"},
-  "migrations": {"start_after": "000173", "target": "000174", "checksum_bundle": "${CHECKSUM_GOOD}"},
+  "migrations": {"start_after": "000175", "target": "000176", "checksum_bundle": "${CHECKSUM_GOOD}"},
   "rollout": {"workloads": ["omnira-api", "omnira-worker", "omnira-web"], "preflight_policy": "strict", "recovery_class": "R1"},
   "approved_by": "release-policy-stable-v1"
 }
@@ -531,7 +538,7 @@ build_local_manifest() { # $1=release_id $2=api_ref $3=worker_ref $4=web_ref $5=
   ],
   "modules_changed": ["platform_release"],
   "compatibility": {"from_versions":["x"],"min_agent_protocol":1,"database_strategy":"$6"},
-  "migrations": {"start_after":"000173","target":"$7","checksum_bundle":"$8"},
+  "migrations": {"start_after":"000175","target":"$7","checksum_bundle":"$8"},
   "rollout": {"workloads":["omnira-api","omnira-worker","omnira-web"],"preflight_policy":"strict","recovery_class":"$5"},
   "approved_by": "release-policy-stable-v1"
 }
@@ -558,13 +565,13 @@ section "Cenário 1: baseline v1 (todas as units) via agent.Executor real"
 T0=$(date +%s.%N)
 M1="$WORK/m-baseline.json"
 RELEASE1="omnira-9.9.$$-baseline"
-build_local_manifest "$RELEASE1" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M1"
+build_local_manifest "$RELEASE1" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "R1" "expand_only" "000176" "$CHECKSUM_GOOD" > "$M1"
 RUN1=$(HARNESS create-run --manifest="$M1" | grep -oE 'run_id=\S+' | cut -d= -f2)
 HARNESS reconcile > "$EVIDENCE/cenario1-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO1=$(echo "$T1 - $T0" | bc)
 ST1=$(harness_run_state "$RUN1")
 log "   run $RUN1 (baseline v1): estado=$ST1 (RTO ${RTO1}s)"
-# achado Codex: sem isto, um regressão que pulasse aplicar a migration 000174 PENDENTE de
+# achado Codex: sem isto, um regressão que pulasse aplicar a migration 000176 PENDENTE de
 # verdade (ex. um bug marcando "já aplicada" sem rodar o SQL) passaria batido — confirma a
 # tabela/linha REAIS no Postgres, não só que o run terminou em SUCCEEDED.
 MARKER_ROW=$(psql_o -c "SELECT note FROM f8_staging_marker WHERE id=1" 2>/dev/null)
@@ -583,7 +590,7 @@ MARKER_ROW=$(psql_o -c "SELECT note FROM f8_staging_marker WHERE id=1" 2>/dev/nu
 # MESMA limitação de credenciais GHCR do Cenário 0, que lá só precisa falhar (não pode haver um
 # pull ghcr.io de verdade sem publicar lá), nunca suceder. Nunca fingido; revertido.
 if [ "$ST1" = "SUCCEEDED" ] && [ -n "$MARKER_ROW" ]; then
-  log "   ${GRN}OK${NC}: migration 000174 (pendente até aqui) aplicada de verdade pelo agente real — f8_staging_marker confirmada no Postgres: $MARKER_ROW"
+  log "   ${GRN}OK${NC}: migration 000176 (pendente até aqui) aplicada de verdade pelo agente real — f8_staging_marker confirmada no Postgres: $MARKER_ROW"
   report_row "1-baseline-v1 (deploy real + migration pendente aplicada)" "-" "$RTO1" "PASS" "cenario1-reconcile.log"
 else
   log "   ${RED}FALHA${NC}: f8_staging_marker ausente/vazia (marker=$MARKER_ROW)"
@@ -594,7 +601,7 @@ fi
 section "Cenário 2: health timeout real -> rollback automático seguro (R1)"
 T0=$(date +%s.%N)
 M2="$WORK/m-broken-r1.json"
-build_local_manifest "omnira-9.9.$$-broken-r1" "${DIGESTS[broken]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M2"
+build_local_manifest "omnira-9.9.$$-broken-r1" "${DIGESTS[broken]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R1" "expand_only" "000176" "$CHECKSUM_GOOD" > "$M2"
 RUN2=$(HARNESS create-run --manifest="$M2" | grep -oE 'run_id=\S+' | cut -d= -f2)
 HARNESS reconcile > "$EVIDENCE/cenario2-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO2=$(echo "$T1 - $T0" | bc)
@@ -623,7 +630,7 @@ fi
 section "Cenário 3: incompatibilidade de banco (R3) -> bloqueio seguro, nunca rollback automático"
 T0=$(date +%s.%N)
 M3="$WORK/m-broken-r3.json"
-build_local_manifest "omnira-9.9.$$-broken-r3" "${DIGESTS[broken]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R3" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M3"
+build_local_manifest "omnira-9.9.$$-broken-r3" "${DIGESTS[broken]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R3" "expand_only" "000176" "$CHECKSUM_GOOD" > "$M3"
 RUN3=$(HARNESS create-run --manifest="$M3" | grep -oE 'run_id=\S+' | cut -d= -f2)
 HARNESS reconcile > "$EVIDENCE/cenario3-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO3=$(echo "$T1 - $T0" | bc)
@@ -656,7 +663,7 @@ fi
 # passar batido. Reimplanta o baseline v1 (reaproveitando o mesmo HARNESS real) e confirma
 # SUCCEEDED antes de seguir — o Cenário 4 sempre começa de um estado genuinamente saudável.
 M_REPAIR="$WORK/m-repair-before-4.json"
-build_local_manifest "omnira-9.9.$$-repair" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M_REPAIR"
+build_local_manifest "omnira-9.9.$$-repair" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "${DIGESTS[v1]}" "R1" "expand_only" "000176" "$CHECKSUM_GOOD" > "$M_REPAIR"
 RUN_REPAIR=$(HARNESS create-run --manifest="$M_REPAIR" | grep -oE 'run_id=\S+' | cut -d= -f2)
 HARNESS reconcile > "$EVIDENCE/repair-before-cenario4.log" 2>&1
 ST_REPAIR=$(harness_run_state "$RUN_REPAIR")
@@ -666,7 +673,7 @@ log "   baseline v1 reimplantado com sucesso antes do Cenário 4 (estado anterio
 section "Cenário 4: kill -9 real do agente em pleno apply -> recuperação via lock/fencing/heartbeat"
 T0=$(date +%s.%N)
 M4="$WORK/m-slow.json"
-build_local_manifest "omnira-9.9.$$-slow" "${DIGESTS[v1]}" "${DIGESTS[slow]}" "${DIGESTS[v1]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M4"
+build_local_manifest "omnira-9.9.$$-slow" "${DIGESTS[v1]}" "${DIGESTS[slow]}" "${DIGESTS[v1]}" "R1" "expand_only" "000176" "$CHECKSUM_GOOD" > "$M4"
 RUN4=$(HARNESS create-run --manifest="$M4" | grep -oE 'run_id=\S+' | cut -d= -f2)
 # holders ÚNICOS por invocação deste script (sufixo $RUN, já único por PID) — achado Codex:
 # um literal fixo "f8-agent-A" faria duas execuções CONCORRENTES desta suíte (dois PIDs
@@ -776,11 +783,11 @@ section "Cenário 5: migration drift (checksum_bundle não bate) -> recusa real 
 T0=$(date +%s.%N)
 MIGRATIONS_DRIFT="$WORK/migrations-drift"
 cp -r "$MIGRATIONS_GOOD" "$MIGRATIONS_DRIFT"
-cat >> "$MIGRATIONS_DRIFT/000174_f8_staging_marker.up.sql" <<'SQLEOF'
+cat >> "$MIGRATIONS_DRIFT/000176_f8_staging_marker.up.sql" <<'SQLEOF'
 -- F8 drift de teste: arquivo alterado DEPOIS do checksum_bundle ter sido calculado.
 SQLEOF
 M5="$WORK/m-drift.json"
-build_local_manifest "omnira-9.9.$$-drift" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R1" "expand_only" "000174" "$CHECKSUM_GOOD" > "$M5"
+build_local_manifest "omnira-9.9.$$-drift" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "${DIGESTS[v2]}" "R1" "expand_only" "000176" "$CHECKSUM_GOOD" > "$M5"
 RUN5=$(HARNESS create-run --manifest="$M5" | grep -oE 'run_id=\S+' | cut -d= -f2)
 F8_MIGRATIONS_DIR="$MIGRATIONS_DRIFT" HARNESS reconcile > "$EVIDENCE/cenario5-reconcile.log" 2>&1
 T1=$(date +%s.%N); RTO5=$(echo "$T1 - $T0" | bc)
