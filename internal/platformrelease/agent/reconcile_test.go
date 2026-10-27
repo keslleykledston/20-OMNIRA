@@ -1117,27 +1117,58 @@ func TestExecBackupRunner_BackupDirAndDBNameAlwaysWinOverExtraEnv(t *testing.T) 
 	}
 }
 
-// requireSudoForArbitraryScript confirma que esta máquina não só tem `sudo -n` liberado em
-// geral (sudo -n true), mas que a política de sudoers também permite rodar um CAMINHO
-// ARBITRÁRIO de script via sudo — o que estes testes precisam, já que geram o script fake em
-// t.TempDir(). Uma regra de sudoers de produção, corretamente restrita por Cmnd_Alias a um
-// caminho canônico (ex.: scripts/backup-omnira-db.sh), nega exatamente isso por design — sudo
-// -n true ainda passa (o binário sudo responde), mas a execução do script é recusada. Pular
-// nesse caso é honesto: a prova real já foi feita num sandbox com sudo amplo (ver
-// ACCEPTANCE-REPORT.md §2.2); isto só evita falso-FAIL de build num ambiente de CI/produção
-// com sudoers propositalmente restrito, sem nunca fingir PASS.
-func requireSudoForArbitraryScript(t *testing.T) {
+// requireSudoAvailable é só a checagem BARATA e genérica (sudo -n responde, sem senha) — o
+// filtro fino de verdade é skipIfSudoDenied, chamado DEPOIS de tentar o comando real. Uma
+// pré-sondagem com um comando mais simples não é confiável aqui: o comando real que
+// execBackupRunner monta (visto em reconcile.go) inclui `-u root -g #<gid>` e um wrapper
+// `sh -c 'umask ...; exec "$@"'` — achado ao rodar de verdade no CI: uma sondagem com
+// `sudo -n <script-descartável>` (sem essas flags) passou, mas o comando real completo foi
+// negado mesmo assim, por uma política de sudoers deste runner que não dá pra replicar sem
+// reconstruir o comando inteiro. Mais simples e robusto: tentar de verdade, e classificar a
+// falha depois.
+func requireSudoAvailable(t *testing.T) {
 	t.Helper()
 	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
 		t.Skip("sudo -n não disponível sem senha nesta máquina — pulando prova real de sudo")
 	}
-	probe := filepath.Join(t.TempDir(), "sudo-probe.sh")
-	if err := os.WriteFile(probe, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("escrever script de sondagem de sudo: %v", err)
+}
+
+// sudoPolicyDenialMarkers: frases específicas que o PRÓPRIO sudo emite quando a política de
+// autorização recusa o comando (autenticação/policy), nunca um aviso benigno como "sudo:
+// unable to resolve host ..." (que não impede o comando de rodar) nem uma mensagem do nosso
+// próprio script. "i'm sorry"/"i'm afraid i can't do that" cobre o modo `Defaults insults` do
+// sudo (mensagens fixas do próprio sudo, mostradas só em falha de autenticação/policy — é
+// exatamente isto que o runner de CI que achou este caso usa). Achado Codex: um match genérico
+// em "sudo: " esconderia uma falha real do script se o sudo também tivesse impresso um aviso
+// não-fatal antes dela — por isso a lista é específica, não um prefixo genérico.
+var sudoPolicyDenialMarkers = []string{
+	"a password is required",
+	"is not allowed to run",
+	"not permitted",
+	"is not in the sudoers file",
+	"command not allowed",
+	"i'm sorry",
+	"i'm afraid i can't do that",
+}
+
+// skipIfSudoDenied: se b.Run() falhou porque o PRÓPRIO sudo recusou o comando (uma das frases
+// de recusa de política em sudoPolicyDenialMarkers), isto conta como SKIP, nunca FAIL — é uma
+// prova de ambiente, não um bug de código; a prova real sob sudo amplo já rodou com sucesso
+// num sandbox de desenvolvimento (ver ACCEPTANCE-REPORT.md §2.2) e continua rodando aqui
+// sempre que a política local permitir. Qualquer outro erro (script falhou, dump não
+// apareceu, aviso benigno de sudo seguido de falha real, etc.) continua sendo um FAIL de
+// verdade, sem mascarar nada.
+func skipIfSudoDenied(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		return
 	}
-	if err := exec.Command("sudo", "-n", probe).Run(); err != nil {
-		t.Skipf("sudo -n não permite executar um caminho arbitrário de script nesta máquina "+
-			"(sudoers restrito por caminho, como numa produção endurecida) — pulando prova real: %v", err)
+	lower := strings.ToLower(err.Error())
+	for _, marker := range sudoPolicyDenialMarkers {
+		if strings.Contains(lower, marker) {
+			t.Skipf("política de sudoers desta máquina recusou o comando real (restrição de "+
+				"ambiente, não bug de código) — pulando: %v", err)
+		}
 	}
 }
 
@@ -1149,7 +1180,7 @@ func requireSudoForArbitraryScript(t *testing.T) {
 // chegando ao script mesmo com sudo no meio, porque são transportados como ARGUMENTOS do
 // comando `env`, não como ambiente herdado.
 func TestExecBackupRunner_EnvSurvivesSudoEnvReset(t *testing.T) {
-	requireSudoForArbitraryScript(t)
+	requireSudoAvailable(t)
 	backupDir := t.TempDir()
 	script := filepath.Join(t.TempDir(), "fake-backup.sh")
 	scriptContent := "#!/bin/sh\n" +
@@ -1168,6 +1199,7 @@ func TestExecBackupRunner_EnvSurvivesSudoEnvReset(t *testing.T) {
 	// t.Cleanup correm em LIFO: registrado DEPOIS de t.TempDir(), este roda PRIMEIRO).
 	t.Cleanup(func() { _ = exec.Command("sudo", "-n", "rm", "-rf", backupDir).Run() })
 	got, err := b.Run(context.Background())
+	skipIfSudoDenied(t, err)
 	if err != nil {
 		t.Fatalf("Run com sudo -n: %v", err)
 	}
@@ -1195,7 +1227,7 @@ func TestExecBackupRunner_EnvSurvivesSudoEnvReset(t *testing.T) {
 // confirma que o PRÓPRIO processo de teste — nunca com sudo — consegue listar o diretório E
 // ler esse conteúdo depois.
 func TestExecBackupRunner_SudoBackup_RunsAsRootAndStaysReadableByCaller(t *testing.T) {
-	requireSudoForArbitraryScript(t)
+	requireSudoAvailable(t)
 	old := syscall.Umask(0o077)
 	t.Cleanup(func() { syscall.Umask(old) })
 
@@ -1213,6 +1245,7 @@ func TestExecBackupRunner_SudoBackup_RunsAsRootAndStaysReadableByCaller(t *testi
 	t.Cleanup(func() { _ = exec.Command("sudo", "-n", "rm", "-rf", backupDir).Run() })
 
 	got, err := b.Run(context.Background())
+	skipIfSudoDenied(t, err)
 	if err != nil {
 		t.Fatalf("Run com sudo -n sob UMask restritivo: %v", err)
 	}
