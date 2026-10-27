@@ -1117,6 +1117,30 @@ func TestExecBackupRunner_BackupDirAndDBNameAlwaysWinOverExtraEnv(t *testing.T) 
 	}
 }
 
+// requireSudoForArbitraryScript confirma que esta máquina não só tem `sudo -n` liberado em
+// geral (sudo -n true), mas que a política de sudoers também permite rodar um CAMINHO
+// ARBITRÁRIO de script via sudo — o que estes testes precisam, já que geram o script fake em
+// t.TempDir(). Uma regra de sudoers de produção, corretamente restrita por Cmnd_Alias a um
+// caminho canônico (ex.: scripts/backup-omnira-db.sh), nega exatamente isso por design — sudo
+// -n true ainda passa (o binário sudo responde), mas a execução do script é recusada. Pular
+// nesse caso é honesto: a prova real já foi feita num sandbox com sudo amplo (ver
+// ACCEPTANCE-REPORT.md §2.2); isto só evita falso-FAIL de build num ambiente de CI/produção
+// com sudoers propositalmente restrito, sem nunca fingir PASS.
+func requireSudoForArbitraryScript(t *testing.T) {
+	t.Helper()
+	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
+		t.Skip("sudo -n não disponível sem senha nesta máquina — pulando prova real de sudo")
+	}
+	probe := filepath.Join(t.TempDir(), "sudo-probe.sh")
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("escrever script de sondagem de sudo: %v", err)
+	}
+	if err := exec.Command("sudo", "-n", probe).Run(); err != nil {
+		t.Skipf("sudo -n não permite executar um caminho arbitrário de script nesta máquina "+
+			"(sudoers restrito por caminho, como numa produção endurecida) — pulando prova real: %v", err)
+	}
+}
+
 // TestExecBackupRunner_EnvSurvivesSudoEnvReset: achado Codex P1 — scripts/backup-omnira-db.sh
 // usa `docker ps`/`docker exec` de verdade (precisa do MESMO acesso privilegiado que o
 // ComposeAdapter), mas CmdPrefix=["sudo","-n"] sob a política padrão `env_reset` do sudo
@@ -1125,9 +1149,7 @@ func TestExecBackupRunner_BackupDirAndDBNameAlwaysWinOverExtraEnv(t *testing.T) 
 // chegando ao script mesmo com sudo no meio, porque são transportados como ARGUMENTOS do
 // comando `env`, não como ambiente herdado.
 func TestExecBackupRunner_EnvSurvivesSudoEnvReset(t *testing.T) {
-	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
-		t.Skip("sudo -n não disponível sem senha nesta máquina — pulando prova real de env_reset")
-	}
+	requireSudoForArbitraryScript(t)
 	backupDir := t.TempDir()
 	script := filepath.Join(t.TempDir(), "fake-backup.sh")
 	scriptContent := "#!/bin/sh\n" +
@@ -1173,9 +1195,7 @@ func TestExecBackupRunner_EnvSurvivesSudoEnvReset(t *testing.T) {
 // confirma que o PRÓPRIO processo de teste — nunca com sudo — consegue listar o diretório E
 // ler esse conteúdo depois.
 func TestExecBackupRunner_SudoBackup_RunsAsRootAndStaysReadableByCaller(t *testing.T) {
-	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
-		t.Skip("sudo -n não disponível sem senha nesta máquina — pulando prova real de acesso pós-sudo")
-	}
+	requireSudoForArbitraryScript(t)
 	old := syscall.Umask(0o077)
 	t.Cleanup(func() { syscall.Umask(old) })
 
