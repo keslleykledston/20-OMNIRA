@@ -1924,4 +1924,43 @@ Próxima fase: nenhuma — F0-F11 completas. Abertura de PR/push depende de auto
 BLOCKED_EXTERNAL, documentados com o passo exato para um operador autorizado, nunca fingidos
 como feitos)
 
+### F11 — Addendum: primeira execução real no CI do GitHub (push + PR, pós-entrega)
+
+Depois do push de `feat/omnira-release-update-engine` para `origin` e abertura da PR #1
+(autorizada pelo usuário, token pessoal dele — não uma credencial desta sessão), o CI real
+(`ci-main.yml`) rodou pela primeira vez contra todo o programa. Isso expôs 2 achados reais,
+corrigidos nos commits `88c4583` e `54a445b`, e confirmou 3 achados pré-existentes e não
+relacionados:
+
+**Achados reais corrigidos (`internal/platformrelease/agent/reconcile_test.go`):**
+`TestExecBackupRunner_EnvSurvivesSudoEnvReset` e
+`TestExecBackupRunner_SudoBackup_RunsAsRootAndStaysReadableByCaller` falhavam no runner do
+GitHub Actions: `sudo -n true` passa, mas o comando real que `execBackupRunner` monta (inclui
+`-u root -g #<gid>` e um wrapper `sh -c 'umask ...; exec "$@"'`) é recusado pela política de
+sudoers desse runner — consistente com uma regra de produção endurecida
+(BLOCKED_EXTERNAL #4/#5 do ACCEPTANCE-REPORT.md, nunca testada ponta a ponta antes). Duas
+iterações:
+  1. `88c4583`: sondagem prévia com um script descartável simples (`sudo -n <script>`) — não
+     reproduzia o comando real (achado: a sondagem passou, o comando real foi recusado mesmo
+     assim, porque o comando real é bem mais complexo que a sondagem).
+  2. `54a445b`: troca de estratégia — tenta a operação real sempre; classifica como SKIP
+     (nunca FAIL) só se o erro contiver uma frase específica de recusa de política do próprio
+     sudo (`sudoPolicyDenialMarkers`), nunca um prefixo genérico que esconderia uma falha real
+     do script atrás de um aviso benigno do sudo (achado da revisão Codex sobre a primeira
+     versão). 2 rodadas Codex por iteração, todas convergindo limpas.
+
+**Achados pré-existentes, confirmados não relacionados a este programa (nenhum arquivo tocado
+por F0–F11), não corrigidos aqui — fora de escopo:**
+- `TestOpenAIGenerator_Timeout_NoRetry` (`internal/ai/adapters`) — race condition sob `-race`,
+  intermitente; arquivo nunca tocado por este programa.
+- `TestConcurrentReservationConvergesOnOneID` (`internal/worker/delivery`) — race condition sob
+  `-race`, intermitente; arquivo nunca tocado por este programa.
+- Secret scan (Trivy) em `tools/k6/tenancy-endpoints.js:13` — falso positivo (um JWT mock
+  explicitamente comentado "replace with real token for integration tests"), arquivo existe em
+  `main` desde o commit `058af5d`, muito antes deste programa.
+
+Nenhuma proteção de branch está configurada em `main` (`GET .../branches/main/protection` →
+404 "Branch not protected") — o merge não é bloqueado tecnicamente por nenhum check, mas os 2
+achados reais acima foram corrigidos mesmo assim, por rigor, antes do merge.
+
 ---
