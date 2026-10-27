@@ -1958,9 +1958,22 @@ por F0–F11), não corrigidos aqui — fora de escopo:**
 - Secret scan (Trivy) em `tools/k6/tenancy-endpoints.js:13` — falso positivo (um JWT mock
   explicitamente comentado "replace with real token for integration tests"), arquivo existe em
   `main` desde o commit `058af5d`, muito antes deste programa.
+- `TestTheSameKeyInParallelCallsTheERPOnce` (`internal/servicectx/adapters`) — achado no check
+  Integration (Postgres 16 real), teste sensível a tempo (30.30s, contenção do runner
+  compartilhado), último commit de `internal/servicectx/adapters` é `8ee7969`
+  (CRM/atendimento), nunca tocado por este programa.
+
+**Confirmação positiva no check Integration (Postgres 16 real, não simulado)**: todos os
+pacotes deste programa passaram — `internal/platformrelease/agent` (incluindo os dois testes
+de sudo real corrigidos acima, confirmando a correção também sob Postgres real), `internal/
+platformrelease/updatemgr`, e `internal/tenancy/adapters` (enforcement de RLS). A única falha
+do check é a acima, pré-existente e não relacionada.
 
 Nenhuma proteção de branch está configurada em `main` (`GET .../branches/main/protection` →
 404 "Branch not protected") — o merge não é bloqueado tecnicamente por nenhum check, mas os 2
-achados reais acima foram corrigidos mesmo assim, por rigor, antes do merge.
+achados reais acima foram corrigidos mesmo assim, por rigor, antes do merge. Resumo final da
+primeira execução real de CI: 4 falhas pré-existentes e não relacionadas identificadas (secret
+scan + 3 testes de timing/race em módulos fora deste programa), 0 falhas reais no código deste
+programa.
 
 ---
