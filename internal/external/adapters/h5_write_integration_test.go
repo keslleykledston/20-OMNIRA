@@ -30,7 +30,7 @@ import (
 
 // ADR-0048 H5: the coordinated write commands. Real PostgreSQL as omnira_app, the real HTTP handlers, the real control service, sender and attendance service.
 
-var writeScopes = append(append([]string{}, journalScopes...), "conversation.claim", "conversation.transfer", "conversation.finalize", "message.send")
+var writeScopes = append(append([]string{}, journalScopes...), "conversation.claim", "conversation.transfer", "conversation.finalize", "message.send", "message.note")
 
 func (e *env) writeAPI(opts ...func(*adapters.WriteDeps)) {
 	if e.writeUp {
@@ -43,6 +43,7 @@ func (e *env) writeAPI(opts ...func(*adapters.WriteDeps)) {
 	att := attendanceapp.NewService(attendanceadapters.NewPostgresRepository(e.app), nil, nil)
 	deps := adapters.WriteDeps{
 		Sender: messagesapp.NewExternalSender(messagesadapters.NewPostgresOutboundStore(e.app)),
+		Note:   messagesapp.NewExternalNoteWriter(messagesadapters.NewPostgresOutboundStore(e.app)),
 		Finalize: func(ctx context.Context, inst, conv uuid.UUID, reason, note string, ver int64, notify *bool) (adapters.FinalizeOutcome, error) {
 			res, err := att.FinalizeByExternalApp(ctx, inst, conv, attendancedomain.CloseReason(reason), note, ver, notify)
 			if err != nil {
@@ -56,11 +57,14 @@ func (e *env) writeAPI(opts ...func(*adapters.WriteDeps)) {
 		},
 		Eligible:  adapters.SectorsEligible,
 		QueueOpen: adapters.SectorsQueueOpen,
+		Starter:   adapters.PostgresStartStore{}, // ADR-0050
 	}
 	for _, o := range opts {
 		o(&deps)
 	}
 	w := adapters.NewWriteHandler(e.app, deps)
+	e.ext.Handle("POST /api/v1/external/conversations",
+		mw.Authenticated(adapters.RequireScope(domain.ScopeContactWrite, adapters.RequireScope(domain.ScopeConversationOpen, w.StartConversation()))))
 	post := func(op string, scope domain.Scope, h http.Handler) {
 		e.ext.Handle("POST /api/v1/external/conversations/{id}/"+op, mw.Authenticated(adapters.RequireScope(scope, h)))
 	}
@@ -68,6 +72,7 @@ func (e *env) writeAPI(opts ...func(*adapters.WriteDeps)) {
 	post("release", domain.ScopeConversationClaim, w.Release())
 	post("transfer", domain.ScopeConversationTransfer, w.Transfer())
 	post("messages", domain.ScopeMessageSend, w.Message())
+	post("notes", domain.ScopeMessageNote, w.Note())
 	post("finalize", domain.ScopeConversationFinalize, w.Finalize())
 	post("heartbeat", domain.ScopeConversationClaim, w.Heartbeat())
 	buffer := messagesadapters.UploadBuffer(func() bool { return deps.Media != nil }, func(r *http.Request) (uuid.UUID, bool) {
@@ -335,6 +340,107 @@ func TestWriteMessageQueuedOnceWithTheSameIdAndPreconditions(t *testing.T) {
 	}
 	if actor != nil || !strings.Contains(meta, `"actor_kind": "crm_application"`) || strings.Contains(meta, "Olá") {
 		t.Errorf("audit: actor=%v meta=%s", actor, meta)
+	}
+}
+
+// ADR-0053: the whole point of a private note is that it never reaches a provider. This test proves the structural guarantee, not just the
+// happy path — zero outbox rows for a note, however many are written, and the note is intercalated in GET .../messages like a real one.
+func TestWriteNoteIsNeverQueuedForDeliveryAndNeverCrossesTenants(t *testing.T) {
+	e := newEnv(t)
+	tn, admin, app, conv, _ := e.writeEnv()
+	tok := app.Credential.Token
+
+	if r := e.cmd(tok, conv, "notes", "key-note-00001", match(1), map[string]any{"text": "cliente já pagou, confirmar no financeiro"}); r.Code != 409 || r.Doc.Code != "not_holder" {
+		t.Fatalf("note without holding = %d %s", r.Code, r.Raw)
+	}
+	claim := e.cmd(tok, conv, "claim", "key-claim-0001", "", nil)
+	v := claim.Doc.Control.Version
+	if r := e.cmd(tok, conv, "notes", "key-note-00001", "", map[string]any{"text": "x"}); r.Code != 428 {
+		t.Errorf("note without If-Match = %d", r.Code)
+	}
+	if r := e.cmd(tok, conv, "notes", "key-note-00001", match(v+9), map[string]any{"text": "x"}); r.Code != 412 {
+		t.Errorf("note with a stale If-Match = %d %s", r.Code, r.Raw)
+	}
+
+	note := e.cmd(tok, conv, "notes", "key-note-00001", match(v), map[string]any{"text": "cliente já pagou, confirmar no financeiro"})
+	if note.Code != http.StatusCreated || note.Doc.MessageID == nil || note.Doc.Delivery != "" {
+		t.Fatalf("note = %d %s", note.Code, note.Raw)
+	}
+	nid := *note.Doc.MessageID
+
+	// what was written: private, status 'noted', the application's own, no person, no idempotency key on the row itself
+	var byUser, byInst *uuid.UUID
+	var private bool
+	var status, body string
+	if err := e.seed.QueryRow(e.ctx, `SELECT sent_by_user_id, sent_by_installation_id, private, status, body FROM messages WHERE id=$1`, nid).Scan(&byUser, &byInst, &private, &status, &body); err != nil {
+		t.Fatal(err)
+	}
+	if byUser != nil || byInst == nil || *byInst != app.Installation.ID || !private || status != "noted" || body != "cliente já pagou, confirmar no financeiro" {
+		t.Errorf("note row: user=%v installation=%v private=%v status=%s", byUser, byInst, private, status)
+	}
+	// THE invariant: no delivery job was ever created for it, under any event type, not just send_text
+	if n := e.count(`SELECT count(*) FROM outbox_events WHERE tenant_id=$1 AND aggregate_type='message' AND aggregate_id=$2`, tn, nid.String()); n != 0 {
+		t.Fatalf("a private note created %d outbox job(s), want 0", n)
+	}
+
+	// retry with the same key: same message, nothing new written, still zero jobs
+	for i := 0; i < 3; i++ {
+		r := e.cmd(tok, conv, "notes", "key-note-00001", match(v), map[string]any{"text": "cliente já pagou, confirmar no financeiro"})
+		if r.Code != http.StatusCreated || r.Doc.MessageID == nil || *r.Doc.MessageID != nid {
+			t.Fatalf("retry %d = %d %s", i, r.Code, r.Raw)
+		}
+	}
+	if n := e.count(`SELECT count(*) FROM messages WHERE conversation_id=$1 AND private`, conv); n != 1 {
+		t.Errorf("private messages = %d, want 1", n)
+	}
+	if n := e.count(`SELECT count(*) FROM outbox_events WHERE tenant_id=$1 AND aggregate_type='message' AND aggregate_id=$2`, tn, nid.String()); n != 0 {
+		t.Fatalf("after retries, outbox job(s) = %d, want 0", n)
+	}
+
+	// shape: empty text, too long (4001 is over the note's own 4000-char limit, well inside MaxTextRunes for a real message)
+	for name, b := range map[string]any{"empty": map[string]any{"text": "  "}, "too long": map[string]any{"text": strings.Repeat("a", 4001)}} {
+		r := e.cmd(tok, conv, "notes", "key-note-shape-"+strings.ReplaceAll(name, " ", "-"), match(v), b)
+		if r.Code != 422 || r.Doc.Code != "invalid_note" {
+			t.Errorf("%s = %d %s, want 422 invalid_note", name, r.Code, r.Raw)
+		}
+	}
+
+	// the note is intercalated in the feed like a real message, flagged private (e.writeEnv already mounted the read API)
+	_, raw, _ := e.callExt(http.MethodGet, "/api/v1/external/conversations/"+conv.String()+"/messages?order=desc", tok, nil)
+	var feed struct {
+		Items []struct {
+			ID      uuid.UUID `json:"id"`
+			Private bool      `json:"private"`
+			Status  string    `json:"status"`
+		} `json:"items"`
+	}
+	_ = json.Unmarshal(raw, &feed)
+	found := false
+	for _, it := range feed.Items {
+		if it.ID == nid {
+			found = true
+			if !it.Private || it.Status != "noted" {
+				t.Errorf("note in the feed: private=%v status=%s, want true/noted", it.Private, it.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the note does not appear in GET .../messages: %+v", feed.Items)
+	}
+
+	// without message.note: forbidden, even holding the conversation and having message.send
+	noNoteScope := e.install(admin, tn, "no-note-scope", "conversation.read", "message.read", "conversation.claim", "message.send")
+	claim2 := e.cmd(noNoteScope.Credential.Token, conv, "claim", "key-claim-0002", "", nil)
+	if r := e.cmd(noNoteScope.Credential.Token, conv, "notes", "key-note-noscope", match(claim2.Doc.Control.Version), map[string]any{"text": "x"}); r.Code != http.StatusForbidden {
+		t.Errorf("note without message.note = %d, want 403", r.Code)
+	}
+
+	// another tenant's installation: the conversation is the uniform 404, not a 403 or a leak of its existence
+	tb := e.tenant()
+	adminB := e.member(tb, "tenant_admin")
+	appB := e.install(adminB, tb, "CRM B", writeScopes...)
+	if r := e.cmd(appB.Credential.Token, conv, "notes", "key-note-crosstenant", match(1), map[string]any{"text": "x"}); r.Code != http.StatusNotFound {
+		t.Errorf("B noting A's conversation = %d, want 404", r.Code)
 	}
 }
 

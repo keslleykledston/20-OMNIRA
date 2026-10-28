@@ -30,6 +30,11 @@ export default function AcceptInvitePage() {
   const navigate = useNavigate()
   const [state, setState] = useState<ViewState>({ kind: 'loading' })
   const [accepting, setAccepting] = useState(false)
+  // Sem essa guarda, um duplo clique dispara dois GET /oidc/start: o segundo
+  // sobrescreve os cookies de state/verifier/nonce do primeiro antes do
+  // navegador terminar de seguir o redirect, e o callback rejeita com
+  // "invalid oidc callback" mesmo com o login correto.
+  const [ssoStarting, setSsoStarting] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -61,6 +66,8 @@ export default function AcceptInvitePage() {
   }, [token])
 
   const startSSO = () => {
+    if (ssoStarting) return
+    setSsoStarting(true)
     // O backend valida o retorno contra uma allowlist (só /invite/:token) —
     // nunca aceita uma URL de retorno arbitrária.
     authAPI.startOIDC(`/invite/${token}`)
@@ -96,8 +103,8 @@ export default function AcceptInvitePage() {
           {state.kind === 'needs-auth' && (
             <>
               {inviteSummary(state.info)}
-              <Button variant="primary" size="lg" className="w-full mt-2" onClick={startSSO}>
-                Continuar com SSO
+              <Button variant="primary" size="lg" className="w-full mt-2" onClick={startSSO} disabled={ssoStarting}>
+                {ssoStarting ? 'Indo para o login…' : 'Continuar com SSO'}
               </Button>
             </>
           )}

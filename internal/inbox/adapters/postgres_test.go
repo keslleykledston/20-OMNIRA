@@ -7,12 +7,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/omnira/omnira/internal/testhelpers"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channeldomain "github.com/omnira/omnira/internal/channels/domain"
 	inboxapp "github.com/omnira/omnira/internal/inbox/application"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 func TestPostgresInboundStoreIsTenantSafeAndIdempotent(t *testing.T) {

@@ -19,14 +19,14 @@ type OutboundAttachment struct {
 	UploadedBy     uuid.UUID // the person who uploaded it; uuid.Nil when an external application did
 	// UploadedByInstallation is the external application that uploaded it (ADR-0048); uuid.Nil when a person did. Exactly one of the two owners is set.
 	UploadedByInstallation uuid.UUID
-	Kind           string // image | audio | video | document
-	Mime           string // from the real bytes
-	SizeBytes      int64
-	SHA256         string
-	FileName       string // sanitized label
-	MessageID      *uuid.UUID
-	ExpiresAt      time.Time
-	Purged         bool
+	Kind                   string // image | audio | video | document
+	Mime                   string // from the real bytes
+	SizeBytes              int64
+	SHA256                 string
+	FileName               string // sanitized label
+	MessageID              *uuid.UUID
+	ExpiresAt              time.Time
+	Purged                 bool
 }
 
 // Usable reports whether the attachment can still be attached to a new message by actor in conversation.

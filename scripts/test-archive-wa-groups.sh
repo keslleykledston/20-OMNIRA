@@ -45,7 +45,7 @@ adm() { env PGPASSWORD="$PGPW" psql -h 127.0.0.1 -p "$PORT" -U omnira -v ON_ERRO
 sql() { $PSQL -X -q -v ON_ERROR_STOP=1 -At -c "$1"; }
 adm -d postgres -c "CREATE DATABASE archtest" >/dev/null
 echo "== applying migrations"
-DATABASE_URL="postgres://omnira:$PGPW@127.0.0.1:$PORT/archtest" bash tools/apply-migrations.sh up >/dev/null 2>&1 \
+DATABASE_URL="postgres://omnira:$PGPW@127.0.0.1:$PORT/archtest" MIGRATIONS_DIR="migrations" sh tools/migrate-sql.sh up >/dev/null 2>&1 \
   || { echo "FATAL: migrations failed"; exit 1; }
 
 # ---- fixtures: two tenants, a WAHA connection each, three groups

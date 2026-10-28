@@ -155,6 +155,17 @@ type Config struct {
 	AIModel          string
 	AIAPIKey         string
 	AITimeoutSeconds int
+
+	// PlatformReleaseAPIEnabled mounts the Update Manager API (/api/v1/platform/..., ADR-0054 §2.1,
+	// F6). Off by default; needs migration 173 and a platform operator (ADR-0038, platform_operators).
+	PlatformReleaseAPIEnabled bool
+	// PlatformReleaseLedgerPath/InstallationID/Lease MUST match the Update Agent's own
+	// OMNIRA_AGENT_LEDGER_PATH/OMNIRA_AGENT_INSTALLATION_ID/OMNIRA_AGENT_LEASE on this host — the API
+	// writes a run into the SAME local SQLite ledger the agent reconciles, never a separate channel
+	// (ADR-0054 §2.4, internal/platformrelease/updatemgr's package doc).
+	PlatformReleaseLedgerPath     string
+	PlatformReleaseInstallationID string
+	PlatformReleaseLease          time.Duration
 }
 
 // AIReady reports whether enough configuration exists to actually construct
@@ -187,29 +198,35 @@ func Load() *Config {
 		}
 	}
 	return &Config{
-		Env:                           getEnv("OMNIRA_ENV", "development"),
-		HTTPAddr:                      getEnv("OMNIRA_HTTP_ADDR", ":8080"),
-		DatabaseURL:                   getEnv("OMNIRA_DATABASE_URL", ""),
-		NatsURL:                       getEnv("OMNIRA_NATS_URL", "nats://localhost:4222"),
-		ValkeyURL:                     getEnv("OMNIRA_VALKEY_URL", "redis://localhost:6379/0"),
-		OtelEndpoint:                  getEnv("OMNIRA_OTEL_ENDPOINT", "http://localhost:4317"),
-		AuthIssuer:                    getEnv("OMNIRA_AUTH_ISSUER", "http://localhost:8080"),
-		AuthAudience:                  getEnv("OMNIRA_AUTH_AUDIENCE", "omnira"),
-		AuthMode:                      getEnv("OMNIRA_AUTH_MODE", "mock"),
-		AuthClientID:                  os.Getenv("OMNIRA_AUTH_CLIENT_ID"),
-		AuthClientSecret:              os.Getenv("OMNIRA_AUTH_CLIENT_SECRET"),
-		AuthRedirectURL:               os.Getenv("OMNIRA_AUTH_REDIRECT_URL"),
-		AuthPostLoginURL:              getEnv("OMNIRA_AUTH_POST_LOGIN_URL", "/login?oidc=complete"),
-		AuthCookieSecure:              getEnv("OMNIRA_AUTH_COOKIE_SECURE", "false") == "true",
-		OutboundMediaEnabled:          getEnv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "false") == "true",
-		HubAPIEnabled:                 getEnv("OMNIRA_HUB_API_ENABLED", "false") == "true",
-		HubProjectorEnabled:           getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
-		RoutingEngineEnabled:          getEnv("OMNIRA_ROUTING_ENGINE_ENABLED", "false") == "true",
-		RoutingEngineSince:            parseRFC3339(os.Getenv("OMNIRA_ROUTING_ENGINE_SINCE")),
-		HeadlessEnabled:               getEnv("OMNIRA_HEADLESS_ENABLED", "false") == "true",
-		HeadlessWriteEnabled:          getEnv("OMNIRA_HEADLESS_WRITE_ENABLED", "false") == "true",
-		HeadlessEventRetentionDays:    getEnvInt("OMNIRA_HEADLESS_EVENT_RETENTION_DAYS", 30),
-		HeadlessWebhookRetryHours:     getEnvInt("OMNIRA_HEADLESS_WEBHOOK_RETRY_HOURS", 72),
+		Env:                        getEnv("OMNIRA_ENV", "development"),
+		HTTPAddr:                   getEnv("OMNIRA_HTTP_ADDR", ":8080"),
+		DatabaseURL:                getEnv("OMNIRA_DATABASE_URL", ""),
+		NatsURL:                    getEnv("OMNIRA_NATS_URL", "nats://localhost:4222"),
+		ValkeyURL:                  getEnv("OMNIRA_VALKEY_URL", "redis://localhost:6379/0"),
+		OtelEndpoint:               getEnv("OMNIRA_OTEL_ENDPOINT", "http://localhost:4317"),
+		AuthIssuer:                 getEnv("OMNIRA_AUTH_ISSUER", "http://localhost:8080"),
+		AuthAudience:               getEnv("OMNIRA_AUTH_AUDIENCE", "omnira"),
+		AuthMode:                   getEnv("OMNIRA_AUTH_MODE", "mock"),
+		AuthClientID:               os.Getenv("OMNIRA_AUTH_CLIENT_ID"),
+		AuthClientSecret:           os.Getenv("OMNIRA_AUTH_CLIENT_SECRET"),
+		AuthRedirectURL:            os.Getenv("OMNIRA_AUTH_REDIRECT_URL"),
+		AuthPostLoginURL:           getEnv("OMNIRA_AUTH_POST_LOGIN_URL", "/login?oidc=complete"),
+		AuthCookieSecure:           getEnv("OMNIRA_AUTH_COOKIE_SECURE", "false") == "true",
+		OutboundMediaEnabled:       getEnv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "false") == "true",
+		HubAPIEnabled:              getEnv("OMNIRA_HUB_API_ENABLED", "false") == "true",
+		HubProjectorEnabled:        getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
+		RoutingEngineEnabled:       getEnv("OMNIRA_ROUTING_ENGINE_ENABLED", "false") == "true",
+		RoutingEngineSince:         parseRFC3339(os.Getenv("OMNIRA_ROUTING_ENGINE_SINCE")),
+		HeadlessEnabled:            getEnv("OMNIRA_HEADLESS_ENABLED", "false") == "true",
+		HeadlessWriteEnabled:       getEnv("OMNIRA_HEADLESS_WRITE_ENABLED", "false") == "true",
+		HeadlessEventRetentionDays: getEnvInt("OMNIRA_HEADLESS_EVENT_RETENTION_DAYS", 30),
+		HeadlessWebhookRetryHours:  getEnvInt("OMNIRA_HEADLESS_WEBHOOK_RETRY_HOURS", 72),
+		PlatformReleaseAPIEnabled:  getEnv("OMNIRA_PLATFORM_RELEASE_API_ENABLED", "false") == "true",
+		// Mesmos nomes de variável do Update Agent (internal/platformrelease/agentconfig) de propósito —
+		// são o MESMO host, o mesmo arquivo de ledger; nunca uma configuração separada.
+		PlatformReleaseLedgerPath:     getEnv("OMNIRA_AGENT_LEDGER_PATH", "/var/lib/omnira-update-agent/ledger.db"),
+		PlatformReleaseInstallationID: os.Getenv("OMNIRA_AGENT_INSTALLATION_ID"),
+		PlatformReleaseLease:          getEnvDuration("OMNIRA_AGENT_LEASE", 5*time.Minute),
 		HubAdminAPIEnabled:            getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",
 		HubAccessAPIEnabled:           getEnv("OMNIRA_HUB_ACCESS_API_ENABLED", "false") == "true",
 		HubServeEnabled:               getEnv("OMNIRA_HUB_SERVE_ENABLED", "false") == "true",
@@ -301,6 +318,15 @@ func getEnvInt(key string, defaultVal int) int {
 	if v := os.Getenv(key); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
+		}
+	}
+	return defaultVal
+}
+
+func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
 		}
 	}
 	return defaultVal

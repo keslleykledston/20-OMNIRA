@@ -165,6 +165,23 @@ func (r *PostgresAuditEventRepository) FindByAction(ctx context.Context, tenantI
 	return scanAuditEvents(rows)
 }
 
+func (r *PostgresAuditEventRepository) FindByResource(ctx context.Context, tenantID uuid.UUID, resourceType domain.ResourceType, resourceID uuid.UUID, limit, offset int) ([]*domain.AuditEvent, error) {
+	const query = `
+		SELECT id, tenant_id, actor_id, action, resource_type, resource_id, outcome, correlation_id, causation_id, metadata, created_at
+		FROM audit_events
+		WHERE tenant_id = $1 AND resource_type = $2 AND resource_id = $3
+		ORDER BY created_at DESC
+		LIMIT $4 OFFSET $5
+	`
+	rows, err := db.QuerierFromContext(ctx, r.pool).Query(ctx, query, tenantID, string(resourceType), resourceID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanAuditEvents(rows)
+}
+
 // Helper
 
 func scanAuditEvents(rows pgx.Rows) ([]*domain.AuditEvent, error) {

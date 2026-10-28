@@ -36,8 +36,8 @@ type Permission struct {
 // Role — função com conjunto de permissões
 type Role struct {
 	ID          uuid.UUID
-	TenantID    uuid.UUID    // nil for system roles
-	Name        string       // "admin", "viewer", "editor"
+	TenantID    uuid.UUID // nil for system roles
+	Name        string    // "admin", "viewer", "editor"
 	Description string
 	IsSystem    bool
 	Permissions []*Permission

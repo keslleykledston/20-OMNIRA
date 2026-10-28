@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import axios from 'axios'
 import ExternalAppsPage from '../pages/ExternalAppsPage'
 import { renderAt, setSession } from './testUtils'
-import { validateWebhookURL, type ExternalApp } from '../lib/externalApps'
+import { validateWebhookURL, type AuditEntry, type ExternalApp } from '../lib/externalApps'
 
 vi.mock('axios')
 
@@ -19,7 +19,7 @@ function app(over: Partial<ExternalApp> = {}): ExternalApp {
   }
 }
 
-function server(opts: { permissions: string[]; apps?: ExternalApp[]; listStatus?: number }) {
+function server(opts: { permissions: string[]; apps?: ExternalApp[]; listStatus?: number; audit?: AuditEntry[] }) {
   const apps = opts.apps ?? []
   vi.mocked(axios.get).mockImplementation(async (url: string) => {
     if (url.endsWith('/me/access')) return { data: { role_key: 'x', permissions: opts.permissions } }
@@ -28,6 +28,7 @@ function server(opts: { permissions: string[]; apps?: ExternalApp[]; listStatus?
       return { data: { items: apps, count: apps.length } }
     }
     if (/\/integrations\/apps\/app-1$/.test(url)) return { data: apps[0] }
+    if (url.endsWith('/audit')) return { data: { items: opts.audit ?? [], count: (opts.audit ?? []).length } }
     if (url.endsWith('/webhooks')) return { data: { items: [], count: 0 } }
     if (url.endsWith('/queues')) return { data: { items: [{ id: 'q1', name: 'Suporte', mode: 'manual', is_default: true }] } }
     if (url.endsWith('/channels/connections') || url.endsWith('/connections')) return { data: { items: [] } }
@@ -37,6 +38,10 @@ function server(opts: { permissions: string[]; apps?: ExternalApp[]; listStatus?
     if (url.endsWith('/integrations/apps')) {
       return { data: { installation: app({ id: 'app-9', name: String((body as { name: string }).name) }), credential: { id: 'c9', key_id: 'k9', label: '', created_at: '', expires_at: '', revoked_at: null, last_used_at: null, live: true, token: TOKEN } } }
     }
+    return Promise.reject({ response: { status: 404 } })
+  })
+  vi.mocked(axios.patch).mockImplementation(async (url: string, body?: unknown) => {
+    if (/\/integrations\/apps\/app-1$/.test(url)) return { data: { ...apps[0], ...(body as Partial<ExternalApp>) } }
     return Promise.reject({ response: { status: 404 } })
   })
 }
@@ -113,6 +118,34 @@ describe('ExternalAppsPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Gerenciar' }))
     expect(await screen.findByText('Protocolo aberto')).toBeInTheDocument()
     expect(screen.getByText('Pedido ao ERP mudou de estado')).toBeInTheDocument()
+  })
+
+  it('edits name, scopes and the queue allow-list of an installation already created, without recreating it', async () => {
+    const user = userEvent.setup()
+    server({ permissions: ADMIN, apps: [app({ scopes: ['conversation.read', 'events.read'] })] })
+    renderAt(<ExternalAppsPage />)
+    await user.click(await screen.findByRole('button', { name: 'Gerenciar' }))
+    await user.click(await screen.findByRole('button', { name: 'Editar' }))
+    const nameInput = await screen.findByLabelText('Nome da aplicação')
+    await user.clear(nameInput)
+    await user.type(nameInput, 'CRM Acme Renomeado')
+    await user.click(screen.getByLabelText(/Enviar mensagens ao cliente/))
+    await user.click(screen.getByRole('button', { name: 'Salvar alterações' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Salvar alterações' })).not.toBeInTheDocument())
+    const [, sentBody] = vi.mocked(axios.patch).mock.calls[0]
+    expect(sentBody).toMatchObject({ name: 'CRM Acme Renomeado', scopes: expect.arrayContaining(['message.send']) })
+  })
+
+  it('shows the audit trail of an installation (who changed what, when)', async () => {
+    const user = userEvent.setup()
+    server({
+      permissions: ADMIN,
+      apps: [app()],
+      audit: [{ id: 'e1', action: 'external_app.updated', actor_id: 'u1', created_at: '2026-10-19T10:00:00Z' }],
+    })
+    renderAt(<ExternalAppsPage />)
+    await user.click(await screen.findByRole('button', { name: 'Gerenciar' }))
+    expect(await screen.findByText(/Dados alterados/)).toBeInTheDocument()
   })
 
   it('validates a webhook address the way the server will', () => {

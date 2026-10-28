@@ -37,17 +37,28 @@ type ChannelDTO struct {
 	Provider     string     `json:"provider,omitempty"`
 }
 
+// LastMessagePreviewDTO is the preview requested in OMNIRA_API_PENDENCIAS_CRM.md §3.3: enough for a conversation list to render without a
+// second call per row, never the full message (no media, no sender) — that stays behind GET .../messages.
+type LastMessagePreviewDTO struct {
+	ID        uuid.UUID `json:"id"`
+	Direction string    `json:"direction"` // inbound | outbound
+	Type      string    `json:"type"`
+	Body      string    `json:"body,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type ConversationDTO struct {
-	ID            uuid.UUID  `json:"id"`
-	Status        string     `json:"status"` // open | closed
-	ContactID     *uuid.UUID `json:"contact_id,omitempty"`
-	Channel       ChannelDTO `json:"channel"`
-	QueueID       *uuid.UUID `json:"queue_id,omitempty"`
-	Control       ControlDTO `json:"control"`
-	Can           CanDTO     `json:"can"`
-	LastMessageAt *time.Time `json:"last_message_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID            uuid.UUID              `json:"id"`
+	Status        string                 `json:"status"` // open | closed
+	ContactID     *uuid.UUID             `json:"contact_id,omitempty"`
+	Channel       ChannelDTO             `json:"channel"`
+	QueueID       *uuid.UUID             `json:"queue_id,omitempty"`
+	Control       ControlDTO             `json:"control"`
+	Can           CanDTO                 `json:"can"`
+	LastMessageAt *time.Time             `json:"last_message_at,omitempty"`
+	LastMessage   *LastMessagePreviewDTO `json:"last_message,omitempty"`
+	CreatedAt     time.Time              `json:"created_at"`
+	UpdatedAt     time.Time              `json:"updated_at"`
 }
 
 type SenderDTO struct {
@@ -68,7 +79,8 @@ type MessageDTO struct {
 	Direction string    `json:"direction"` // inbound | outbound
 	Type      string    `json:"type"`
 	Body      string    `json:"body,omitempty"`
-	Status    string    `json:"status"` // received | queued | sent | delivered | read | failed | uncertain
+	Status    string    `json:"status"`            // received | queued | sent | delivered | read | failed | uncertain | noted
+	Private   bool      `json:"private,omitempty"` // ADR-0053: an internal note, never sent to the contact
 	Sender    SenderDTO `json:"sender"`
 	Media     *MediaDTO `json:"media,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
@@ -82,6 +94,58 @@ type ContactDTO struct {
 	Kind         string    `json:"kind"` // unclassified | customer | other
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	// OpenConversationID is set only by the phone search (OMNIRA_API_PENDENCIAS_CRM.md §2.3): the newest OPEN conversation with this
+	// contact that this installation may see, if any. GetContact (by id) never sets it.
+	OpenConversationID *uuid.UUID `json:"open_conversation_id,omitempty"`
+}
+
+// TemplateDTO is an approved, sendable WhatsApp template (ADR-0052): enough to pick one and send it (message.template_id = ID), never the
+// provider's own id or sync metadata.
+type TemplateDTO struct {
+	ID                  uuid.UUID `json:"id"`
+	ChannelConnectionID uuid.UUID `json:"channel_connection_id"`
+	Name                string    `json:"name"`
+	Language            string    `json:"language"`
+	Body                string    `json:"body,omitempty"`
+	VariableCount       int       `json:"variable_count"`
+}
+
+// GroupLastMessagePreviewDTO mirrors LastMessagePreviewDTO's shape for a group (ADR-0051), with the same minimization ADR-0015 already
+// enforces for the Workspace: author NAME only, never phone/JID.
+type GroupLastMessagePreviewDTO struct {
+	AuthorName string    `json:"author_name,omitempty"`
+	FromMe     bool      `json:"from_me"`
+	Type       string    `json:"type"`
+	Body       string    `json:"body,omitempty"`
+	SentAt     time.Time `json:"sent_at"`
+}
+
+// GroupDTO is an enabled WhatsApp group visible to the installation (ADR-0051). No provider_group_id, no participant list here (that is
+// GroupParticipantDTO, its own endpoint) — just enough to list and pick one.
+type GroupDTO struct {
+	ID                  uuid.UUID                   `json:"id"`
+	Name                string                      `json:"name"`
+	ChannelConnectionID uuid.UUID                   `json:"channel_connection_id"`
+	LastMessageAt       *time.Time                  `json:"last_message_at,omitempty"`
+	LastMessage         *GroupLastMessagePreviewDTO `json:"last_message,omitempty"`
+}
+
+// GroupMessageDTO is one message of a group's history (ADR-0051). AuthorName only — never author_jid, which is how ADR-0015/0051 avoid
+// exposing a participant's phone-shaped identifier through the external API.
+type GroupMessageDTO struct {
+	ID         uuid.UUID `json:"id"`
+	AuthorName string    `json:"author_name,omitempty"`
+	FromMe     bool      `json:"from_me"`
+	Type       string    `json:"type"`
+	Body       string    `json:"body,omitempty"`
+	SentAt     time.Time `json:"sent_at"`
+}
+
+// GroupParticipantDTO is a distinct author seen in the group's stored history (ADR-0051 §5): name only, derived from channel_participants,
+// never the opaque WhatsApp id/JID. There is no roster beyond who has actually sent a message the OMNIRA ever stored.
+type GroupParticipantDTO struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
 }
 
 type PageDTO[T any] struct {

@@ -43,6 +43,7 @@ tags:
   - { name: Tenancy, description: "Tenant access: fixed platform roles (read-only) and the caller's effective permissions" }
   - { name: Agents, description: "Operational agents and queues (groups)" }
   - { name: ExternalApps, description: "Administration of external applications (CRM) that use the Headless API (ADR-0048). For a person with integration.manage; never reachable by a Hub agent" }
+  - { name: PlatformRelease, description: "Update Manager API (ADR-0054 §2.1, F6): release catalog, preflight planning and update runs. Platform operator only (ADR-0038); never tenant/Hub membership or the API Headless" }
 security:
   - bearerAuth: []
   - cookieAuth: []
@@ -1859,6 +1860,298 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: Unknown capability or status, or nothing to change }
+  /platform/releases:
+    get:
+      operationId: listPlatformReleases
+      tags: [PlatformRelease]
+      summary: Local catalog of ingested, validated release manifests (platform operator)
+      description: |
+        Only an active platform operator (ADR-0038) gets an answer; everyone else — a tenant admin, a Hub
+        delegate, the API Headless — gets the uniform 404. This is the local cache (platform_releases); the
+        remote signed catalog (GHCR) is fetched by a separate, not-yet-connected pipeline (F3/F9).
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: before, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Most recently ingested first
+          content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/PlatformRelease' } } } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: ingestPlatformRelease
+      tags: [PlatformRelease]
+      summary: Validate and store a release manifest already obtained (platform operator)
+      description: |
+        The body IS the raw release manifest (internal/platformrelease/domain.ParseManifest/Validate — the
+        same strict parser of F1). `Idempotency-Key` required: a retry with the same manifest replays (200);
+        the same release_id with a different manifest is 422 (a signed release is immutable).
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReleaseManifest' }
+      responses:
+        '200': { description: Idempotent replay, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformRelease' } } } }
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformRelease' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'Invalid/unsigned-shape manifest, or the Idempotency-Key was used with a different manifest' }
+  /platform/releases/retention:
+    get:
+      operationId: listPlatformReleaseRetentionCandidates
+      tags: [PlatformRelease]
+      summary: Report which catalog releases are past their channel's retention window (platform operator)
+      description: |
+        Read-only report (F9, release/policies/channels.yaml retention_days) — never deletes anything.
+        `safe_to_delete` is revalidated from scratch at DELETE time (`/platform/releases/{release_id}`);
+        this report is never trusted as the authority for the delete itself.
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/PlatformReleaseRetentionCandidate' } } } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /platform/releases/{release_id}/revoke:
+    post:
+      operationId: revokePlatformRelease
+      tags: [PlatformRelease]
+      summary: Revoke a release (platform operator) — blocks every future apply, forces R4 on anything already dispatched
+      description: |
+        F9 (ADR-0054 §2.1/§2.2, release/policies/signing.yaml anti_replay.revocation). Append-only fact
+        (platform_release_revocations never supports UPDATE/DELETE) — revoking by mistake is corrected with
+        a new, separately-audited operator decision, never a silent reversal of this row. Mirrored to the
+        Update Agent's local ledger with retry-until-delivered semantics; the agent itself never trusts a
+        revocation older than release/policies/signing.yaml anti_replay.revocation.max_cache_age_seconds
+        without a fresh sync, and refuses to run (fail-closed) until that sync has happened at least once
+        (or the installation is explicitly marked standalone — see OMNIRA_AGENT_STANDALONE).
+        `Idempotency-Key` required: a retry with the same reason replays the original record (200); the
+        same key with a different reason is 422.
+      parameters:
+        - { name: release_id, in: path, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 500 } } }
+      responses:
+        '200': { description: 'Idempotent replay', content: { application/json: { schema: { $ref: '#/components/schemas/PlatformReleaseRevocation' } } } }
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformReleaseRevocation' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'release_id/reason missing, or the Idempotency-Key was used with a different reason' }
+  /platform/releases/{release_id}:
+    delete:
+      operationId: deletePlatformReleaseCatalogEntry
+      tags: [PlatformRelease]
+      summary: Permanently remove a release from the local catalog (platform operator) — garbage collection
+      description: |
+        F9 (release/policies/channels.yaml retention_days). Revalidates everything at deletion time (within
+        retention, revoked, referenced by a run/plan, currently installed, still provided by the local
+        ledger's history) — never trusts a possibly stale `/platform/releases/retention` report. Holds the
+        Update Agent's installation lock for the whole check-then-delete (a unique holder per call, so two
+        concurrent deletes never steal each other's lock) so a run cannot be dispatched for this release
+        between the safety check and the actual DELETE. `Idempotency-Key` required.
+      parameters:
+        - { name: release_id, in: path, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      responses:
+        '200':
+          description: 'deleted=true if this call removed the row; deleted=false if it was already gone (idempotent)'
+          content: { application/json: { schema: { type: object, required: [deleted], properties: { deleted: { type: boolean } } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'Not safe to delete yet (within retention, revoked, referenced, installed, or still provided by the agent ledger), or the installation lock is held by a concurrent GC call' }
+  /platform/installation:
+    get:
+      operationId: getPlatformInstallation
+      tags: [PlatformRelease]
+      summary: The current installation state (platform operator)
+      description: Singleton (ADR-0054 §2.4 — today there is only one installation).
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformInstallation' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /platform/installation/version:
+    put:
+      operationId: setPlatformInstallationVersion
+      tags: [PlatformRelease]
+      summary: Record the currently installed version/release (platform operator)
+      description: |
+        Nothing in this phase (F6) populates this from a real deploy (the Update Agent does not
+        report back to the API — see internal/platformrelease/updatemgr's package doc): without this,
+        the fail-closed preflight (compatibility.yaml) would BLOCK every release forever. Audited.
+        `Idempotency-Key` required: a retry replays the original result and never writes again (a
+        write-after-write here could stomp a newer ledger-synced fact); the same key with different
+        fields is 422.
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [version], properties: { version: { type: string, minLength: 1 }, release_id: { type: string } } }
+      responses:
+        '200': { description: OK (created or idempotent replay), content: { application/json: { schema: { $ref: '#/components/schemas/PlatformInstallation' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'version missing, or the Idempotency-Key was used with different fields' }
+  /platform/monitoring/status:
+    get:
+      operationId: getPlatformMonitoringStatus
+      tags: [PlatformRelease]
+      summary: Aggregate monitoring signals — agent liveness, backup, version/digest drift, stalled updates, post-release errors (platform operator)
+      description: |
+        F9 (spec "Monitoramento"). Read-only, never mutates anything. Attempts a fresh sync with the local
+        Update Agent ledger before comparing version/digest (same as GetInstallation) — never compares
+        against a value already known to be stale.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformMonitoringStatus' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /platform/backups:
+    post:
+      operationId: recordPlatformBackupEvidence
+      tags: [PlatformRelease]
+      summary: Record backup/restore evidence (platform operator)
+      description: |
+        Bookkeeping only in this phase (release/policies/backup.yaml): informs the preflight WARN, never a
+        BLOCK — the gate that makes this bind a "stable" promotion is F9. `Idempotency-Key` required: a
+        retry with the same fields replays the original record (200); the same key with different fields is 422.
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [kind, taken_at, verified]
+              properties:
+                kind: { type: string, minLength: 1 }
+                taken_at: { type: string, format: date-time }
+                verified: { type: boolean }
+                size_bytes: { type: integer }
+                sha256_hex: { type: string }
+                detail: { type: object }
+      responses:
+        '200': { description: 'Idempotent replay', content: { application/json: { schema: { $ref: '#/components/schemas/PlatformBackupRecord' } } } }
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformBackupRecord' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'Invalid input, or the Idempotency-Key was used with different fields' }
+  /platform/updates/plans:
+    post:
+      operationId: createPlatformUpdatePlan
+      tags: [PlatformRelease]
+      summary: Preflight a release against the real installation state (platform operator)
+      description: |
+        Fail-closed (specification §7.1): a release whose compatibility.from_versions does not cover the
+        installed version, or whose min_agent_protocol this host cannot satisfy, is BLOCK — never "tried with
+        a warning". Backup evidence is informational only in this phase (see /platform/backups).
+        `Idempotency-Key` required: a retry with the same release_id replays the original plan, PASS or BLOCK,
+        never recomputed against the (possibly now different) current state (200); the same key for a
+        different release_id is 422.
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [release_id], properties: { release_id: { type: string } } }
+      responses:
+        '200': { description: 'Idempotent replay', content: { application/json: { schema: { $ref: '#/components/schemas/PlatformUpdatePlan' } } } }
+        '201': { description: Created (PASS or BLOCK — inspect preflight_status), content: { application/json: { schema: { $ref: '#/components/schemas/PlatformUpdatePlan' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'release_id missing or unknown, or the Idempotency-Key was used with a different release_id' }
+  /platform/updates/plans/{plan_id}:
+    get:
+      operationId: getPlatformUpdatePlan
+      tags: [PlatformRelease]
+      summary: Read a preflight plan (platform operator)
+      parameters:
+        - { name: plan_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformUpdatePlan' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /platform/updates/runs:
+    post:
+      operationId: startPlatformUpdateRun
+      tags: [PlatformRelease]
+      summary: Start a run from a PASS plan (platform operator) — the authenticated channel to the Update Agent
+      description: |
+        Writes the run into the SAME local SQLite ledger the Update Agent (apps/update-agent, F5) already
+        reconciles — never a separate channel, never shell/Docker from this process (specification §E). The
+        API never executes the release: the Update Agent (already running, or invoked via `updatectl
+        reconcile`) does. `Idempotency-Key` required: two operators racing the same plan get one run.
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [plan_id], properties: { plan_id: { type: string, format: uuid } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformUpdateRun' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'Plan is not PASS, has expired, or the Idempotency-Key was used with a different plan' }
+    get:
+      operationId: listPlatformUpdateRuns
+      tags: [PlatformRelease]
+      summary: Update run history (platform operator)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: before, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: 'Most recent first', content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/PlatformUpdateRun' } } } } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /platform/updates/runs/{run_id}:
+    get:
+      operationId: getPlatformUpdateRun
+      tags: [PlatformRelease]
+      summary: Read a run, refreshed from the Update Agent's local ledger (platform operator)
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformUpdateRun' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /platform/updates/runs/{run_id}/events:
+    get:
+      operationId: listPlatformUpdateRunEvents
+      tags: [PlatformRelease]
+      summary: Progress trail of a run — polling (platform operator)
+      description: |
+        Append-only (platform_update_events; database-enforced immutability). `after` is an opaque sequence
+        cursor: pass the last `seq` seen to get only what is new. SSE is not implemented in this phase
+        (documented pending in docs/release/IMPLEMENTATION-STATUS.md F6); polling satisfies the specification's
+        "SSE/polling" requirement.
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+        - { name: after, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/PlatformUpdateEvent' } } } } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /hubs/{hub_id}/managed:
     get:
       operationId: listHubManagedInstances
@@ -5067,6 +5360,39 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "Name in use, or the installation is revoked", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/audit:
+    get:
+      operationId: getExternalAppAudit
+      tags: [ExternalApps]
+      summary: Light audit trail of this installation (created, updated, suspended, reactivated, revoked, credential issued/revoked)
+      description: Requires `integration.read`. Never a token or a secret. Most recent first.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      responses:
+        '200':
+          description: The audit trail
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, action, actor_id, created_at]
+                      properties:
+                        id: { type: string, format: uuid }
+                        action: { type: string }
+                        actor_id: { type: string, format: uuid }
+                        metadata: { type: object }
+                        created_at: { type: string, format: date-time }
+                  count: { type: integer }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/integrations/apps/{app_id}/suspend:
     post:
       operationId: suspendExternalApp
@@ -5665,6 +5991,141 @@ components:
         label: { type: string }
         description: { type: string }
         gates: { type: string, description: What the server refuses when the switch is off }
+    ReleaseManifest:
+      type: object
+      description: >
+        The signed release manifest shape (internal/platformrelease/domain.ReleaseManifest, F1). Hand-authored
+        here to document the ingestion contract; the server's own strict Go validator — not this schema — is
+        the enforced authority (ParseManifest/Validate rejects duplicate/unknown/case-variant keys that a
+        generic JSON Schema validator would not catch).
+      required: [schema_version, release_id, platform_version, channel, source, artifacts, modules_changed, compatibility, migrations, rollout, approved_by]
+      properties:
+        schema_version: { type: integer }
+        release_id: { type: string }
+        platform_version: { type: string }
+        channel: { type: string, enum: [candidate, stable] }
+        source: { type: object, required: [repository, commit_sha, workflow_run_id], properties: { repository: { type: string }, commit_sha: { type: string }, workflow_run_id: { type: string } } }
+        artifacts: { type: array, items: { type: object, required: [unit, image], properties: { unit: { type: string }, image: { type: string } } } }
+        modules_changed: { type: array, items: { type: string } }
+        compatibility:
+          type: object
+          required: [from_versions, min_agent_protocol, database_strategy]
+          properties:
+            from_versions: { type: array, items: { type: string } }
+            min_agent_protocol: { type: integer }
+            database_strategy: { type: string, enum: [expand_then_contract_later, expand_only, no_schema_change] }
+        migrations: { type: object, required: [start_after, target, checksum_bundle], properties: { start_after: { type: string }, target: { type: string }, checksum_bundle: { type: string } } }
+        rollout: { type: object, required: [workloads, preflight_policy, recovery_class], properties: { workloads: { type: array, items: { type: string } }, preflight_policy: { type: string }, recovery_class: { type: string } } }
+        release_notes_ref: { type: string }
+        approved_by: { type: string }
+    PlatformRelease:
+      type: object
+      required: [release_id, channel, platform_version, manifest, ingested_by, ingested_at]
+      properties:
+        release_id: { type: string }
+        channel: { type: string }
+        platform_version: { type: string }
+        manifest: { $ref: '#/components/schemas/ReleaseManifest' }
+        ingested_by: { type: string, format: uuid }
+        ingested_at: { type: string, format: date-time }
+    PlatformInstallation:
+      type: object
+      required: [channel, agent_protocol, current_digests, updated_at]
+      properties:
+        channel: { type: string }
+        agent_protocol: { type: integer }
+        current_version: { type: string }
+        current_release_id: { type: string }
+        current_digests: { type: object }
+        updated_at: { type: string, format: date-time }
+    PlatformBackupRecord:
+      type: object
+      required: [id, kind, taken_at, verified, detail, created_by, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string }
+        taken_at: { type: string, format: date-time }
+        verified: { type: boolean }
+        size_bytes: { type: integer }
+        sha256_hex: { type: string }
+        detail: { type: object }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+    PlatformUpdatePlan:
+      type: object
+      required: [id, release_id, preflight_status, preflight_detail, created_by, created_at, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        release_id: { type: string }
+        preflight_status: { type: string, enum: [PASS, BLOCK] }
+        preflight_detail: { type: object, description: "version_compatible, agent_protocol_ok, backup_evidence (informational), reasons" }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+    PlatformUpdateRun:
+      type: object
+      required: [id, plan_id, release_id, state, idempotency_key, actor_id, created_at, updated_at]
+      properties:
+        id: { type: string }
+        plan_id: { type: string, format: uuid }
+        release_id: { type: string }
+        state: { type: string, description: "RunState (internal/platformrelease/domain) — mirrors the Update Agent's local ledger" }
+        idempotency_key: { type: string }
+        actor_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PlatformUpdateEvent:
+      type: object
+      required: [seq, kind, detail, created_at]
+      properties:
+        seq: { type: integer }
+        kind: { type: string, enum: [run.locked, checkpoint] }
+        detail: { type: object }
+        created_at: { type: string, format: date-time }
+    PlatformReleaseRevocation:
+      type: object
+      required: [release_id, revoked_at, reason, revoked_by]
+      properties:
+        release_id: { type: string }
+        revoked_at: { type: string, format: date-time }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        revoked_by: { type: string, format: uuid }
+    PlatformReleaseRetentionCandidate:
+      type: object
+      required: [release_id, channel, ingested_at, age_days, retention_days, past_retention, safe_to_delete]
+      properties:
+        release_id: { type: string }
+        channel: { type: string }
+        ingested_at: { type: string, format: date-time }
+        age_days: { type: integer, description: "dias desde ingested_at, computado no momento da chamada" }
+        retention_days: { type: integer, description: "release/policies/channels.yaml retention_days para este canal" }
+        past_retention: { type: boolean }
+        safe_to_delete: { type: boolean, description: "past_retention E nenhum bloqueio real (revogada, referenciada por run/plan, instalada, protegida pelo ledger local) — mesma checagem revalidada no momento do DELETE, nunca confiável sozinho" }
+        blocking_reasons: { type: array, items: { type: string } }
+    PlatformMonitoringStatus:
+      type: object
+      required: [agent_heartbeat_seen, agent_stale, backup_evidence_present, backup_evidence_verified, backup_evidence_stale, version_divergence, observed_digests_stale, unresolved_recovery_required]
+      description: Os cinco sinais de monitoramento do F9 — agente, backup, versão/digest divergente, update estagnado, erros após release.
+      properties:
+        agent_heartbeat_seen: { type: boolean }
+        agent_last_heartbeat: { type: string, format: date-time }
+        agent_holder: { type: string }
+        agent_stale: { type: boolean }
+        backup_evidence_present: { type: boolean }
+        backup_evidence_age_hours: { type: number }
+        backup_evidence_verified: { type: boolean }
+        backup_evidence_stale: { type: boolean }
+        ledger_version: { type: string }
+        ledger_release_id: { type: string }
+        installation_version: { type: string }
+        installation_release_id: { type: string }
+        version_divergence: { type: boolean }
+        observed_digests_at: { type: string, format: date-time }
+        observed_digests_stale: { type: boolean }
+        stalled_run_id: { type: string }
+        stalled_run_state: { type: string }
+        stalled_since: { type: string, format: date-time }
+        unresolved_recovery_required: { type: boolean }
     HubCompany:
       type: object
       required: [id, legal_name, trade_name, display_name, status, contract_status, capabilities, channels, integrations, open_conversations, agents, created_at]

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnira.internal/release/schemas/release-manifest.schema.json",
+  "title": "OMNIRA Release Manifest",
+  "description": "Schema estrito do manifesto de release. Campos desconhecidos são rejeitados (additionalProperties: false em todo nível) — um manifesto com um campo extra não documentado é inválido, não ignorado silenciosamente. A ASSINATURA cobre o conteúdo canônico exato deste JSON mais a identidade do emissor; este schema não define o envelope de assinatura (ver release/policies/signing.yaml).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "platform_version",
+    "channel",
+    "source",
+    "artifacts",
+    "modules_changed",
+    "compatibility",
+    "migrations",
+    "rollout",
+    "approved_by"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Versão deste schema. Incrementa só com mudança incompatível; um verificador que não reconhece o valor REJEITA o manifesto (fail-closed), nunca tenta interpretar best-effort."
+    },
+    "release_id": {
+      "type": "string",
+      "pattern": "^omnira-[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.-]+)?$",
+      "description": "Ex.: omnira-2.4.0 ou omnira-2.4.0-rc.1. Imutável após publicação."
+    },
+    "platform_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "SemVer MAJOR.MINOR.PATCH da plataforma."
+    },
+    "channel": {
+      "type": "string",
+      "enum": ["dev", "candidate", "stable"],
+      "description": "Canal não substitui a validade criptográfica da release — é metadado de roteamento, verificado contra release/policies/channels.yaml."
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit_sha", "workflow_run_id"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+        "commit_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$", "description": "SHA completo, nunca abreviado." },
+        "workflow_run_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["unit", "image"],
+        "properties": {
+          "unit": {
+            "type": "string",
+            "enum": ["omnira-api", "omnira-worker", "omnira-web"],
+            "description": "Deve corresponder a um build_unit declarado em release/components.yaml."
+          },
+          "image": {
+            "type": "string",
+            "pattern": "^ghcr\\.io/[A-Za-z0-9_./-]+@sha256:[0-9a-f]{64}$",
+            "description": "SEMPRE por digest OCI. Uma tag móvel (ex.: :latest, :stable) nunca é aceita como referência de deploy — rejeitar na validação do schema, não só em runtime."
+          }
+        }
+      }
+    },
+    "modules_changed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "module_id de release/components.yaml afetados nesta release. Usado pela UI (F7) para explicar o impacto real."
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from_versions", "min_agent_protocol", "database_strategy"],
+      "properties": {
+        "from_versions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "Versões de origem suportadas para upgrade direto (matriz N-1 no mínimo, ver docs/release/00-audit.md §2 e spec §3)."
+        },
+        "min_agent_protocol": { "type": "integer", "minimum": 1 },
+        "database_strategy": {
+          "type": "string",
+          "enum": ["expand_then_contract_later", "expand_only", "no_schema_change"]
+        }
+      }
+    },
+    "migrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_after", "target", "checksum_bundle"],
+      "properties": {
+        "start_after": { "type": "string", "description": "Última migration conhecida como aplicada no ledger schema_migrations antes desta release." },
+        "target": { "type": "string", "description": "Última migration desta release, em tools/migrate-sql.sh." },
+        "checksum_bundle": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "rollout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workloads", "preflight_policy", "recovery_class"],
+      "properties": {
+        "workloads": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["omnira-api", "omnira-worker", "omnira-web"] }
+        },
+        "preflight_policy": { "type": "string", "enum": ["strict"], "description": "Hoje só 'strict' existe — fail-closed em qualquer BLOCK. Outros valores exigiriam ADR." },
+        "recovery_class": {
+          "type": "string",
+          "enum": ["R0", "R1", "R2", "R3", "R4"],
+          "description": "Ver docs/adr/0054-platform-release-update-engine.md §2.5."
+        }
+      }
+    },
+    "release_notes_ref": {
+      "type": "string",
+      "description": "Referência imutável (ex.: digest de um documento, não uma URL editável)."
+    },
+    "approved_by": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identificador da política de release confiável que aprovou a promoção (não um nome de pessoa solto)."
+    }
+  }
+}

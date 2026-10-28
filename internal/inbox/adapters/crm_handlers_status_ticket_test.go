@@ -15,9 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/platform/authn"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
-	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
-	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
 	"github.com/omnira/omnira/internal/testhelpers"
+	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
+	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
 	ticketsports "github.com/omnira/omnira/internal/tickets/ports"
 	"github.com/omnira/omnira/internal/tool/connectors"
 )
@@ -29,14 +29,14 @@ const statusHTTPProvider = "k3g"
 const statusHTTPExternalID = "9115"
 
 type statusHTTPFakeTicketing struct {
-	name           string
-	updateCalls    int
-	updateErr      *connectors.TicketingError
-	updateResult   *connectors.ExternalTicket
-	updateHook     func()
-	getResult      *connectors.ExternalTicket
-	getErr         *connectors.TicketingError
-	getCalls       int
+	name         string
+	updateCalls  int
+	updateErr    *connectors.TicketingError
+	updateResult *connectors.ExternalTicket
+	updateHook   func()
+	getResult    *connectors.ExternalTicket
+	getErr       *connectors.TicketingError
+	getCalls     int
 }
 
 func (f *statusHTTPFakeTicketing) Name() string {
@@ -320,8 +320,8 @@ func TestUpdateTicketStatusHTTPMissingIdempotencyKey(t *testing.T) {
 	tenantID, convID := uuid.New(), uuid.New()
 	ctx := authn.WithPrincipal(context.Background(), &authn.Principal{UserID: uuid.New()})
 	ctx = tenancydomain.WithTenantContext(ctx, &tenancydomain.TenantContext{
-		TenantID:  tenantID,
-		ActorID:   uuid.New(),
+		TenantID: tenantID,
+		ActorID:  uuid.New(),
 		Source:   tenancydomain.AccessSourceDirect,
 	})
 
@@ -354,8 +354,8 @@ func TestUpdateTicketStatusHTTPPermissionDenied(t *testing.T) {
 	tenantID, convID, actorID := uuid.New(), uuid.New(), uuid.New()
 	ctx := authn.WithPrincipal(context.Background(), &authn.Principal{UserID: actorID})
 	ctx = tenancydomain.WithTenantContext(ctx, &tenancydomain.TenantContext{
-		TenantID:  tenantID,
-		ActorID:   actorID,
+		TenantID: tenantID,
+		ActorID:  actorID,
 		Source:   tenancydomain.AccessSourceDirect,
 	})
 
@@ -383,8 +383,8 @@ func TestUpdateTicketStatusHTTPServiceNotWired(t *testing.T) {
 	tenantID, convID, actorID := uuid.New(), uuid.New(), uuid.New()
 	ctx := authn.WithPrincipal(context.Background(), &authn.Principal{UserID: actorID})
 	ctx = tenancydomain.WithTenantContext(ctx, &tenancydomain.TenantContext{
-		TenantID:  tenantID,
-		ActorID:   actorID,
+		TenantID: tenantID,
+		ActorID:  actorID,
 		Source:   tenancydomain.AccessSourceDirect,
 	})
 

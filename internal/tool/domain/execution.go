@@ -20,7 +20,7 @@ type ToolExecution struct {
 	Input         map[string]interface{}
 	Output        map[string]interface{}
 	Error         string
-	Duration      int          // Milliseconds
+	Duration      int // Milliseconds
 	StartedAt     time.Time
 	CompletedAt   *time.Time
 	CreatedAt     time.Time

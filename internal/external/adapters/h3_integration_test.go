@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,6 +34,8 @@ func (e *env) readAPI(media mediaports.MediaReader) {
 	e.ext.Handle("GET /api/v1/external/conversations/{id}/messages", mw.Authenticated(adapters.RequireScope(domain.ScopeMessageRead, http.HandlerFunc(h.ListMessages))))
 	e.ext.Handle("GET /api/v1/external/queues", mw.Authenticated(adapters.RequireScope(domain.ScopeConversationRead, http.HandlerFunc(h.ListQueues))))
 	e.ext.Handle("GET /api/v1/external/contacts/{id}", mw.Authenticated(adapters.RequireScope(domain.ScopeContactRead, http.HandlerFunc(h.GetContact))))
+	e.ext.Handle("GET /api/v1/external/contacts", mw.Authenticated(adapters.RequireScope(domain.ScopeContactRead, http.HandlerFunc(h.SearchContacts))))
+	e.ext.Handle("GET /api/v1/external/templates", mw.Authenticated(adapters.RequireScope(domain.ScopeTemplateRead, http.HandlerFunc(h.ListTemplates))))
 	e.ext.Handle("GET /api/v1/external/media/{id}", mw.Authenticated(adapters.RequireScope(domain.ScopeMediaRead, http.HandlerFunc(h.GetMedia))))
 }
 
@@ -95,7 +98,13 @@ type listed struct {
 				Mine bool   `json:"mine"`
 			} `json:"holder"`
 		} `json:"control"`
-		Can map[string]bool `json:"can"`
+		Can         map[string]bool `json:"can"`
+		LastMessage *struct {
+			ID        uuid.UUID `json:"id"`
+			Direction string    `json:"direction"`
+			Type      string    `json:"type"`
+			Body      string    `json:"body"`
+		} `json:"last_message"`
 	} `json:"items"`
 	HasMore    bool   `json:"has_more"`
 	NextCursor string `json:"next_cursor"`
@@ -388,6 +397,144 @@ func TestReadAPIConversationShowsTypedControlAndScopedCan(t *testing.T) {
 	}
 }
 
+// OMNIRA_API_PENDENCIAS_CRM.md §3.3: the list carries enough of the newest message to render a preview without a second call per row.
+func TestReadAPIListIncludesLastMessagePreview(t *testing.T) {
+	e := newEnv(t)
+	e.readAPI(nil)
+	a, b := e.tenant(), e.tenant()
+	admin := e.member(a, "tenant_admin")
+	full := e.install(admin, a, "full", readScopes...)
+
+	withMsgs, _ := e.conv(a, convOpts{})
+	e.message(a, withMsgs, "inbound", "primeira", "received", 10*time.Minute, nil)
+	newest := e.message(a, withMsgs, "outbound", "mais recente", "delivered", time.Minute, nil)
+	empty, _ := e.conv(a, convOpts{createdAgo: time.Minute})
+
+	// another tenant's message body must never leak into A's preview, even for a conversation created at the very same instant
+	otherAdmin := e.member(b, "tenant_admin")
+	bConv, _ := e.conv(b, convOpts{})
+	e.message(b, bConv, "inbound", "segredo de outra empresa", "received", time.Second, nil)
+	_ = otherAdmin
+
+	code, l := e.list(full.Credential.Token, "")
+	if code != http.StatusOK {
+		t.Fatalf("list = %d", code)
+	}
+	byID := map[uuid.UUID]int{}
+	for i, it := range l.Items {
+		byID[it.ID] = i
+	}
+	withIdx, ok := byID[withMsgs]
+	if !ok {
+		t.Fatalf("conversation with messages missing from the list")
+	}
+	lm := l.Items[withIdx].LastMessage
+	if lm == nil || lm.ID != newest || lm.Direction != "outbound" || lm.Type != "text" || lm.Body != "mais recente" {
+		t.Fatalf("last_message = %+v, want the newest message (%s, outbound, 'mais recente')", lm, newest)
+	}
+	emptyIdx, ok := byID[empty]
+	if !ok {
+		t.Fatalf("conversation without messages missing from the list")
+	}
+	if l.Items[emptyIdx].LastMessage != nil {
+		t.Fatalf("a conversation with no messages has a last_message: %+v", l.Items[emptyIdx].LastMessage)
+	}
+	for _, it := range l.Items {
+		if it.LastMessage != nil && strings.Contains(it.LastMessage.Body, "outra empresa") {
+			t.Fatalf("tenant B's message body leaked into A's list: %+v", it.LastMessage)
+		}
+	}
+}
+
+// OMNIRA_API_PENDENCIAS_CRM.md §2.3: find a contact by phone, with the open conversation id when there is one — same visibility rule as
+// GetContact, so this is never a wider door than the one that already exists.
+func TestReadAPISearchContactsByPhoneRespectsVisibilityAndNeverCrossesTenants(t *testing.T) {
+	e := newEnv(t)
+	e.readAPI(nil)
+	a, b := e.tenant(), e.tenant()
+	adminA, adminB := e.member(a, "tenant_admin"), e.member(b, "tenant_admin")
+	appA := e.install(adminA, a, "CRM A", readScopes...)
+	appB := e.install(adminB, b, "CRM B", readScopes...)
+	noContactScope := e.install(adminA, a, "no-contact-scope", "conversation.read", "message.read")
+
+	phoneOf := func(contact uuid.UUID) string {
+		var p string
+		if err := e.seed.QueryRow(e.ctx, `SELECT phone_e164 FROM contacts WHERE id=$1`, contact).Scan(&p); err != nil {
+			e.t.Fatal(err)
+		}
+		return p
+	}
+	search := func(token, phone string) (int, adapters.ContactDTO) {
+		e.t.Helper()
+		code, body, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(phone), token, nil)
+		var d adapters.ContactDTO
+		if code == http.StatusOK {
+			if err := json.Unmarshal(body, &d); err != nil {
+				e.t.Fatalf("%s: %v", body, err)
+			}
+		}
+		return code, d
+	}
+
+	openConv, openContact := e.conv(a, convOpts{})
+	_, closedContact := e.conv(a, convOpts{status: "closed"})
+	_, internalContact := e.conv(a, convOpts{contactKind: "internal"})
+	_, bContact := e.conv(b, convOpts{})
+
+	openPhone, closedPhone, internalPhone, bPhone := phoneOf(openContact), phoneOf(closedContact), phoneOf(internalContact), phoneOf(bContact)
+
+	// found, with the open conversation id
+	code, d := search(appA.Credential.Token, openPhone)
+	if code != http.StatusOK || d.ID != openContact || d.OpenConversationID == nil || *d.OpenConversationID != openConv {
+		t.Fatalf("open contact: %d %+v", code, d)
+	}
+	// found, but no OPEN conversation to report
+	code, d = search(appA.Credential.Token, closedPhone)
+	if code != http.StatusOK || d.ID != closedContact || d.OpenConversationID != nil {
+		t.Fatalf("closed-only contact: %d %+v", code, d)
+	}
+
+	// not found: same 404 shape for internal, another tenant's, an unknown number, and a contact this installation lacks the scope for
+	var reference string
+	cases := map[string]struct{ token, phone string }{
+		"internal contact":         {appA.Credential.Token, internalPhone},
+		"another tenant's contact": {appA.Credential.Token, bPhone},
+		"unknown number":           {appA.Credential.Token, "+5592900000000"},
+	}
+	for name, c := range cases {
+		code, body, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(c.phone), c.token, nil)
+		if code != http.StatusNotFound {
+			t.Errorf("%s = %d %s, want 404", name, code, body)
+		}
+		var p adapters.Problem
+		_ = json.Unmarshal(body, &p)
+		p.RequestID = ""
+		shape := fmt.Sprintf("%+v", p)
+		if reference == "" {
+			reference = shape
+		} else if shape != reference {
+			t.Errorf("%s answers differently from the others: %s vs %s", name, shape, reference)
+		}
+	}
+	// B reading its own contact works, and still never sees A's
+	if code, d := search(appB.Credential.Token, bPhone); code != http.StatusOK || d.ID != bContact {
+		t.Errorf("B reads its own contact: %d %+v", code, d)
+	}
+	if code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(openPhone), appB.Credential.Token, nil); code != http.StatusNotFound {
+		t.Errorf("B reading A's contact = %d, want 404", code)
+	}
+
+	// validation and scope
+	for _, bad := range []string{"", "5592999999999", "not-a-phone", "+0999999999"} {
+		if code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(bad), appA.Credential.Token, nil); code != http.StatusBadRequest {
+			t.Errorf("phone_e164=%q = %d, want 400", bad, code)
+		}
+	}
+	if code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(openPhone), noContactScope.Credential.Token, nil); code != http.StatusForbidden {
+		t.Errorf("without contact.read = %d, want 403", code)
+	}
+}
+
 // Messages: order, statuses, senders without names, media, stability while a message arrives.
 func TestReadAPIMessagesAreStableAndNameNobody(t *testing.T) {
 	e := newEnv(t)
@@ -623,8 +770,8 @@ func TestEveryStatementOfTheExternalReadSideNamesTheTenant(t *testing.T) {
 				continue // a call to a SECURITY DEFINER door that binds tenant + installation itself
 			}
 			checked++
-			// the shared constants carry the tenant through Visibility (conversation_select), which is built with it
-			if !strings.Contains(m[1], "tenant_id") && !strings.Contains(m[1], "conversations c") {
+			// the shared constants carry the tenant through Visibility (conversation_select / Visibility.Group's "wa_groups g"), which is built with it
+			if !strings.Contains(m[1], "tenant_id") && !strings.Contains(m[1], "conversations c") && !strings.Contains(m[1], "wa_groups g") {
 				t.Errorf("%s: a statement without tenant_id: %.80s", f, strings.Join(strings.Fields(m[1]), " "))
 			}
 		}
@@ -788,5 +935,68 @@ func TestReadAPIListsTheQueuesOfTheCompanyNarrowedByTheAllowlist(t *testing.T) {
 	}
 	if code, _ := queues(""); code != http.StatusUnauthorized {
 		t.Errorf("without a token = %d, want 401", code)
+	}
+}
+
+func (e *env) template(tenant, connID uuid.UUID, name, status string, sendable bool) uuid.UUID {
+	id := uuid.New()
+	e.exec(`INSERT INTO channel_message_templates(id,tenant_id,connection_id,name,language,status,body_text,variable_count,sendable)
+	        VALUES($1,$2,$3,$4,'pt_BR',$5,'corpo do template',0,$6)`, id, tenant, connID, name, status, sendable)
+	return id
+}
+
+// OMNIRA_API_PENDENCIAS_CRM.md §2.2: list approved, sendable templates, narrowed by the channel allow-list, scoped by template.read.
+func TestReadAPIListTemplatesIsApprovedOnlyAllowlistedAndTenantScoped(t *testing.T) {
+	e := newEnv(t)
+	e.readAPI(nil)
+	a, b := e.tenant(), e.tenant()
+	adminA, adminB := e.member(a, "tenant_admin"), e.member(b, "tenant_admin")
+	connA1, connA2 := e.connection(a), e.connection(a)
+	connB := e.connection(b)
+
+	tplVisible := e.template(a, connA1, "boas_vindas", "APPROVED", true)
+	tplOtherConn := e.template(a, connA2, "cobranca", "APPROVED", true)
+	e.template(a, connA1, "nao_suportado", "APPROVED", false) // sendable=false: excluded
+	e.template(a, connA1, "em_analise", "PENDING", true)      // not approved: excluded
+	tplB := e.template(b, connB, "boas_vindas_b", "APPROVED", true)
+
+	full := e.install(adminA, a, "CRM full", append(append([]string{}, readScopes...), "template.read")...)
+	code, body := e.admin(adminA, a, http.MethodPost, "", map[string]any{"name": "limited", "scopes": append(append([]string{}, readScopes...), "template.read"), "channel_ids": []string{connA1.String()}})
+	if code != http.StatusCreated {
+		t.Fatalf("create limited = %d %s", code, body)
+	}
+	var limited created
+	_ = json.Unmarshal(body, &limited)
+	other := e.install(adminB, b, "CRM B", append(append([]string{}, readScopes...), "template.read")...)
+	noScope := e.install(adminA, a, "CRM no template scope", readScopes...)
+
+	templates := func(token string) (int, []uuid.UUID) {
+		code, raw, _ := e.callExt(http.MethodGet, "/api/v1/external/templates", token, nil)
+		var doc struct {
+			Items []struct {
+				ID uuid.UUID `json:"id"`
+			} `json:"items"`
+		}
+		_ = json.Unmarshal(raw, &doc)
+		var out []uuid.UUID
+		for _, it := range doc.Items {
+			out = append(out, it.ID)
+		}
+		return code, out
+	}
+
+	code, got := templates(full.Credential.Token)
+	if code != http.StatusOK {
+		t.Fatalf("templates = %d", code)
+	}
+	sameSet(t, "A sees approved+sendable across its own connections", got, setOf(tplVisible, tplOtherConn))
+	if _, got := templates(limited.Credential.Token); len(got) != 1 || got[0] != tplVisible {
+		t.Errorf("the channel allow-list narrows the list: %v", got)
+	}
+	if _, got := templates(other.Credential.Token); len(got) != 1 || got[0] != tplB {
+		t.Errorf("another tenant sees only its own: %v", got)
+	}
+	if code, _ := templates(noScope.Credential.Token); code != http.StatusForbidden {
+		t.Errorf("without template.read = %d, want 403", code)
 	}
 }

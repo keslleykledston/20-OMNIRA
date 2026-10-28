@@ -250,6 +250,45 @@ func (h *AdminHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, viewOf(in, creds, time.Now()))
 }
 
+type auditEntryView struct {
+	ID        uuid.UUID      `json:"id"`
+	Action    string         `json:"action"`
+	ActorID   uuid.UUID      `json:"actor_id"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+// History: GET /tenants/{t}/integrations/apps/{app_id}/audit — a light trail of who changed this installation and when (never a token
+// or a secret: record() already keeps those out of the metadata it stores).
+func (h *AdminHandler) History(w http.ResponseWriter, r *http.Request) {
+	tc, q, ok := h.authorize(w, r, permRead)
+	if !ok {
+		return
+	}
+	id, ok := installationID(w, r)
+	if !ok {
+		return
+	}
+	if _, err := h.store.Get(r.Context(), q, tc.TenantID, id); err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	if h.audit == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"items": []auditEntryView{}, "count": 0})
+		return
+	}
+	events, err := h.audit.FindByResource(r.Context(), tc.TenantID, auditdomain.ResourceExternalApp, id, 50, 0)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	out := make([]auditEntryView, len(events))
+	for i, e := range events {
+		out[i] = auditEntryView{ID: e.ID, Action: string(e.Action), ActorID: e.ActorID, Metadata: e.Metadata, CreatedAt: e.CreatedAt}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out, "count": len(out)})
+}
+
 type createRequest struct {
 	Name              string   `json:"name"`
 	Scopes            []string `json:"scopes"`

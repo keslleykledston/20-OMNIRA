@@ -1,0 +1,94 @@
+# Política de backup, restauração e classes de recuperação (ADR-0054 §2.1/§2.4,
+# especificação §8 "Recuperação, rollback e banco").
+#
+# Esta política declara O QUE uma promoção de canal exige como evidência de backup/restore —
+# não é o backup em si (isso já existe e roda via scripts/backup-omnira-*.sh, reaproveitados
+# por esta política, nunca substituídos — ver ADR-0054 §2.1 "Backup/Recovery Adapter") nem o
+# verificador que vai aplicar este gate (planejado para F9 "Catálogo stable, hardening"; até lá
+# é uma declaração lida por humanos e pelos scripts de teste do F4, não um enforcement
+# automático em release-build.yml).
+#
+# Estado real deste host (F0 §5.3, confirmado de novo nesta fase): backup é LÓGICO
+# (`pg_dump -Fc` via scripts/backup-omnira-db.sh), NUNCA base backup/WAL/PITR. O cron que
+# agendaria esse script e o de mídia não está instalado neste host (`crontab -l` vazio) — gap
+# operacional já registrado no F0, fora do escopo de correção deste programa (exige decisão e
+# acesso de operador), repetido aqui para que esta política nunca dependa de um agendamento que
+# não existe de fato.
+
+schema_version: 1
+
+current_topology:
+  postgres:
+    mechanism: logical_dump                     # pg_dump -Fc, scripts/backup-omnira-db.sh
+    pitr_available: false
+    wal_archiving_configured: false
+    note: >
+      docs/operations/DISASTER-RECOVERY.md descreve PITR/base backup como o ALVO (serviço
+      gerenciado Multi-AZ). O host atual não tem isso: é Postgres em container, sem WAL
+      archiving. RPO real = tempo desde o último pg_dump bem-sucedido, não "quase zero".
+  media:
+    mechanism: rsync_external_disk_plus_encrypted_cloud  # scripts/backup-omnira-media.sh
+    checksum_verified: true
+  cron_scheduling:
+    installed_on_this_host: false
+    note: "F0 §5.3: crontab -l vazio. Os scripts existem e são seguros de rodar manualmente/por
+      CI, mas sem agendamento o RPO real depende de alguém rodá-los — não presumir frequência."
+  runtime_keys:
+    # OMNIRA_SESSION_CTX_KEY (ADR-0042) e segredos equivalentes vivem em variáveis de ambiente/
+    # secret manager do host, FORA do dump do Postgres e fora do escopo de
+    # scripts/backup-omnira-*.sh. Backup de config/segredos de runtime é tratado pela rotina de
+    # provisionamento do host (docs/operations/), não por este programa — não inventar uma
+    # segunda cópia aqui.
+    covered_by_this_policy: false
+
+# Evidência mínima que CADA classe de recuperação (especificação §8, ADR-0054 §2.5) exige antes
+# de um operador poder segui-la. Isto não troca o papel do Update Agent (F5) — é o que a
+# política de banco exige estar comprovado ANTES de uma promoção "stable" (F9) ser permitida a
+# declarar aquela classe como disponível.
+recovery_classes:
+  R0:
+    description: "abortar antes de qualquer mutação"
+    backup_evidence_required: none
+  R1:
+    description: "código novo falhou, esquema compatível — reimplanta digest antigo"
+    backup_evidence_required: none
+    note: "não toca dados; depende só do Update Agent (F5) ter o digest anterior, não de backup."
+  R2:
+    description: "migração expand compatível + falha pós-upgrade — mantém schema, reimplanta código antigo"
+    backup_evidence_required: schema_migrations_ledger_consistent
+    note: "reversível sem restore SE a migração era realmente expand-only — ver
+      scripts/release/lint-migration-safety.sh. Backup ainda recomendado, não bloqueante."
+  R3:
+    description: "dado incompatível/corrompido — RECOVERY_REQUIRED, restore manual aprovado"
+    backup_evidence_required: verified_restore_in_disposable_instance
+    evidence_sources:
+      - scripts/backup-restore-check.sh      # fixtures próprias, qualquer momento
+      - scripts/backup-restore-hub-check.sh  # dump real mais recente, cluster descartável
+    rpo_caveat: >
+      O RPO desta classe é limitado pelo mecanismo acima (logical dump): dados escritos depois
+      do último pg_dump bem-sucedido e antes da falha NÃO são recuperáveis por este caminho.
+      Prometer um RPO menor que o intervalo real entre dumps bem-sucedidos (current_topology)
+      seria "inventar proteção" (especificação §4) — proibido.
+  R4:
+    description: "release revogada/comprometida — isolar, nunca downgrade cego"
+    backup_evidence_required: none
+    note: "trata assinatura/revogação (F9), não dados."
+
+# Gate de promoção (aplicado por um verificador real a construir em F9 — aqui só a regra):
+# uma release só pode ser promovida ao canal "stable" se, no momento da promoção:
+#   1. scripts/backup-restore-check.sh OU scripts/backup-restore-hub-check.sh tiver rodado com
+#      sucesso dentro de max_evidence_age_hours;
+#   2. nenhuma instalação travada em RECOVERY_REQUIRED (F6/F5);
+#   3. current_topology.pitr_available permanecer false => esta política NUNCA declara um RPO
+#      "stable" menor que min_rpo_minutes abaixo; mudar isso exige um ADR que troque
+#      current_topology primeiro (ex.: adoção de Postgres gerenciado com WAL archiving).
+promotion_gate:
+  stable_channel:
+    max_evidence_age_hours: 24
+    min_rpo_minutes: 60    # honesto para pg_dump periódico manual; NÃO o alvo de 5 min de
+                            # docs/operations/DISASTER-RECOVERY.md, que depende de PITR ausente aqui
+    min_rto_source: "medido por scripts/backup-restore-check.sh / backup-restore-hub-check.sh
+      (ver docs/release/IMPLEMENTATION-STATUS.md F4 para a última medição real)"
+    blocks_if:
+      - "nenhuma evidência de restore dentro de max_evidence_age_hours"
+      - "current_topology.pitr_available=true seria exigido pelo manifesto da release, mas é false"

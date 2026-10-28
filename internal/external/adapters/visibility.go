@@ -56,3 +56,15 @@ func (v Visibility) Conversation(alias string, args *Args) string {
 	}
 	return strings.Join(parts, " AND ")
 }
+
+// Group returns the predicate for wa_groups aliased `alias` (ADR-0051): the tenant, only ENABLED groups (a disabled group is invisible to the
+// external API exactly as it is to a Workspace user without group.manage history access — there is no "pending" state to leak), and, when the
+// administrator limited the installation's channel allow-list, only groups on one of those WhatsApp lines.
+func (v Visibility) Group(alias string, args *Args) string {
+	t := args.Add(v.TenantID)
+	parts := []string{alias + ".tenant_id = " + t, alias + ".enabled"}
+	if len(v.ChannelIDs) > 0 {
+		parts = append(parts, alias+".channel_connection_id = ANY("+args.Add(v.ChannelIDs)+"::uuid[])")
+	}
+	return strings.Join(parts, " AND ")
+}

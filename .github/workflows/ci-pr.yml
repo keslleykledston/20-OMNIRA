@@ -1,0 +1,114 @@
+name: CI (pull request)
+
+# G0-G5 (docs/release/spec/..._PACOTE_EXECUCAO.md §4.3) on every PR, untrusted by
+# construction: `pull_request` (never `pull_request_target`) gives a fork PR a
+# read-only GITHUB_TOKEN and zero repository secrets automatically — no job
+# below references `secrets.*`, so there is nothing for a malicious PR to steal
+# even if that default ever changed. Every third-party action is pinned by full
+# commit SHA (never a mutable tag) per the specification's Actions hardening
+# rule (§4.3 "Hardening de Actions").
+#
+# Scripts this workflow calls are the SAME ones a developer runs locally before
+# pushing (scripts/release/*.sh, scripts/test-integration.sh, tools/validate-
+# specs.sh) — there is no second, CI-only implementation of any check to drift
+# out of sync with what a contributor can reproduce on their own machine.
+
+on:
+  pull_request:
+    branches: [main]
+
+# A new push to the same PR cancels the previous run — a PR's CI is cheap and
+# safe to cancel mid-run (unlike a backup or deploy in progress elsewhere,
+# which this workflow never touches).
+concurrency:
+  group: ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (fmt diff, vet, build, unit test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0 # ci-go-fmt-diff.sh needs the PR base commit in history
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt (changed files only — see script header for why)
+        run: bash scripts/release/ci-go-fmt-diff.sh "origin/${{ github.event.pull_request.base.ref }}"
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test (unit — integration-tagged tests self-skip without OMNIRA_INTEGRATION_TEST)
+        run: go test -race -cover ./...
+
+  web:
+    name: Frontend (lint diff, typecheck, build, unit test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # web/package.json has no "engines"/.nvmrc of its own (confirmed in F2);
+          # 22 LTS matches the version already in use on this host's dev/CI tooling.
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - name: eslint (changed files only — see script header for why)
+        run: bash scripts/release/ci-web-lint-diff.sh "origin/${{ github.event.pull_request.base.ref }}"
+      - name: build (tsc typecheck + vite build)
+        run: npm run build
+        working-directory: web
+      - name: unit tests (vitest)
+        run: npm test -- --run
+        working-directory: web
+
+  migrations:
+    name: Migrations (pairing/naming lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: bash scripts/release/validate-migrations.sh
+
+  contracts:
+    name: Contracts (OpenAPI/AsyncAPI YAML)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: bash tools/validate-specs.sh
+
+  integration-postgres:
+    name: Integration (real PostgreSQL 16 + NATS, RLS/Hub adversarial tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: scripts/test-integration.sh (disposable Postgres 16 + NATS; TEST.HYGIENE.2/3)
+        run: bash scripts/test-integration.sh
+
+  secret-scan:
+    name: Secret scan (blocking — a hardcoded secret is never acceptable)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: secret
+          exit-code: "1"
+          severity: CRITICAL,HIGH,MEDIUM,LOW

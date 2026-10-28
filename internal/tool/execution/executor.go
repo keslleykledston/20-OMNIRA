@@ -120,9 +120,9 @@ func (e *Executor) executeWebhook(ctx context.Context, tool *domain.Tool, input 
 
 	// Preparar payload
 	payload := map[string]interface{}{
-		"input":  input,
-		"tool":   tool.Name,
-		"time":   time.Now().Unix(),
+		"input": input,
+		"tool":  tool.Name,
+		"time":  time.Now().Unix(),
 	}
 
 	payloadBytes, err := json.Marshal(payload)

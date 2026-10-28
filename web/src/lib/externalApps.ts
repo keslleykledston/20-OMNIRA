@@ -16,6 +16,11 @@ export const SCOPES: { key: string; label: string; write: boolean }[] = [
   { key: 'conversation.transfer', label: 'Transferir conversas', write: true },
   { key: 'conversation.finalize', label: 'Finalizar atendimentos', write: true },
   { key: 'service.read', label: 'Receber eventos de protocolos, ocorrências, tarefas e ordens de serviço', write: false },
+  { key: 'template.read', label: 'Listar templates aprovados do WhatsApp', write: false },
+  { key: 'message.note', label: 'Registrar notas internas (nunca enviadas ao cliente)', write: true },
+  { key: 'group.read.external', label: 'Ler grupos de WhatsApp habilitados (nome dos participantes, nunca telefone)', write: false },
+  { key: 'contact.write', label: 'Achar ou criar contato por telefone', write: true },
+  { key: 'conversation.open', label: 'Abrir ou reusar conversa por telefone (outbound)', write: true },
 ]
 
 export const EVENT_TYPES: { key: string; label: string }[] = [
@@ -121,6 +126,14 @@ export interface Webhook {
   updated_at: string
 }
 
+export interface AuditEntry {
+  id: string
+  action: string
+  actor_id: string
+  metadata?: Record<string, unknown>
+  created_at: string
+}
+
 export interface Delivery {
   id: string
   event_id: string
@@ -153,6 +166,7 @@ export const externalAppsAPI = {
   get: (id: string) => call<ExternalApp>(() => axios.get(`${appsBase()}/${id}`, h())),
   create: (body: CreateApp) => call<{ installation: ExternalApp; credential: IssuedCredential }>(() => axios.post(appsBase(), body, h())),
   update: (id: string, body: UpdateApp) => call<ExternalApp>(() => axios.patch(`${appsBase()}/${id}`, body, h())),
+  audit: (id: string) => call<{ items: AuditEntry[]; count: number }>(() => axios.get(`${appsBase()}/${id}/audit`, h())),
   suspend: (id: string) => call<{ installation: ExternalApp; released_conversations: number } | ExternalApp>(() => axios.post(`${appsBase()}/${id}/suspend`, null, h())),
   reactivate: (id: string) => call<ExternalApp>(() => axios.post(`${appsBase()}/${id}/reactivate`, null, h())),
   revoke: (id: string) => call<{ installation: ExternalApp; released_conversations: number } | ExternalApp>(() => axios.post(`${appsBase()}/${id}/revoke`, null, h())),
@@ -200,6 +214,20 @@ export function validateWebhookURL(raw: string): string | null {
 
 export function statusLabel(s: AppStatus): string {
   return { active: 'Ativa', suspended: 'Suspensa', revoked: 'Revogada' }[s]
+}
+
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  'external_app.created': 'Aplicação criada',
+  'external_app.updated': 'Dados alterados',
+  'external_app.suspended': 'Suspensa',
+  'external_app.reactivated': 'Reativada',
+  'external_app.revoked': 'Revogada',
+  'external_app.credential_issued': 'Novo token gerado',
+  'external_app.credential_revoked': 'Token revogado',
+}
+
+export function auditActionLabel(action: string): string {
+  return AUDIT_ACTION_LABELS[action] ?? action
 }
 
 export function describeError(cls: string | null): string {

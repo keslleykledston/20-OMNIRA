@@ -8,6 +8,7 @@
 # Build
 bin/
 *.exe
+/releasectl
 
 # Local AI — métricas locais, não versionar
 .local-ai-metrics.jsonl
@@ -33,3 +34,5 @@ backups/
 
 # a plain `go build ./apps/hubctl/...` drops the binary here
 /omnira-hubctl
+/omnira-update-agent
+/omnira-updatectl

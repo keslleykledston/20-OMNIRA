@@ -357,7 +357,7 @@ func (r *PostgresRepository) SearchContactMessages(ctx context.Context, contactI
 		SELECT m.created_at, m.direction, m.body, m.conversation_id
 		FROM messages m
 		JOIN conversations c ON c.tenant_id = m.tenant_id AND c.id = m.conversation_id
-		WHERE m.tenant_id = $1 AND c.contact_id = $2 AND m.message_type = 'text' AND m.body ILIKE $3 ESCAPE '\'
+		WHERE m.tenant_id = $1 AND c.contact_id = $2 AND m.message_type = 'text' AND NOT m.private AND m.body ILIKE $3 ESCAPE '\'
 		  AND ($4::uuid IS NULL OR m.conversation_id <> $4)
 		  AND ($5::uuid IS NULL OR NOT EXISTS (
 		        SELECT 1 FROM message_topic_links l WHERE l.tenant_id = m.tenant_id AND l.message_id = m.id AND l.topic_thread_id = $5))`+scope+`

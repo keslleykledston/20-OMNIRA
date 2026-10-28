@@ -254,7 +254,11 @@ func TestWriteLeaseIsRenewedExpiredAndRaceFree(t *testing.T) {
 			<-start
 			hb = e.cmdSafe(tok, c, "heartbeat", fmt.Sprintf("key-lease-h%03d", i), match(cv), nil, &mu)
 		}()
-		go func() { defer wg.Done(); <-start; _, _ = adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 500, tn) }()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 500, tn)
+		}()
 		close(start)
 		wg.Wait()
 		var k *string

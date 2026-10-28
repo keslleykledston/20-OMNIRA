@@ -183,13 +183,13 @@ func (h *ContactsAPIHandler) ListContactConversations(w http.ResponseWriter, r *
 	}
 
 	query := `SELECT cv.id, cv.status, COALESCE(cv.title, ''), cc.channel, cc.provider, cv.assigned_to_user_id,
-		       (SELECT count(*) FROM messages mc WHERE mc.tenant_id = cv.tenant_id AND mc.conversation_id = cv.id),
+		       (SELECT count(*) FROM messages mc WHERE mc.tenant_id = cv.tenant_id AND mc.conversation_id = cv.id AND NOT mc.private),
 		       lm.direction, lm.message_type, lm.body, lm.created_at, cv.created_at, cv.updated_at
 		FROM conversations cv
 		LEFT JOIN channel_connections cc ON cc.id = cv.channel_connection_id AND cc.tenant_id = cv.tenant_id
 		LEFT JOIN LATERAL (
 		    SELECT m.direction, m.message_type, m.body, m.created_at FROM messages m
-		     WHERE m.tenant_id = cv.tenant_id AND m.conversation_id = cv.id
+		     WHERE m.tenant_id = cv.tenant_id AND m.conversation_id = cv.id AND NOT m.private
 		     ORDER BY m.created_at DESC, m.id DESC LIMIT 1) lm ON true
 		WHERE cv.tenant_id = $1 AND cv.contact_id = $2`
 	args := []any{tenantID, contactID}

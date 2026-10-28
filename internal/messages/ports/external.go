@@ -23,3 +23,10 @@ type ExternalOutboundStore interface {
 	// InsertQueuedExternalTemplate is InsertQueuedExternal plus the template record, in the same transaction.
 	InsertQueuedExternalTemplate(ctx context.Context, installation uuid.UUID, controlVersion int64, in SendContext, body, requestHash string, tpl TemplateSend) (*QueuedMessage, error)
 }
+
+// ExternalNoteStore persists an internal note as a message that is NEVER queued for delivery (ADR-0053): the implementation has no job/outbox
+// write for this call, period — that is the actual barrier against a note reaching a provider, not a flag some other code path must remember to
+// check. Same hold/version re-check as InsertQueuedExternal, under a row lock on the conversation.
+type ExternalNoteStore interface {
+	InsertNote(ctx context.Context, installation, conversationID uuid.UUID, controlVersion int64, body string) (*QueuedMessage, error)
+}

@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/omnira/omnira/internal/testhelpers"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	"github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
@@ -23,6 +22,7 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 type fakeSessions struct {

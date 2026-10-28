@@ -48,6 +48,7 @@ import (
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
+	"github.com/omnira/omnira/internal/platformrelease/updatemgr"
 	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
@@ -217,6 +218,17 @@ func main() {
 	crmHandler := srv.RegisterInboxHandlers(dbPool, cfg)
 	if cfg.HubAPIEnabled {
 		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled, cfg.HubAccessAPIEnabled)
+	}
+	// F6 (ADR-0054 §2.1): Update Manager API. holder "omnira-api" distingue este processo do
+	// daemon no lock do ledger local (nunca retido entre chamadas — ver updatemgr.Service.writeLedgerRun).
+	var updateMgrSvc *updatemgr.Service
+	if cfg.PlatformReleaseAPIEnabled {
+		if cfg.PlatformReleaseInstallationID == "" {
+			log.Printf("platform release API: OMNIRA_PLATFORM_RELEASE_API_ENABLED=true mas OMNIRA_AGENT_INSTALLATION_ID está vazio — rotas não montadas")
+		} else {
+			updateMgrSvc = updatemgr.New(dbPool, cfg.PlatformReleaseLedgerPath, cfg.PlatformReleaseInstallationID, "omnira-api", cfg.PlatformReleaseLease)
+			srv.RegisterPlatformReleaseHandlers(dbPool, true, updateMgrSvc)
+		}
 	}
 	// ADR-0048: the external (CRM) API and its administration. Off by default; the features reported by /external/me say what this build serves.
 	var externalMedia mediaports.MediaReader // the same cleared-files-only reader the workspace uses (ADR-0016); without a media directory the media route answers 404
@@ -548,6 +560,15 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// F9 (ADR-0054 §2.1/§2.2, achado Codex [P1] rodada 4): reentrega periódica de revogações
+	// pendentes ao ledger local do agente — INDEPENDENTE de qualquer tráfego de operador (sem
+	// isto, um ambiente sem chamadas de operador nunca veria uma revogação cuja escrita
+	// síncrona ao ledger falhou, até o shutdown normal deste ctx via cancel() acima).
+	if updateMgrSvc != nil {
+		stopRevocationDelivery := updateMgrSvc.StartRevocationDeliveryLoop(ctx, 30*time.Second)
+		defer stopRevocationDelivery()
+	}
 
 	go func() {
 		log.Printf("API starting on %s (env: %s)\n", cfg.HTTPAddr, cfg.Env)

@@ -28,13 +28,13 @@ import (
 // logada nem persistida por quem implementa InvitationSender.
 // TemporaryPassword é a senha gerada para primeira autenticação (nunca logada).
 type InvitationMessage struct {
-	To                 string
-	TenantName         string
-	InviterEmail       string
-	AcceptURL          string
-	TemporaryPassword  string
-	PasswordExpiresAt   time.Time
-	ExpiresAt          time.Time
+	To                string
+	TenantName        string
+	InviterEmail      string
+	AcceptURL         string
+	TemporaryPassword string
+	PasswordExpiresAt time.Time
+	ExpiresAt         time.Time
 }
 
 // SMTP TLS modes.
@@ -219,7 +219,7 @@ func renderInvitationEmail(from, replyTo, to *mail.Address, msg InvitationMessag
 	data := map[string]string{
 		"Inviter": inviter, "Tenant": tenant, "URL": msg.AcceptURL,
 		"Password": msg.TemporaryPassword,
-		"Expires": msg.ExpiresAt.In(operationsLocation()).Format("02/01/2006 15:04") + " (horário de Manaus)",
+		"Expires":  msg.ExpiresAt.In(operationsLocation()).Format("02/01/2006 15:04") + " (horário de Manaus)",
 	}
 	var text, html bytes.Buffer
 	if err := invitationTextTemplate.Execute(&text, data); err != nil {

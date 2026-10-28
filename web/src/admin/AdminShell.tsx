@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import clsx from 'clsx'
 import { BrandMark } from '../components/BrandMark'
-import { Button, EmptyState, LoadingState } from '../components/primitives'
+import { Button, EmptyState, ErrorState, LoadingState } from '../components/primitives'
 import { authAPI } from '../lib/api'
 import { isActing } from '../lib/acting'
-import { hasSession, USER_KEY } from '../lib/session'
+import { handleUnauthorized, hasSession, isUnauthorized, USER_KEY } from '../lib/session'
 import { useAuthStore } from '../lib/store'
 import { useMyHubs } from '../hooks/useMyHubs'
+import { usePlatformOperator } from '../hooks/usePlatformOperator'
 import { rememberAfterLogin } from '../lib/afterLogin'
 
 // Console de administração (ADR-0041): agentes, empresas (instâncias) e canais geridos pelo Hub. É uma entrada própria do build (admin.html, servida em
@@ -30,6 +31,9 @@ const tab = ({ isActive }: { isActive: boolean }) =>
 export default function AdminShell() {
   const location = useLocation()
   const hubs = useMyHubs()
+  // Platform operator (ADR-0038) is a SEPARATE authority from Hub grants — a person can be one
+  // without the other. Probed the same way as the Hub tabs: a real call decides what to show.
+  const platformOperator = usePlatformOperator()
   const logout = useAuthStore((s) => s.logout)
   const [signedIn] = useState(hasSession())
   const acting = isActing()
@@ -43,6 +47,16 @@ export default function AdminShell() {
       window.location.replace('/inbox')
     }
   }, [signedIn, acting])
+
+  // Achado Codex [P2] (15a rodada): a sessão expirada (401) é um sinal DEFINITIVO, nunca um
+  // probe "inconclusivo" (achado da 13a rodada, abaixo) — classificá-la como transitória
+  // oferecia um botão "Tentar de novo" que só reenviava a MESMA credencial morta para sempre,
+  // já que o Outlet (e o próprio handleUnauthorized() de PlatformReleasesPage) nunca montava
+  // para agir. Tratado aqui, antes de qualquer classificação de erro, do mesmo jeito que
+  // qualquer outra tela já faz.
+  useEffect(() => {
+    if ([hubs.error, platformOperator.query.error].some(isUnauthorized)) handleUnauthorized()
+  }, [hubs.error, platformOperator.query.error])
 
   const signOut = async () => {
     const res = await authAPI.logout()
@@ -62,7 +76,15 @@ export default function AdminShell() {
   const list = hubs.data ?? []
   const canAccess = list.some((h) => h.can_manage_access)
   const canManage = list.some((h) => h.can_manage_instances)
-  const entitled = canAccess || canManage
+  const entitled = canAccess || canManage || platformOperator.isOperator
+  // Achado Codex [P2] (13a rodada): um 404 do probe de operador é uma negação CONFIRMADA (a
+  // mesma resposta uniforme de "não encontrado" que updatemgr/http.go dá a quem não é
+  // operador); qualquer OUTRO erro (500, rede, timeout) é só "não deu para saber" — tratar os
+  // dois do mesmo jeito dizia "Sem acesso ao console" a um operador de plataforma de verdade
+  // (sem Hub nenhum) só por causa de um problema transitório, e como o Outlet nunca montava, o
+  // estado de erro e o "tentar de novo" de PlatformReleasesPage ficavam inalcançáveis.
+  const platformOperatorProbeStatus = (platformOperator.query.error as { response?: { status?: number } } | null)?.response?.status
+  const platformOperatorProbeInconclusive = platformOperator.query.isError && platformOperatorProbeStatus !== 404 && platformOperatorProbeStatus !== 401
 
   return (
     <div className="flex min-h-dvh flex-col bg-canvas">
@@ -83,6 +105,11 @@ export default function AdminShell() {
               Canais das instâncias
             </NavLink>
           )}
+          {platformOperator.isOperator && (
+            <NavLink to="/plataforma" className={tab}>
+              Plataforma
+            </NavLink>
+          )}
         </nav>
         <div className="ml-auto flex items-center gap-3">
           <span className="hidden text-sm text-text-secondary sm:inline">{savedUserName()}</span>
@@ -95,17 +122,31 @@ export default function AdminShell() {
         </div>
       </header>
       <main className="min-h-0 flex-1" data-route={location.pathname}>
-        {hubs.isLoading ? (
+        {hubs.isLoading || platformOperator.isLoading ? (
           <LoadingState message="Carregando…" />
+        ) : !entitled && platformOperatorProbeInconclusive ? (
+          <div className="mx-auto max-w-xl p-6">
+            <ErrorState
+              title="Não foi possível confirmar seu acesso"
+              message="Não deu para confirmar se você é operador de plataforma agora (problema temporário). Tente de novo — se você não tiver acesso, o servidor vai dizer isso de novo, de forma confiável."
+              action={{ label: 'Tentar novamente', onClick: () => void platformOperator.query.refetch() }}
+            />
+          </div>
         ) : !entitled ? (
           <div className="mx-auto max-w-xl p-6">
             <EmptyState
               title="Sem acesso ao console"
-              description="O console é para administradores de um Hub e para quem recebeu a gestão de canais de uma instância. Se você deveria ter acesso, fale com o administrador do Hub."
+              description="O console é para administradores de um Hub, para quem recebeu a gestão de canais de uma instância e para operadores de plataforma. Se você deveria ter acesso, fale com o administrador do Hub ou com um operador de plataforma."
             />
           </div>
         ) : (
-          <Outlet />
+          // Repassa o MESMO resultado de usePlatformOperator já obtido aqui (contexto do Outlet, não
+          // um segundo useQuery): achado real em navegador — uma SEGUNDA assinatura da mesma
+          // chave, montada só quando esta guarda libera o Outlet, disparava seu próprio
+          // refetchOnMount; enquanto ele estava em voo esta MESMA guarda via isLoading=true de
+          // novo, desmontava o Outlet (e a assinatura nova com ele), o que deixava a tela
+          // alternando montar/desmontar para sempre. Nenhum teste em jsdom reproduziu isso.
+          <Outlet context={platformOperator} />
         )}
       </main>
     </div>

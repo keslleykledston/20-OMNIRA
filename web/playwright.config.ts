@@ -8,7 +8,10 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'https://omnira.devops.k3gsolutions.com.br',
+    // Defaults to the local dev server the webServer block below already starts —
+    // never the real production host. Override with PLAYWRIGHT_BASE_URL for a
+    // deliberate run against a specific (ideally isolated) target.
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3000',
     trace: 'on-first-retry',
     ignoreHTTPSErrors: true,
   },

@@ -8,11 +8,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	"github.com/omnira/omnira/internal/platform/config"
+	"github.com/omnira/omnira/internal/platformrelease/updatemgr"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 )
 
@@ -96,6 +98,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterAIIntegrationHandlers(nil, tenancyadapters.NewAIIntegrationHandler(nil, nil, nil))
 	s.RegisterHubHandlers(nil, true, true)
 	s.RegisterExternalHandlers(nil, true, ExternalOptions{Sealer: nilSealer{}})
+	s.RegisterPlatformReleaseHandlers(nil, true, updatemgr.New(nil, t.TempDir()+"/ledger.db", "inst-1", "omnira-api", time.Minute))
 	return s
 }
 

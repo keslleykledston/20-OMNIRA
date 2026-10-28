@@ -1,0 +1,60 @@
+# Build Docker reproduzível para omnira-update-agent e omnira-updatectl (F5, ADR-0054
+# §2.1/§2.3, docs/release/spec/..._PACOTE_EXECUCAO.md §6.1 "Agente independente: processo/
+# serviço no host administrado por systemd ou supervisor equivalente").
+#
+# Diferente de Dockerfile.api/Dockerfile.worker, esta imagem NUNCA é destinada a RODAR como
+# container em produção — o próprio Update Agent precisa de acesso direto ao Docker socket
+# do HOST para gerenciar os outros containers via `docker compose` (equivalente a privilégio
+# de root), e a especificação exige explicitamente que ele rode nativamente no host via
+# systemd, nunca dentro de outro container (evita a complicação e o risco adicional de
+# montar o socket Docker do host dentro de um container gerenciado, quando o processo já
+# pode rodar nativamente). Esta imagem existe só para dar ao projeto um build REPRODUZÍVEL e
+# versionado dos dois binários (docs/deployment/DOCKER-FIRST.md "todo componente executável
+# deve possuir build Docker reproduzível") — o artefato é extraído da imagem (`docker create`
+# + `docker cp`, ou um `docker build --target export -o .`) e instalado como dois binários
+# comuns no host, supervisionados pelo unit systemd (ver
+# docs/release/systemd/omnira-update-agent.service).
+#
+# CGO_ENABLED=0: modernc.org/sqlite (o driver SQLite do ledger local, ADR-0054 §2.3) é
+# pure-Go — nenhuma dependência de toolchain C na imagem final nem no host de destino.
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /build
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+  -ldflags "-s -w \
+    -X github.com/omnira/omnira/internal/platform/config.Version=${VERSION} \
+    -X github.com/omnira/omnira/internal/platform/config.Commit=${COMMIT} \
+    -X github.com/omnira/omnira/internal/platform/config.BuildTime=${BUILD_TIME}" \
+  -o /build/omnira-update-agent \
+  ./apps/update-agent/cmd/omnira-update-agent
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+  -ldflags "-s -w \
+    -X github.com/omnira/omnira/internal/platform/config.Version=${VERSION} \
+    -X github.com/omnira/omnira/internal/platform/config.Commit=${COMMIT} \
+    -X github.com/omnira/omnira/internal/platform/config.BuildTime=${BUILD_TIME}" \
+  -o /build/omnira-updatectl \
+  ./apps/updatectl/cmd/omnira-updatectl
+
+# Stage de export: só os dois binários, direto na raiz do filesystem exportado (achado
+# Codex P2: um `/out/` intermediário aqui fazia `docker build --target export -o <dir> .`
+# produzir <dir>/out/<binário>, não <dir>/<binário> como o ExecStart do unit systemd
+# documentava — corrigido para que o comando de instalação documentado abaixo funcione
+# literalmente). Extração via `docker build --target export -o <dir> .` (BuildKit) ou
+# `docker create <image> && docker cp <cid>:/. <dir>` — nunca um `ENTRYPOINT`/`CMD` aqui,
+# porque esta imagem nunca é executada como container.
+FROM scratch AS export
+COPY --from=builder /build/omnira-update-agent /omnira-update-agent
+COPY --from=builder /build/omnira-updatectl /omnira-updatectl

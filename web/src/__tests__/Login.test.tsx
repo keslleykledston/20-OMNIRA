@@ -128,7 +128,7 @@ describe('Login — entrada automática (OIDC)', () => {
   it('foi ao provedor há instantes e voltou sem entrar: mostra o botão em vez de repetir (vaivém)', async () => {
     mode({ mode: 'oidc' });
     sessionRefused(401);
-    sessionStorage.setItem('omnira.sso-auto', String(Date.now() - 2_000));
+    localStorage.setItem('omnira.sso-auto', String(Date.now() - 2_000));
     page();
 
     expect(await screen.findByRole('button', { name: 'Continuar com SSO' })).toBeEnabled();
@@ -138,7 +138,7 @@ describe('Login — entrada automática (OIDC)', () => {
   it('a tentativa antiga não bloqueia: passados 30 s volta a seguir sozinha', async () => {
     mode({ mode: 'oidc' });
     sessionRefused(401);
-    sessionStorage.setItem('omnira.sso-auto', String(Date.now() - 31_000));
+    localStorage.setItem('omnira.sso-auto', String(Date.now() - 31_000));
     page();
 
     await waitFor(() => expect(authAPI.startOIDC).toHaveBeenCalledTimes(1));
@@ -147,11 +147,11 @@ describe('Login — entrada automática (OIDC)', () => {
   it('entrar com sucesso apaga a marca da tentativa (a próxima saída não cai no vaivém)', async () => {
     mode({ mode: 'oidc' });
     signedIn();
-    sessionStorage.setItem('omnira.sso-auto', String(Date.now()));
+    localStorage.setItem('omnira.sso-auto', String(Date.now()));
     page();
 
     await screen.findByTestId('elsewhere');
-    expect(sessionStorage.getItem('omnira.sso-auto')).toBeNull();
+    expect(localStorage.getItem('omnira.sso-auto')).toBeNull();
   });
 
   it('conta sem acesso a nenhuma organização vai para /no-access', async () => {

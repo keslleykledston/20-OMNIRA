@@ -12,7 +12,7 @@
 #      only to 127.0.0.1, labeled so a crashed run's leftovers are always
 #      identifiable and never confused with anything else on the host;
 #   2. one fully-migrated template database inside it, built with the
-#      canonical migration tool (tools/apply-migrations.sh) — never a second
+#      canonical migration tool (tools/migrate-sql.sh) — never a second
 #      schema definition;
 #   3. one CREATE DATABASE ... TEMPLATE clone per Go package, so packages
 #      that have historically collided over shared Postgres state
@@ -70,6 +70,24 @@
 #                                                          removes nothing
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# From a linked worktree (git worktree add), the repo root's .git is a FILE
+# pointing at an absolute path outside the repo root (e.g.
+# /opt/omnira/20-OMNIRA/.git/worktrees/release-engineering). The per-package
+# `docker run` below only bind-mounts the repo root at /app, so that pointer
+# dangles inside the container and even `git config --global` fails
+# ("fatal: not a git repository: ...") before `go test` ever runs — git's
+# repository discovery walks up from cwd and resolves the worktree pointer
+# unconditionally. Bind-mounting git's real common dir at the SAME absolute
+# path makes the pointer resolve inside the container too. A plain (non
+# -worktree) checkout has its common dir already inside the repo root, so
+# this stays empty there and nothing changes for that case.
+GIT_COMMON_DIR="$(realpath "$(git rev-parse --git-common-dir)")"
+EXTRA_GIT_MOUNTS=()
+case "${GIT_COMMON_DIR}" in
+  "$(pwd)"/*) ;; # already inside the repo root mount — nothing extra needed
+  *) EXTRA_GIT_MOUNTS=(-v "${GIT_COMMON_DIR}:${GIT_COMMON_DIR}:ro") ;;
+esac
 
 LABEL_KEY="com.omnira.integration-test"
 
@@ -221,13 +239,15 @@ psql_owner() { PGPASSWORD="${PG_PASSWORD}" psql -h 127.0.0.1 -p "${PORT}" -U "${
 echo "== creating template database (${TEMPLATE_DB})"
 psql_owner -d postgres -c "CREATE DATABASE ${TEMPLATE_DB}" >/dev/null
 
-echo "== applying canonical migration chain to the template (tools/apply-migrations.sh)"
-# No query string here on purpose: tools/apply-migrations.sh's connection-string
-# parser splits on the first "/" for the database name and does not strip a
-# trailing "?..."; a disposable local container needs no sslmode parameter
-# anyway (psql's default "prefer" already falls back to plaintext).
-DATABASE_URL="postgres://${PG_USER}:${PG_PASSWORD}@127.0.0.1:${PORT}/${TEMPLATE_DB}" \
-  bash tools/apply-migrations.sh up
+echo "== applying canonical migration chain to the template (tools/migrate-sql.sh)"
+# F4 (docs/release/spec/..._PACOTE_EXECUCAO.md): this used to run its own
+# tools/apply-migrations.sh — a second, less safe SQL applier (no
+# schema_migrations ledger, no per-file transaction, no ON_ERROR_STOP) kept
+# alive only by this script and scripts/test-archive-wa-groups.sh. Both now
+# use the one canonical runner so there is only ever one source of truth for
+# how a migration gets applied, in tests and in production alike.
+DATABASE_URL="postgres://${PG_USER}:${PG_PASSWORD}@127.0.0.1:${PORT}/${TEMPLATE_DB}" MIGRATIONS_DIR="migrations" \
+  sh tools/migrate-sql.sh up
 
 # ADR-0042: the suites run the way production runs (signed session contexts, mode enforce). SESSION_CTX_MODE=off|measure reproduces the legacy behavior
 # (the signing key is still installed and sent, which is what a rollback of the mode does).
@@ -237,10 +257,17 @@ echo "== session context: key installed, mode ${SESSION_CTX_MODE} (ADR-0042)"
 psql_owner -d "${TEMPLATE_DB}" -tAc "SELECT ctx_install_key(decode('${SESSION_CTX_KEY_TEST}','hex')); SELECT ctx_set_mode('${SESSION_CTX_MODE}')" >/dev/null
 
 echo "== proving template state before freezing"
-# This repo tracks no schema_migrations ledger table (tools/apply-migrations.sh
-# just applies every *.up.sql in order) — the highest-numbered file actually
-# present and applied IS the schema version.
-schema_version=$(ls migrations/*.up.sql | sort | tail -1 | xargs basename)
+newest_file=$(ls migrations/*.up.sql | sort | tail -1 | xargs basename | sed 's/\.up\.sql$//')
+schema_version=$(psql_owner -d "${TEMPLATE_DB}" -tAc "SELECT max(version) FROM schema_migrations")
+if [ "${schema_version}" != "${newest_file}" ]; then
+  echo "FATAL: schema_migrations ledger says ${schema_version}, but the newest migration file is ${newest_file}" >&2
+  exit 1
+fi
+# F4: every migration tools/migrate-sql.sh just applied was recorded with a checksum of the
+# file it actually ran; `verify` recomputes and compares them right here, on every CI run of
+# this script — not just in a one-off synthetic test — so drift detection is exercised for real.
+DATABASE_URL="postgres://${PG_USER}:${PG_PASSWORD}@127.0.0.1:${PORT}/${TEMPLATE_DB}" MIGRATIONS_DIR="migrations" \
+  sh tools/migrate-sql.sh verify
 force_rls_tables=$(psql_owner -d "${TEMPLATE_DB}" -tAc "SELECT count(*) FROM pg_class WHERE relkind='r' AND relnamespace='public'::regnamespace AND relforcerowsecurity")
 app_role=$(psql_owner -d "${TEMPLATE_DB}" -tAc "SELECT rolname||'|super='||rolsuper||'|bypassrls='||rolbypassrls FROM pg_roles WHERE rolname='omnira_app'")
 template_tenants=$(psql_owner -d "${TEMPLATE_DB}" -tAc "SELECT count(*) FROM tenants")
@@ -305,7 +332,7 @@ for pkg in "${PACKAGES[@]}"; do
   # names), so packages sharing this one disposable NATS server stay safe to
   # run concurrently if a future revision parallelizes this loop.
   if docker run --rm --network host \
-      -v "$(pwd)":/app -w /app -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false \
+      -v "$(pwd)":/app "${EXTRA_GIT_MOUNTS[@]}" -w /app -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false \
       -e OMNIRA_INTEGRATION_TEST=1 \
       -e OMNIRA_SESSION_CTX_KEY="${SESSION_CTX_KEY_TEST}" \
       -e OMNIRA_INTEGRATION_RUN_ID="${RUN_ID}" \

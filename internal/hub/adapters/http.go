@@ -388,8 +388,10 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 		writeAccessError(w, application.ErrAccessDenied)
 		return
 	}
+	// ADR-0053: a private note is a CRM-only capability (external API), out of scope for the Hub feed until it has a UI that labels it as
+	// internal — so it stays invisible here rather than risk a hub agent reading it as something that was sent to the customer.
 	rows, err := q.Query(ctx, `SELECT id, direction, message_type, COALESCE(body, ''), status, created_at
-	                           FROM messages WHERE conversation_id = $1 AND tenant_id = $2
+	                           FROM messages WHERE conversation_id = $1 AND tenant_id = $2 AND NOT private
 	                           ORDER BY created_at ASC, id ASC LIMIT 200`, item.ConversationID, tc.TenantID)
 	if err != nil {
 		httpError(w, "internal server error", http.StatusInternalServerError)

@@ -1,0 +1,82 @@
+# Política de assinatura, proveniência e revogação (ADR-0054 §2.1/§2.2,
+# especificação §4.3 "G8", §5 "Revogação").
+#
+# Esta política declara O QUE o verificador (F2/F3 em diante) exige antes de
+# aceitar qualquer release manifest — não é o verificador em si (ver
+# internal/platformrelease/domain/manifest.go para o parser/validador de
+# FORMA; a verificação de ASSINATURA é um passo seguinte e separado,
+# implementado quando as credenciais reais existirem — ver "estado real"
+# abaixo).
+#
+# Fail-closed sempre: assinatura ausente, inválida, de identidade não
+# permitida, ou de release revogada = BLOCK. Nenhuma dessas condições é
+# contornável pela UI (especificação §7.1 "BLOCK não pode ser suprimido via
+# UI sem mudar política e revalidar").
+
+schema_version: 1
+
+# Mecanismo preferido: GitHub Artifact Attestations (build provenance),
+# condicionado à disponibilidade real no plano/repositório (especificação
+# §4.3 nota sobre restrições de disponibilidade em repositórios privados).
+# Mecanismo equivalente: Sigstore Cosign assinando o manifesto/imagem com
+# identidade OIDC do workflow do GitHub Actions (keyless).
+signing_mechanism:
+  primary: github_artifact_attestation
+  fallback: sigstore_cosign_keyless
+  # Se nenhum dos dois estiver disponível no momento da implementação real
+  # (F3), o gate G8 permanece BLOCKED_EXTERNAL — nunca substituído por uma
+  # assinatura simétrica local "provisória" tratada como equivalente.
+
+# Identidade autorizada a assinar: só o workflow de release-build.yml
+# rodando sobre uma ref confiável (branch protegida ou tag de release),
+# nunca um PR de fork, nunca uma execução manual sem ambiente aprovado.
+trusted_identity:
+  repository: keslleykledston/20-OMNIRA
+  workflow_path: .github/workflows/release-build.yml
+  # ref_type/ref_pattern são verificados pelo verificador OIDC/attestation
+  # (claims do token), não apenas lidos do manifesto (o manifesto é dado não
+  # confiável até a assinatura ser verificada).
+  allowed_ref_patterns:
+    - "refs/heads/main"
+    - "refs/tags/omnira-*"
+
+# Revogação: lista assinada separada do catálogo de releases normal —
+# precisa poder bloquear uma release já publicada sem depender de reescrever
+# o índice principal (que teria o mesmo problema de confiança que está
+# tentando resolver).
+revocation:
+  list_format: signed_json_array
+  fields: [release_id, revoked_at, reason, revoked_by]
+  # Anti-downgrade: uma release revogada nunca pode ser "contornada" ao
+  # reinstalar uma versão anterior que reintroduza a mesma vulnerabilidade —
+  # ver compatibility.yaml (downgrade.allowed: false) e especificação §8 R4.
+  anti_downgrade_enforced: true
+  # Verificação da lista de revogação é obrigatória em TODO preflight
+  # (especificação §7.1 item 3), nunca cacheada indefinidamente.
+  max_cache_age_seconds: 300
+
+# Anti-replay: um manifesto assinado não pode ser reaproveitado para
+# instalar em canal/instalação diferente do que foi assinado para, nem
+# reaplicado após revogação só porque o download já tinha ocorrido antes da
+# revogação.
+anti_replay:
+  manifest_must_declare_channel: true
+  revocation_checked_at_apply_time: true
+  # Um manifesto "stable" baixado antes de uma revogação não pode ser
+  # aplicado depois da revogação só porque já estava em disco local — o
+  # preflight (especificação §7.1) reconsulta a lista de revogação no
+  # momento do apply, não só no momento do download.
+  revalidate_before_apply: true
+
+# Estado real neste repositório (achado F0, docs/release/00-audit.md §7):
+# `gh` CLI não instalado e credenciais GHCR não confirmadas nesta sessão.
+# Builds OCI locais sem push são possíveis (F3); a cadeia de assinatura real
+# (attestation/cosign contra um registry real) fica BLOCKED_EXTERNAL até
+# essas credenciais existirem — ver docs/release/IMPLEMENTATION-STATUS.md.
+# Esta política já é implementável e testável com fixtures locais
+# (manifesto + assinatura de teste), sem depender do registry real.
+known_blockers:
+  - id: gh_cli_missing
+    affects: [F2, F3, F11]
+  - id: ghcr_credentials_unconfirmed
+    affects: [F3, F9]

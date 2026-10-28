@@ -1,0 +1,545 @@
+name: Release build (candidate)
+
+# F3 (docs/release/spec/..._PACOTE_EXECUCAO.md §D F3, §4.2 item 3): builds the
+# three real workloads by commit SHA, generates SBOM + provenance/attestation
+# + signature, pushes by OCI digest to GHCR (never `:latest`), and assembles,
+# SIGNS and self-validates a release manifest (internal/platformrelease/
+# domain, F1). The manifest itself is attested/signed, not just the images —
+# release/policies/signing.yaml's trust chain covers "the exact content" of
+# the release, and compatibility/migration/recovery/approval metadata lives
+# in the manifest, not in an image layer.
+#
+# Produces channel "candidate" ONLY — this workflow never publishes "stable".
+# Promoting a candidate to stable is a separate, later, human-gated step
+# (release-promote.yml) that does not exist yet; building it without the
+# staging/fault-injection evidence F8 produces would be exactly the kind of
+# placeholder gate the specification forbids.
+#
+# GATED ON ci-main.yml (achado da revisão independente Codex, F3): this does
+# NOT trigger on `push` directly — an earlier draft did, which meant a
+# commit that fails unit/integration/contract/secret-scan gates in
+# ci-main.yml could still be built, SIGNED and published as a candidate,
+# completely independently of whether CI passed. It triggers on
+# `workflow_run` of "CI (main)" instead, and every job refuses to run unless
+# that run's `conclusion` was `success` — matching the specification's own
+# release-build requirement ("somente ref confiável e gates verdes").
+# workflow_dispatch remains for an explicit manual build (e.g. re-cutting a
+# candidate without a new commit), gated the same way on the trusted-ref
+# check below, independently of ci-main.yml (a human triggering it IS the
+# gate for that path).
+#
+# TRUSTED REF ONLY (release/policies/signing.yaml `trusted_identity.
+# allowed_ref_patterns`): workflow_dispatch can target ANY branch a caller
+# has push access to, and `packages: write`/`id-token: write` would
+# otherwise be handed to that arbitrary ref. The `vars` job's first step
+# fails loudly (not a silent skip) if the resolved ref isn't main or an
+# `omnira-*` tag, before anything with write/signing permission runs.
+#
+# UNTRUSTED INPUT HANDLING: every workflow_dispatch input is read through a
+# step `env:` block, never interpolated directly into a `run:` script body —
+# `${{ github.event.inputs.x }}` written straight into a script is a classic
+# GitHub Actions injection vector (the text is substituted into the YAML
+# before bash ever parses it; a value containing `$(...)` would execute).
+# Each input is also format-validated before use.
+#
+# KNOWN LIMITATION, PARTIALLY CONFIRMED BY SOURCE, NOT YET VERIFIED LIVE
+# (flagged by independent review, F3 — see docs/release/
+# IMPLEMENTATION-STATUS.md): every `git checkout` in this workflow
+# explicitly pins `ref: ${{ needs.vars.outputs.resolved_sha }}` so the FILES
+# built are always the exact commit CI (main) validated, never whatever
+# main has moved to since. Confirmed by reading actions/toolkit's
+# `packages/attest/src/provenance.ts` directly (not assumed): the
+# provenance predicate's `gitCommit` field is `claims.sha`, taken from the
+# job's own OIDC identity token — a value this workflow has NO way to
+# influence from inside the YAML (not by checkout ref, not by any env var).
+# What is NOT independently confirmed is what GitHub's OIDC token issuer
+# actually puts in `sha` for a job belonging to a `workflow_run`-triggered
+# run — whether that equals `workflow_run.head_sha` (what was actually
+# built here) or the default branch's tip at token-issuance time (which can
+# differ if main advanced between the CI run finishing and this workflow
+# starting). This is a platform behavior to confirm against a real run (gh
+# CLI/credentials are BLOCKED_EXTERNAL in this session), not something a
+# further code change here can fix on its own if it turns out to be the
+# latter — verify the attestation's recorded source revision against a real
+# `workflow_run` execution before trusting this workflow's provenance
+# output for anything beyond this program's own local testing.
+#
+# VERSIONING PLACEHOLDER (documented, not hidden — docs/release/
+# IMPLEMENTATION-STATUS.md fase F3): this product has no SemVer release
+# history yet (internal/platform/config.Version is "dev" at HEAD; there is no
+# VERSION file, no release catalog). platform_version/from_versions/the
+# migrations baseline below are a deliberately simple, explicit scheme so
+# the pipeline is real and testable today — see the `vars` job for exactly
+# what each placeholder means and how it's computed.
+
+on:
+  workflow_run:
+    workflows: ["CI (main)"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      platform_version:
+        description: "SemVer MAJOR.MINOR.PATCH (leave empty to use the 0.1.<run_number> placeholder)"
+        required: false
+      from_versions:
+        description: "Comma-separated versions this release can upgrade directly from (leave empty for the placeholder)"
+        required: false
+      approved_by:
+        description: "Release policy id that approved this candidate build"
+        required: false
+        default: ci-auto-candidate-v1
+      migrations_start_after:
+        description: "Last migration the PREVIOUS release applied (required on manual dispatch — there is no release catalog yet to look this up automatically)"
+        required: false
+
+concurrency:
+  # ONE global group, not per-SHA (achado da revisão independente Codex,
+  # F3): the `manifest` job's last step moves the shared
+  # `refs/tags/release-candidate-latest` tag, which every run's `vars` job
+  # also READS as the migration baseline. A per-SHA group let two builds
+  # for two different commits run their full read-build-sign-tag sequence
+  # concurrently; if the older commit's run finished last, it could move
+  # the tag BACKWARDS, after which the next run's baseline would regress.
+  # One global group serializes the whole sequence end to end, so the tag
+  # only ever advances forward, release at a time.
+  group: release-build-candidate-tag
+  cancel-in-progress: false # never cancel a build mid-push — a half-pushed digest is worse than a slow one
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  vars:
+    name: Guard conclusion/ref, compute version + migrations baseline (once)
+    runs-on: ubuntu-latest
+    outputs:
+      resolved_sha: ${{ steps.compute.outputs.resolved_sha }}
+      platform_version: ${{ steps.compute.outputs.platform_version }}
+      from_versions: ${{ steps.compute.outputs.from_versions }}
+      approved_by: ${{ steps.compute.outputs.approved_by }}
+      checksum: ${{ steps.compute.outputs.checksum }}
+      last_migration: ${{ steps.compute.outputs.last_migration }}
+      migrations_start_after: ${{ steps.compute.outputs.migrations_start_after }}
+    steps:
+      - name: Refuse unless CI (main) succeeded, or this is an explicit manual dispatch
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_run" ] && [ "$WORKFLOW_RUN_CONCLUSION" != "success" ]; then
+            echo "::error::triggering 'CI (main)' run concluded '${WORKFLOW_RUN_CONCLUSION}', not 'success' — refusing to build/sign/push a candidate for it." >&2
+            exit 1
+          fi
+
+      - name: Resolve the exact commit, refuse any ref outside release/policies/signing.yaml's trusted_identity
+        id: resolve_ref
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            resolved_sha="$WORKFLOW_RUN_HEAD_SHA"
+            resolved_ref="refs/heads/${WORKFLOW_RUN_HEAD_BRANCH}"
+          else
+            resolved_sha="${GITHUB_SHA}"
+            resolved_ref="${GITHUB_REF}"
+          fi
+          case "$resolved_ref" in
+            refs/heads/main|refs/tags/omnira-*) : ;;
+            *)
+              echo "::error::resolved ref '${resolved_ref}' is not in release/policies/signing.yaml's allowed_ref_patterns (refs/heads/main, refs/tags/omnira-*). Refusing to build/sign/push from here." >&2
+              exit 1
+              ;;
+          esac
+          echo "resolved_sha=${resolved_sha}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.resolve_ref.outputs.resolved_sha }} # the EXACT commit CI (main) validated, not whatever main has moved to since
+          fetch-depth: 0 # needed to look up migrations at refs/tags/release-candidate-latest
+          fetch-tags: true
+
+      - id: compute
+        env:
+          # Every value read through env:, never interpolated inline into the
+          # script below — see the workflow header's "UNTRUSTED INPUT HANDLING".
+          IN_PLATFORM_VERSION: ${{ github.event.inputs.platform_version }}
+          IN_FROM_VERSIONS: ${{ github.event.inputs.from_versions }}
+          IN_APPROVED_BY: ${{ github.event.inputs.approved_by }}
+          IN_MIGRATIONS_START_AFTER: ${{ github.event.inputs.migrations_start_after }}
+          EVENT_NAME: ${{ github.event_name }}
+          RESOLVED_SHA: ${{ steps.resolve_ref.outputs.resolved_sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          fail() { echo "::error::$1" >&2; exit 1; }
+
+          platform_version="${IN_PLATFORM_VERSION:-0.1.${RUN_NUMBER}}"
+          [[ "$platform_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "platform_version '${platform_version}' is not MAJOR.MINOR.PATCH"
+
+          approved_by="${IN_APPROVED_BY:-ci-auto-candidate-v1}"
+          [[ "$approved_by" =~ ^[A-Za-z0-9._-]+$ ]] || fail "approved_by '${approved_by}' has characters outside [A-Za-z0-9._-]"
+
+          prev_run=$(( RUN_NUMBER - 1 > 0 ? RUN_NUMBER - 1 : 0 ))
+          from_versions_raw="${IN_FROM_VERSIONS:-0.1.${prev_run}}"
+          # A GitHub text input CAN contain embedded newlines. `read` below
+          # stops at the first one, so the validation loop would never even
+          # see anything injected after it — but the ORIGINAL raw string
+          # still went into $GITHUB_OUTPUT in an earlier draft of this
+          # workflow (achado da revisão independente Codex, F3, same
+          # injection class already fixed once for migrations_start_after):
+          # e.g. "0.1.0<newline>resolved_sha=<attacker-sha>" would inject a
+          # second output line downstream privileged jobs then trust. Reject
+          # the newline outright, then reconstruct the value FROM the
+          # validated, split array — never re-emit the raw input verbatim.
+          case "$from_versions_raw" in
+            *$'\n'*) fail "from_versions must not contain a newline" ;;
+          esac
+          IFS=',' read -r -a fv_arr <<< "$from_versions_raw"
+          for v in "${fv_arr[@]}"; do
+            [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "from_versions entry '${v}' is not MAJOR.MINOR.PATCH"
+          done
+          from_versions=$(IFS=','; echo "${fv_arr[*]}")
+
+          checksum=$(bash scripts/release/migrations-checksum.sh)
+          last_migration=$(find migrations -maxdepth 1 -name '*.up.sql' -printf '%f\n' | sort | tail -1 | sed 's/\.up\.sql$//')
+
+          # migrations_start_after: the schema needs the PREVIOUS RELEASE's
+          # last migration — not just "the parent commit's", which an
+          # earlier draft of this workflow used and the independent Codex
+          # review correctly rejected: a commit that failed CI or failed
+          # release-build is not a published release, so its migrations
+          # were never actually applied by any candidate, and treating it
+          # as the baseline would misrepresent what's "already applied".
+          # There is no release catalog yet to query (F6/F9), so this
+          # workflow tracks its own minimal one: a single git tag,
+          # `release-candidate-latest`, moved to point at `resolved_sha`
+          # ONLY after a candidate fully builds, signs and validates (see
+          # the last step of the `manifest` job). Looking that tag up here
+          # is therefore always "the last commit a candidate ACTUALLY
+          # shipped for", never a guess from arbitrary history.
+          start_after="$IN_MIGRATIONS_START_AFTER"
+          # Validate BEFORE it ever reaches $GITHUB_OUTPUT (achado da revisão
+          # independente Codex, F3): an unvalidated multiline value here —
+          # e.g. "000168$'\n'resolved_sha=<attacker-controlled-sha>" — would
+          # inject a SECOND "resolved_sha=..." line into $GITHUB_OUTPUT,
+          # silently overriding the one resolve_ref already validated, and
+          # downstream jobs would check out and sign that other commit with
+          # write/OIDC permissions. A migration stem has exactly one legal
+          # shape (scripts/release/validate-migrations.sh's own pattern).
+          if [ -n "$start_after" ] && ! [[ "$start_after" =~ ^[0-9]{6}_[a-z0-9_]+$ ]]; then
+            fail "migrations_start_after '${start_after}' is not a single migration stem (NNNNNN_name, no newlines)"
+          fi
+          if [ -z "$start_after" ]; then
+            # --verify -q (not a bare `git rev-parse <ref> || true`): for an
+            # unresolvable ref, plain `git rev-parse` still prints the
+            # literal argument to STDOUT before failing — `|| true` hides
+            # the failure but the garbage string survives into the
+            # variable (caught testing this locally, not in a real run —
+            # see docs/release/IMPLEMENTATION-STATUS.md fase F3). `--verify
+            # -q` prints nothing and fails cleanly when the ref is absent.
+            latest_tag_sha=$(git rev-parse --verify -q 'refs/tags/release-candidate-latest^{commit}' 2>/dev/null || true)
+            if [ -n "$latest_tag_sha" ]; then
+              start_after=$(git ls-tree "$latest_tag_sha" migrations/ --name-only 2>/dev/null | grep -E '\.up\.sql$' | sed 's#^migrations/##; s/\.up\.sql$//' | sort | tail -1)
+            fi
+            if [ -z "$start_after" ]; then
+              if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+                fail "migrations_start_after is required on workflow_dispatch — there is no release catalog yet to derive it automatically (see the workflow header)"
+              fi
+              # no release-candidate-latest tag exists yet: this is the
+              # very first candidate this workflow has ever produced, so
+              # the only honest baseline is
+              # "no prior release known", i.e. equal to the current last
+              # migration.
+              start_after="$last_migration"
+            fi
+          fi
+
+          {
+            echo "resolved_sha=${RESOLVED_SHA}"
+            echo "platform_version=${platform_version}"
+            echo "from_versions=${from_versions}"
+            echo "approved_by=${approved_by}"
+            echo "checksum=${checksum}"
+            echo "last_migration=${last_migration}"
+            echo "migrations_start_after=${start_after}"
+          } >> "$GITHUB_OUTPUT"
+
+  build-push-sign:
+    name: Build, SBOM, sign (${{ matrix.unit }})
+    needs: vars
+    runs-on: ubuntu-latest
+    # release/policies/signing.yaml: "nunca uma execução manual sem ambiente
+    # aprovado" — on workflow_dispatch, require the protected GitHub
+    # Environment below (required reviewers configured in repo Settings >
+    # Environments, a repo-admin action this session cannot perform —
+    # BLOCKED_EXTERNAL, docs/release/IMPLEMENTATION-STATUS.md fase F3; until
+    # that Environment is created with reviewers, this reference is a named
+    # placeholder, not an active gate). The automatic path (workflow_run
+    # after CI (main) succeeds) never sets this — ci-main.yml passing IS
+    # that path's gate.
+    environment: ${{ github.event_name == 'workflow_dispatch' && 'release-signing-manual' || '' }}
+    permissions:
+      contents: read
+      packages: write # GHCR push via GITHUB_TOKEN — ALSO needs the repo's own
+      # Settings > Actions > General > Workflow permissions set to "Read and
+      # write permissions" (a repository setting, not a secret: not confirmed
+      # in this session — docs/release/IMPLEMENTATION-STATUS.md fase F3,
+      # BLOCKED_EXTERNAL). This block alone does not grant push if that's off.
+      id-token: write # OIDC for cosign keyless signing and attest-build-provenance
+      attestations: write
+    strategy:
+      matrix:
+        include:
+          # dockerfile is always repo-root-relative (what build-push-action's
+          # `file:` input expects) — never built by concatenating it with
+          # `context`, which double-prefixed web's path in an earlier draft
+          # of this workflow (web/web/Dockerfile, which does not exist).
+          - unit: omnira-api
+            dockerfile: Dockerfile.api
+            context: .
+          - unit: omnira-worker
+            dockerfile: Dockerfile.worker
+            context: .
+          - unit: omnira-web
+            dockerfile: web/Dockerfile
+            context: web
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.vars.outputs.resolved_sha }} # the exact commit CI (main) validated
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest (never :latest)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.unit }}:${{ needs.vars.outputs.resolved_sha }}
+          build-args: |
+            VERSION=${{ needs.vars.outputs.platform_version }}
+            COMMIT=${{ needs.vars.outputs.resolved_sha }}
+            BUILD_TIME=${{ github.event.repository.updated_at || github.run_id }}
+
+      - name: Generate SBOM for the pushed image
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.unit }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.unit }}.spdx.json
+          upload-artifact: true
+
+      - name: Scan the pushed image for known vulnerabilities (fail-closed on CRITICAL)
+        # An SBOM lists what's inside the image; it doesn't tell you whether
+        # any of it is a KNOWN vulnerability (achado da revisão independente
+        # Codex, F3 — a prior draft of this workflow had SBOM+signing but no
+        # actual scan, which the specification explicitly requires alongside
+        # them). Severity threshold: CRITICAL only blocks a candidate build —
+        # HIGH/MEDIUM/LOW are common in base-image layers (alpine/nginx) and
+        # would make candidate generation itself impossible most days; a
+        # stricter bar belongs to release-promote.yml (F9), which gates
+        # STABLE, not every candidate.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.unit }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy-${{ matrix.unit }}.sarif
+          severity: CRITICAL
+          # Without this, trivy-action's own severity filter is NOT applied
+          # for SARIF output (confirmed against the real action.yaml at this
+          # pinned version during F3's local testing — achado da revisão
+          # independente Codex): exit-code would then gate on every
+          # severity, not just CRITICAL, contradicting this step's own
+          # stated intent (see its name above).
+          limit-severities-for-sarif: true
+          exit-code: "1"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always() # the scan report is evidence even when it fails the build
+        with:
+          name: trivy-${{ matrix.unit }}
+          path: trivy-${{ matrix.unit }}.sarif
+          retention-days: 90
+
+      - name: Attest build provenance (primary mechanism — release/policies/signing.yaml)
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.unit }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign the image (fallback mechanism — release/policies/signing.yaml)
+        run: cosign sign --yes "${REGISTRY}/${IMAGE_OWNER}/${UNIT}@${DIGEST}"
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_OWNER: ${{ env.IMAGE_OWNER }}
+          UNIT: ${{ matrix.unit }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          COSIGN_EXPERIMENTAL: "1" # keyless signing via OIDC, no key material to manage/leak
+
+      - name: Record this unit's digest for the manifest job
+        # Two things that each broke a dry-run of this workflow during F3's
+        # local testing (docs/release/IMPLEMENTATION-STATUS.md fase F3):
+        # (1) the variable name must be a valid bash identifier — matrix.unit
+        # has hyphens ("omnira-api"), which `source`/env assignment can't use;
+        # (2) the FILE name must be unique per matrix job — three parallel
+        # jobs each writing a file called exactly "digest.env" collide once
+        # merge-multiple puts them all in one directory at download time,
+        # silently keeping only one of the three.
+        run: |
+          key=$(echo "${{ matrix.unit }}" | tr '-' '_')
+          echo "${key}=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.unit }}@${{ steps.build.outputs.digest }}" >> "digest-${{ matrix.unit }}.env"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ matrix.unit }}
+          path: digest-${{ matrix.unit }}.env
+          retention-days: 90
+
+  manifest:
+    name: Assemble, sign and self-validate the release manifest
+    needs: [vars, build-push-sign]
+    runs-on: ubuntu-latest
+    # Same gate as build-push-sign above — see its comment.
+    environment: ${{ github.event_name == 'workflow_dispatch' && 'release-signing-manual' || '' }}
+    permissions:
+      contents: write # to move refs/tags/release-candidate-latest ONLY after everything below succeeds
+      id-token: write # OIDC for cosign sign-blob and attest-build-provenance on the manifest file
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.vars.outputs.resolved_sha }} # the exact commit CI (main) validated
+          fetch-depth: 0 # needed for the ancestry check before moving release-candidate-latest, below
+          fetch-tags: true
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: digest-*
+          merge-multiple: true # safe now: digest-omnira-api.env, digest-omnira-worker.env, digest-omnira-web.env are three distinct filenames
+
+      - name: Export each unit's digest as a step-visible env var
+        run: cat digest-*.env >> "$GITHUB_ENV"
+
+      - name: Build and self-validate the manifest
+        env:
+          # needs.vars.outputs.* ultimately trace back to workflow_dispatch
+          # input text — read through env:, same rule as the vars job itself.
+          PLATFORM_VERSION: ${{ needs.vars.outputs.platform_version }}
+          FROM_VERSIONS: ${{ needs.vars.outputs.from_versions }}
+          APPROVED_BY: ${{ needs.vars.outputs.approved_by }}
+          MIGRATIONS_START_AFTER: ${{ needs.vars.outputs.migrations_start_after }}
+          MIGRATIONS_TARGET: ${{ needs.vars.outputs.last_migration }}
+          MIGRATIONS_CHECKSUM: ${{ needs.vars.outputs.checksum }}
+          COMMIT_SHA: ${{ needs.vars.outputs.resolved_sha }}
+        run: |
+          IFS=',' read -r -a from_versions_arr <<< "$FROM_VERSIONS"
+          from_version_flags=()
+          for v in "${from_versions_arr[@]}"; do
+            from_version_flags+=(--from-version "$v")
+          done
+
+          go run ./apps/releasectl/cmd/releasectl build-manifest \
+            --release-id "omnira-${PLATFORM_VERSION}" \
+            --platform-version "${PLATFORM_VERSION}" \
+            --channel candidate \
+            --repository "${{ github.repository }}" \
+            --commit-sha "${COMMIT_SHA}" \
+            --workflow-run-id "${{ github.run_id }}" \
+            --artifact "omnira-api=${omnira_api}" \
+            --artifact "omnira-worker=${omnira_worker}" \
+            --artifact "omnira-web=${omnira_web}" \
+            "${from_version_flags[@]}" \
+            --min-agent-protocol 1 \
+            --database-strategy expand_then_contract_later \
+            --migrations-start-after "${MIGRATIONS_START_AFTER}" \
+            --migrations-target "${MIGRATIONS_TARGET}" \
+            --migrations-checksum "${MIGRATIONS_CHECKSUM}" \
+            --rollout-workload omnira-api --rollout-workload omnira-worker --rollout-workload omnira-web \
+            --recovery-class R1 \
+            --approved-by "${APPROVED_BY}" \
+            --out release-manifest.json
+          # modules_changed is deliberately omitted here (defaults to []):
+          # this build has no planner yet (F6) to compute a real diff of
+          # which module_ids changed since the previous release — every
+          # build today packages all three workloads together regardless.
+          # See docs/release/IMPLEMENTATION-STATUS.md fase F3.
+          go run ./apps/releasectl/cmd/releasectl validate-manifest --file release-manifest.json
+
+      - name: Attest build provenance for the MANIFEST itself (not just the images)
+        # release/policies/signing.yaml's trust chain covers the exact
+        # content of the release — compatibility, migrations, recovery
+        # class and approval all live in this file, not in any image layer.
+        # An unsigned manifest would let that metadata be tampered with
+        # while every image signature stayed valid.
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
+        with:
+          subject-path: release-manifest.json
+
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign the manifest (fallback mechanism — release/policies/signing.yaml)
+        # --bundle (not the older separate --output-signature/--output-
+        # certificate, which this cosign version does not have — confirmed
+        # against the real `cosign sign-blob --help` during F3's local
+        # testing, see docs/release/IMPLEMENTATION-STATUS.md) writes one
+        # file with everything `cosign verify-blob --bundle` needs.
+        run: cosign sign-blob --yes --bundle release-manifest.json.bundle release-manifest.json
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-manifest
+          path: |
+            release-manifest.json
+            release-manifest.json.bundle
+          retention-days: 90
+
+      - name: Move release-candidate-latest to this commit (only reached if everything above succeeded)
+        # This tag is the whole baseline mechanism above (`vars` job):
+        # moving it ONLY here, as the very last step, means it always points
+        # at a commit that fully built, scanned, signed and validated as a
+        # candidate — never a commit that merely passed CI (main) but then
+        # failed somewhere in this workflow. force-pushing a single
+        # lightweight tag the workflow itself owns end-to-end; never touches
+        # any branch.
+        #
+        # Ancestry check (achado da revisão independente Codex, F3): a
+        # manual dispatch for an OLDER allowed ref (an old release tag, or a
+        # re-run against a commit that isn't the newest), or any build that
+        # simply finishes later than a newer one, must never move this tag
+        # BACKWARDS — the next run's migration baseline comes from whatever
+        # this tag points at, and global concurrency (this workflow's
+        # `concurrency:` block) only prevents two runs writing at once, not
+        # an older one writing after a newer one already advanced it.
+        env:
+          RESOLVED_SHA: ${{ needs.vars.outputs.resolved_sha }}
+        run: |
+          current_sha=$(git rev-parse --verify -q 'refs/tags/release-candidate-latest^{commit}' 2>/dev/null || true)
+          if [ -n "$current_sha" ] && ! git merge-base --is-ancestor "$current_sha" "$RESOLVED_SHA"; then
+            echo "::warning::refusing to move release-candidate-latest backwards: current=${current_sha}, this build=${RESOLVED_SHA} is not a descendant of it. The images/manifest built and signed above are still valid for ${RESOLVED_SHA} itself — only the shared 'latest' baseline pointer is left untouched."
+            exit 0
+          fi
+          git tag -f release-candidate-latest "${RESOLVED_SHA}"
+          git push origin refs/tags/release-candidate-latest --force
