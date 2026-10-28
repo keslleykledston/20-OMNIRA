@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -162,9 +163,9 @@ func TestOpenAIGenerator_ServerError(t *testing.T) {
 }
 
 func TestOpenAIGenerator_Timeout_NoRetry(t *testing.T) {
-	callCount := 0
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		callCount.Add(1)
 		time.Sleep(50 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(successBody))
@@ -182,8 +183,8 @@ func TestOpenAIGenerator_Timeout_NoRetry(t *testing.T) {
 	// automatic retries (PRODUCT.7C1 §12) — this is a property of the
 	// implementation choice (net/http directly, no vendor SDK), verified
 	// here rather than assumed.
-	if callCount != 1 {
-		t.Fatalf("server received %d requests, want exactly 1 (no automatic retry)", callCount)
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("server received %d requests, want exactly 1 (no automatic retry)", got)
 	}
 }
 
