@@ -31,7 +31,24 @@ func New(t *testing.T) *Env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := pgxpool.New(ctx, appURL)
+	// A tenant-session call (platformdb.WithTenantSession) holds one App
+	// connection for its whole duration, and a servicectx two-phase external
+	// call (InNewTransaction) acquires a SECOND App connection while the
+	// first is still held — both from this same pool. A test that fires N
+	// concurrent tenant-session calls can need up to 2N simultaneous
+	// connections; the library default (max(4, NumCPU)) starves and the
+	// whole batch stalls until each caller's context deadline fires (see
+	// apps/worker/cmd/omnira-worker/main.go's identical MaxConns floor for
+	// the same structural reason).
+	appCfg, err := pgxpool.ParseConfig(appURL)
+	if err != nil {
+		seed.Close()
+		t.Fatal(err)
+	}
+	if appCfg.MaxConns < 32 {
+		appCfg.MaxConns = 32
+	}
+	app, err := pgxpool.NewWithConfig(ctx, appCfg)
 	if err != nil {
 		seed.Close()
 		t.Fatal(err)
