@@ -79,7 +79,9 @@ func (s *fakeStore) EnsureReservedProviderMessageID(ctx context.Context, _ uuid.
 	if existing != "" {
 		return existing, nil
 	}
+	s.mu.Lock()
 	s.reserveCalls++
+	s.mu.Unlock()
 	candidate, err := generate(ctx)
 	if err != nil {
 		return "", err
