@@ -1,6 +1,7 @@
 import clsx from 'clsx'
+import { Badge } from '../primitives'
 import type { Group } from '../../lib/groups'
-import { groupPreview } from '../../lib/groupModel'
+import { GROUP_PURPOSE_BADGE_VARIANT, GROUP_PURPOSE_LABEL, groupPreview } from '../../lib/groupModel'
 import { inboxTimeLabel } from '../../lib/inboxModel'
 
 interface Props {
@@ -8,10 +9,12 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   isLoading: boolean
+  /** Shown only when the tenant runs more than one WhatsApp instance — otherwise it is always the same, and noise. */
+  showInstanceLabel?: boolean
 }
 
 // Compact rows like the Inbox, but a group has no wait, no assignee and no status: just who spoke last.
-export function GroupList({ groups, selectedId, onSelect, isLoading }: Props) {
+export function GroupList({ groups, selectedId, onSelect, isLoading, showInstanceLabel }: Props) {
   if (isLoading) return <div className="p-4 text-center text-sm text-text-secondary">Carregando...</div>
   return (
     <ul>
@@ -35,6 +38,15 @@ export function GroupList({ groups, selectedId, onSelect, isLoading }: Props) {
                 <time dateTime={g.last_message_at ?? undefined} className="flex-shrink-0 text-[11px] tabular-nums text-text-tertiary">
                   {inboxTimeLabel(g.last_message_at ?? undefined)}
                 </time>
+              </span>
+              <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                <Badge variant={GROUP_PURPOSE_BADGE_VARIANT[g.purpose]} size="sm">
+                  {GROUP_PURPOSE_LABEL[g.purpose]}
+                </Badge>
+                {g.account_name && <span className="truncate text-[11px] text-text-tertiary">{g.account_name}</span>}
+                {showInstanceLabel && g.connection_account && (
+                  <span className="truncate text-[11px] text-text-tertiary">· {g.connection_account}</span>
+                )}
               </span>
               <span className="block truncate text-xs text-text-secondary">{groupPreview(g)}</span>
             </span>

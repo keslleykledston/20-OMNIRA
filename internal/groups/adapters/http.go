@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"sort"
@@ -24,10 +25,13 @@ import (
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-// Directory lists the groups of the tenant's WhatsApp account, so an administrator can choose which
-// ones to read. It also names the connection the groups belong to.
+// Directory lists the groups of ONE of the tenant's WhatsApp connections, so an administrator can choose
+// which ones to read. A tenant may run more than one WhatsApp instance (several numbers/instâncias) at
+// once; their groups are never merged into a single pool. connectionID uuid.Nil asks the directory to pick
+// the tenant's single active connection (ErrAmbiguousConnection if there is more than one); a non-nil id
+// asks for exactly that connection (ErrNoConnection if it is not an active connection of THIS tenant).
 type Directory interface {
-	List(ctx context.Context, tenantID uuid.UUID) (connectionID uuid.UUID, groups []channeldomain.ProviderGroup, err error)
+	List(ctx context.Context, tenantID, connectionID uuid.UUID) (resolvedConnectionID uuid.UUID, groups []channeldomain.ProviderGroup, err error)
 }
 
 // Errors a Directory may return; the handler maps them to HTTP statuses.
@@ -48,6 +52,16 @@ const (
 	enabledListCap   = 500
 )
 
+// groupPurposes is the closed list an administrator picks from (migration 000176). Never guessed from
+// participants — that is conversation_kind's job; purpose is always an explicit choice.
+var groupPurposes = map[string]bool{
+	"client_management":   true,
+	"client_support":      true,
+	"internal_management": true,
+	"internal_team":       true,
+	"other":               true,
+}
+
 // Handler serves the group APIs. Authorization is the role->permission matrix of an ACTIVE
 // membership (never a role name) on top of RLS, which scopes every row to the tenant.
 type Handler struct {
@@ -56,8 +70,15 @@ type Handler struct {
 	dir   Directory
 
 	mu    sync.Mutex
-	cache map[uuid.UUID]directoryEntry
+	cache map[directoryCacheKey]directoryEntry
 	now   func() time.Time
+}
+
+// directoryCacheKey separates the cache by WHICH connection was asked for: two WhatsApp instances of the
+// same tenant have different group lists and must never share a cache entry.
+type directoryCacheKey struct {
+	tenant uuid.UUID
+	hint   uuid.UUID
 }
 
 type directoryEntry struct {
@@ -67,7 +88,7 @@ type directoryEntry struct {
 }
 
 func NewHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository, dir Directory) *Handler {
-	return &Handler{pool: pool, audit: audit, dir: dir, cache: map[uuid.UUID]directoryEntry{}, now: time.Now}
+	return &Handler{pool: pool, audit: audit, dir: dir, cache: map[directoryCacheKey]directoryEntry{}, now: time.Now}
 }
 
 // ---- shapes
@@ -80,11 +101,25 @@ type lastMessage struct {
 }
 
 type groupItem struct {
-	ID            uuid.UUID    `json:"id"`
-	Name          string       `json:"name"`
-	Enabled       bool         `json:"enabled"`
-	LastMessageAt *time.Time   `json:"last_message_at"`
-	LastMessage   *lastMessage `json:"last_message"`
+	ID                uuid.UUID    `json:"id"`
+	Name              string       `json:"name"`
+	Enabled           bool         `json:"enabled"`
+	Purpose           string       `json:"purpose"`
+	AccountID         *uuid.UUID   `json:"account_id"`
+	AccountName       *string      `json:"account_name"`
+	ConnectionID      uuid.UUID    `json:"connection_id"`
+	ConnectionAccount string       `json:"connection_account"`
+	AIObserverEnabled bool         `json:"ai_observer_enabled"`
+	LastMessageAt     *time.Time   `json:"last_message_at"`
+	LastMessage       *lastMessage `json:"last_message"`
+}
+
+// suggestionItem is the AI observer's suggestion for one message (ADR-0055) — never anything acted on, just
+// shown to whoever already has group.read so a human can review it.
+type suggestionItem struct {
+	Category   string  `json:"category"`
+	Summary    string  `json:"summary"`
+	Confidence float64 `json:"confidence"`
 }
 
 type availableItem struct {
@@ -96,12 +131,13 @@ type availableItem struct {
 }
 
 type messageItem struct {
-	ID          uuid.UUID `json:"id"`
-	AuthorName  string    `json:"author_name"`
-	FromMe      bool      `json:"from_me"`
-	MessageType string    `json:"message_type"`
-	Body        string    `json:"body"`
-	SentAt      time.Time `json:"sent_at"`
+	ID          uuid.UUID       `json:"id"`
+	AuthorName  string          `json:"author_name"`
+	FromMe      bool            `json:"from_me"`
+	MessageType string          `json:"message_type"`
+	Body        string          `json:"body"`
+	SentAt      time.Time       `json:"sent_at"`
+	Suggestion  *suggestionItem `json:"suggestion"`
 }
 
 // ---- helpers
@@ -158,11 +194,14 @@ func (h *Handler) record(r *http.Request, tc *tenancydomain.TenantContext, id uu
 	_ = h.audit.Store(r.Context(), ev)
 }
 
-// directory returns the WhatsApp account's groups, cached per tenant for a minute: the provider's
-// answer lists every participant of every group and is heavy.
-func (h *Handler) directory(ctx context.Context, tenantID uuid.UUID) (uuid.UUID, []channeldomain.ProviderGroup, error) {
+// directory returns one connection's WhatsApp groups, cached for a minute per (tenant, hint): the
+// provider's answer lists every participant of every group and is heavy. hint is uuid.Nil to let the
+// directory pick the tenant's single active connection, or a specific connection id to disambiguate when
+// the tenant runs more than one WhatsApp instance at once.
+func (h *Handler) directory(ctx context.Context, tenantID, hint uuid.UUID) (uuid.UUID, []channeldomain.ProviderGroup, error) {
+	key := directoryCacheKey{tenant: tenantID, hint: hint}
 	h.mu.Lock()
-	if e, ok := h.cache[tenantID]; ok && h.now().Sub(e.at) < directoryTTL {
+	if e, ok := h.cache[key]; ok && h.now().Sub(e.at) < directoryTTL {
 		h.mu.Unlock()
 		return e.conn, e.groups, nil
 	}
@@ -170,14 +209,25 @@ func (h *Handler) directory(ctx context.Context, tenantID uuid.UUID) (uuid.UUID,
 	if h.dir == nil {
 		return uuid.Nil, nil, ErrNoConnection
 	}
-	conn, groups, err := h.dir.List(ctx, tenantID)
+	conn, groups, err := h.dir.List(ctx, tenantID, hint)
 	if err != nil {
 		return uuid.Nil, nil, err
 	}
 	h.mu.Lock()
-	h.cache[tenantID] = directoryEntry{at: h.now(), conn: conn, groups: groups}
+	h.cache[key] = directoryEntry{at: h.now(), conn: conn, groups: groups}
 	h.mu.Unlock()
 	return conn, groups, nil
+}
+
+// connectionHint reads an optional connection_id query/body value, used to pick which WhatsApp instance's
+// groups to work with when a tenant runs more than one at once. Empty means "let the directory decide"
+// (uuid.Nil); an invalid id is reported to the caller rather than silently ignored.
+func connectionHint(raw string) (uuid.UUID, bool) {
+	if raw == "" {
+		return uuid.Nil, true
+	}
+	id, err := uuid.Parse(raw)
+	return id, err == nil
 }
 
 func directoryError(w http.ResponseWriter, err error) {
@@ -192,8 +242,11 @@ func directoryError(w http.ResponseWriter, err error) {
 }
 
 const groupSelect = `
-	SELECT g.id, g.name, g.enabled, g.last_message_at, lm.author_name, lm.from_me, lm.message_type, left(lm.body, 160)
+	SELECT g.id, g.name, g.enabled, g.purpose, g.account_id, ca.name, g.channel_connection_id, cc.external_account_id,
+	       g.ai_observer_enabled, g.last_message_at, lm.author_name, lm.from_me, lm.message_type, left(lm.body, 160)
 	FROM wa_groups g
+	LEFT JOIN customer_accounts ca ON ca.tenant_id = g.tenant_id AND ca.id = g.account_id
+	LEFT JOIN channel_connections cc ON cc.tenant_id = g.tenant_id AND cc.id = g.channel_connection_id
 	LEFT JOIN LATERAL (
 	  -- the author shows under the team's alias when the participant is a known contact
 	  SELECT COALESCE(NULLIF(ct.alias, ''), m.author_name) AS author_name, m.from_me, m.message_type, m.body FROM wa_group_messages m
@@ -206,7 +259,8 @@ func scanGroup(row pgx.Row) (groupItem, error) {
 	var it groupItem
 	var author, mtype, preview *string
 	var fromMe *bool
-	if err := row.Scan(&it.ID, &it.Name, &it.Enabled, &it.LastMessageAt, &author, &fromMe, &mtype, &preview); err != nil {
+	if err := row.Scan(&it.ID, &it.Name, &it.Enabled, &it.Purpose, &it.AccountID, &it.AccountName, &it.ConnectionID, &it.ConnectionAccount,
+		&it.AIObserverEnabled, &it.LastMessageAt, &author, &fromMe, &mtype, &preview); err != nil {
 		return it, err
 	}
 	if author != nil && fromMe != nil && mtype != nil && preview != nil {
@@ -217,15 +271,40 @@ func scanGroup(row pgx.Row) (groupItem, error) {
 
 // ---- handlers
 
-// List returns the groups an administrator enabled, most recently active first.
+// List returns the groups an administrator enabled, most recently active first. account_id=<uuid> narrows
+// to one client's groups; account_id=none finds the ones nobody has linked to a client yet. connection_id
+// narrows to one WhatsApp instance, for a tenant running more than one at once — their groups are never
+// merged into a single pool.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	tc, ok := h.session(w, r, permRead)
 	if !ok {
 		return
 	}
+	args := []any{tc.TenantID}
+	where := "g.tenant_id = $1 AND g.enabled"
+	if v := r.URL.Query().Get("account_id"); v != "" {
+		if v == "none" {
+			where += " AND g.account_id IS NULL"
+		} else if id, err := uuid.Parse(v); err == nil {
+			args = append(args, id)
+			where += fmt.Sprintf(" AND g.account_id = $%d", len(args))
+		} else {
+			http.Error(w, "invalid account_id", http.StatusBadRequest)
+			return
+		}
+	}
+	if v := r.URL.Query().Get("connection_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			http.Error(w, "invalid connection_id", http.StatusBadRequest)
+			return
+		}
+		args = append(args, id)
+		where += fmt.Sprintf(" AND g.channel_connection_id = $%d", len(args))
+	}
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(),
-		groupSelect+` WHERE g.tenant_id = $1 AND g.enabled
-		ORDER BY g.last_message_at DESC NULLS LAST, lower(g.name), g.id LIMIT `+strconv.Itoa(enabledListCap), tc.TenantID)
+		groupSelect+` WHERE `+where+`
+		ORDER BY g.last_message_at DESC NULLS LAST, lower(g.name), g.id LIMIT `+strconv.Itoa(enabledListCap), args...)
 	if err != nil {
 		http.Error(w, "failed to list groups", http.StatusInternalServerError)
 		return
@@ -247,7 +326,9 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
 }
 
-// Available lists the WhatsApp account's groups (name search, capped) with whether each is enabled.
+// Available lists ONE WhatsApp instance's groups (name search, capped) with whether each is enabled.
+// connection_id picks which instance when the tenant has more than one active; omitted, it works as before
+// (the tenant's single active connection, or 409 if there is more than one and no connection_id was given).
 func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
 	tc, ok := h.session(w, r, permManage)
 	if !ok {
@@ -267,7 +348,12 @@ func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid search", http.StatusBadRequest)
 		return
 	}
-	conn, groups, err := h.directory(r.Context(), tc.TenantID)
+	hint, ok := connectionHint(r.URL.Query().Get("connection_id"))
+	if !ok {
+		http.Error(w, "invalid connection_id", http.StatusBadRequest)
+		return
+	}
+	conn, groups, err := h.directory(r.Context(), tc.TenantID, hint)
 	if err != nil {
 		directoryError(w, err)
 		return
@@ -317,11 +403,12 @@ func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": matches, "count": len(matches), "total": total})
+	writeJSON(w, http.StatusOK, map[string]any{"items": matches, "count": len(matches), "total": total, "connection_id": conn})
 }
 
 // Enable starts reading a group. The group must exist in the tenant's own WhatsApp account, which
-// also gives its name; enabling an already known group keeps its history.
+// also gives its name; enabling an already known group keeps its history. connection_id picks which
+// instance when the tenant has more than one active WhatsApp connection (same rule as Available).
 func (h *Handler) Enable(w http.ResponseWriter, r *http.Request) {
 	tc, ok := h.session(w, r, permManage)
 	if !ok {
@@ -329,6 +416,7 @@ func (h *Handler) Enable(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		ProviderGroupID *string `json:"provider_group_id"`
+		ConnectionID    *string `json:"connection_id"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -336,7 +424,16 @@ func (h *Handler) Enable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "provider_group_id must be a WhatsApp group id", http.StatusBadRequest)
 		return
 	}
-	conn, groups, err := h.directory(r.Context(), tc.TenantID)
+	hint := uuid.Nil
+	if req.ConnectionID != nil {
+		id, err := uuid.Parse(*req.ConnectionID)
+		if err != nil {
+			http.Error(w, "connection_id must be a valid id", http.StatusBadRequest)
+			return
+		}
+		hint = id
+	}
+	conn, groups, err := h.directory(r.Context(), tc.TenantID, hint)
 	if err != nil {
 		directoryError(w, err)
 		return
@@ -382,8 +479,11 @@ func (h *Handler) Enable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, it)
 }
 
-// SetEnabled turns reading on or off for a known group. Off stops storing new messages; the history
-// stays (deleting it is a separate, explicit action).
+// SetEnabled turns reading on or off for a known group, changes its manual purpose tag, and/or turns the AI
+// observer (ADR-0055) on or off — any subset of the three fields at once. Turning reading off stops storing
+// new messages; the history stays (deleting it is a separate, explicit action). purpose is never guessed: an
+// administrator picks it from the closed list. The AI observer can never be turned on for a group whose
+// reading ends up off in the same request — there would be nothing left to observe.
 func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 	tc, ok := h.session(w, r, permManage)
 	if !ok {
@@ -394,17 +494,25 @@ func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Enabled *bool `json:"enabled"`
+		Enabled           *bool   `json:"enabled"`
+		Purpose           *string `json:"purpose"`
+		AIObserverEnabled *bool   `json:"ai_observer_enabled"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || req.Enabled == nil {
-		http.Error(w, "enabled must be true or false", http.StatusBadRequest)
+	if err := dec.Decode(&req); err != nil || (req.Enabled == nil && req.Purpose == nil && req.AIObserverEnabled == nil) {
+		http.Error(w, "enabled, purpose and/or ai_observer_enabled must be set", http.StatusBadRequest)
+		return
+	}
+	if req.Purpose != nil && !groupPurposes[*req.Purpose] {
+		http.Error(w, "invalid purpose", http.StatusBadRequest)
 		return
 	}
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
-	var prev bool
-	err := q.QueryRow(r.Context(), `SELECT enabled FROM wa_groups WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, id).Scan(&prev)
+	var prevEnabled, prevAIObserver bool
+	var prevPurpose string
+	err := q.QueryRow(r.Context(), `SELECT enabled, purpose, ai_observer_enabled FROM wa_groups WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, id).
+		Scan(&prevEnabled, &prevPurpose, &prevAIObserver)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "group not found", http.StatusNotFound)
 		return
@@ -413,20 +521,52 @@ func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read group", http.StatusInternalServerError)
 		return
 	}
-	if prev != *req.Enabled {
+	newEnabled, newPurpose, newAIObserver := prevEnabled, prevPurpose, prevAIObserver
+	if req.Enabled != nil {
+		newEnabled = *req.Enabled
+	}
+	if req.Purpose != nil {
+		newPurpose = *req.Purpose
+	}
+	if req.AIObserverEnabled != nil {
+		newAIObserver = *req.AIObserverEnabled
+	}
+	if newAIObserver && !newEnabled {
+		http.Error(w, "ai_observer_enabled requires the group to be reading (enabled)", http.StatusBadRequest)
+		return
+	}
+	enabledChanged, purposeChanged, aiObserverChanged := newEnabled != prevEnabled, newPurpose != prevPurpose, newAIObserver != prevAIObserver
+	if enabledChanged || purposeChanged || aiObserverChanged {
 		if _, err := q.Exec(r.Context(), `
-			UPDATE wa_groups SET enabled = $3, updated_at = now(),
-			  enabled_by = CASE WHEN $3 THEN $4::uuid ELSE enabled_by END,
-			  enabled_at = CASE WHEN $3 THEN now() ELSE enabled_at END
-			WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id, *req.Enabled, tc.ActorID); err != nil {
+			UPDATE wa_groups SET enabled = $3, purpose = $4, ai_observer_enabled = $8, updated_at = now(),
+			  enabled_by = CASE WHEN $3 AND NOT $5 THEN $6::uuid ELSE enabled_by END,
+			  enabled_at = CASE WHEN $3 AND NOT $5 THEN now() ELSE enabled_at END,
+			  purpose_set_by = CASE WHEN $7 THEN $6::uuid ELSE purpose_set_by END,
+			  purpose_set_at = CASE WHEN $7 THEN now() ELSE purpose_set_at END,
+			  ai_observer_set_by = CASE WHEN $9 THEN $6::uuid ELSE ai_observer_set_by END,
+			  ai_observer_set_at = CASE WHEN $9 THEN now() ELSE ai_observer_set_at END
+			WHERE tenant_id = $1 AND id = $2`,
+			tc.TenantID, id, newEnabled, newPurpose, prevEnabled, tc.ActorID, purposeChanged, newAIObserver, aiObserverChanged); err != nil {
 			http.Error(w, "failed to save group", http.StatusInternalServerError)
 			return
 		}
-		action := auditdomain.ActionGroupDisabled
-		if *req.Enabled {
-			action = auditdomain.ActionGroupEnabled
+		if enabledChanged {
+			action := auditdomain.ActionGroupDisabled
+			if newEnabled {
+				action = auditdomain.ActionGroupEnabled
+			}
+			h.record(r, tc, id, action, map[string]any{"created": false})
 		}
-		h.record(r, tc, id, action, map[string]any{"created": false})
+		if purposeChanged {
+			h.record(r, tc, id, auditdomain.ActionGroupPurposeSet, map[string]any{"from": prevPurpose, "to": newPurpose})
+		}
+		if aiObserverChanged {
+			action := auditdomain.ActionGroupAIObserverDisabled
+			if newAIObserver {
+				action = auditdomain.ActionGroupAIObserverEnabled
+			}
+			h.record(r, tc, id, action, map[string]any{})
+		}
 	}
 	it, err := scanGroup(q.QueryRow(r.Context(), groupSelect+` WHERE g.tenant_id = $1 AND g.id = $2`, tc.TenantID, id))
 	if err != nil {
@@ -480,9 +620,12 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	args = append(args, opts.Limit+1)
 	rows, err := q.Query(r.Context(), `
-		SELECT m.id, COALESCE(NULLIF(ct.alias, ''), m.author_name), m.from_me, m.message_type, m.body, m.sent_at FROM wa_group_messages m
+		SELECT m.id, COALESCE(NULLIF(ct.alias, ''), m.author_name), m.from_me, m.message_type, m.body, m.sent_at,
+		       s.category, s.summary, s.confidence
+		FROM wa_group_messages m
 		LEFT JOIN channel_participants cp ON cp.tenant_id = m.tenant_id AND cp.id = m.sender_channel_participant_id
 		LEFT JOIN contacts ct ON ct.tenant_id = cp.tenant_id AND ct.id = cp.contact_id
+		LEFT JOIN wa_group_message_suggestions s ON s.tenant_id = m.tenant_id AND s.group_message_id = m.id
 		WHERE `+where+` ORDER BY m.sent_at DESC, m.id DESC LIMIT $`+strconv.Itoa(len(args)), args...)
 	if err != nil {
 		http.Error(w, "failed to list messages", http.StatusInternalServerError)
@@ -493,9 +636,15 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	var last messageItem
 	// Check the limit BEFORE rows.Next(): the extra row (LIMIT n+1) must stay for the hasMore probe.
 	for len(items) < opts.Limit && rows.Next() {
-		if err := rows.Scan(&last.ID, &last.AuthorName, &last.FromMe, &last.MessageType, &last.Body, &last.SentAt); err != nil {
+		var category, summary *string
+		var confidence *float64
+		last.Suggestion = nil
+		if err := rows.Scan(&last.ID, &last.AuthorName, &last.FromMe, &last.MessageType, &last.Body, &last.SentAt, &category, &summary, &confidence); err != nil {
 			http.Error(w, "failed to read messages", http.StatusInternalServerError)
 			return
+		}
+		if category != nil {
+			last.Suggestion = &suggestionItem{Category: *category, Summary: *summary, Confidence: *confidence}
 		}
 		items = append(items, last)
 	}
@@ -542,4 +691,105 @@ func (h *Handler) DeleteHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	h.record(r, tc, id, auditdomain.ActionGroupHistoryDeleted, map[string]any{"deleted": tag.RowsAffected()})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": tag.RowsAffected()})
+}
+
+// LinkAccount sets which "cliente final" (customer_accounts, ADR-0018) a group belongs to, reusing the
+// company registry that already exists instead of letting a group carry its own copy of the name. The
+// account must exist in the SAME tenant; a group may belong to at most one account at a time (linking again
+// replaces the previous one). Idempotent: linking the account already set changes nothing and is not re-audited.
+func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
+	tc, ok := h.session(w, r, permManage)
+	if !ok {
+		return
+	}
+	id, ok := groupID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		AccountID *string `json:"account_id"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	accountID, err := func() (uuid.UUID, error) {
+		if err := dec.Decode(&req); err != nil || req.AccountID == nil {
+			return uuid.Nil, errors.New("account_id is required")
+		}
+		return uuid.Parse(*req.AccountID)
+	}()
+	if err != nil {
+		http.Error(w, "account_id must be a valid id", http.StatusBadRequest)
+		return
+	}
+	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+	var prev *uuid.UUID
+	if err := q.QueryRow(r.Context(), `SELECT account_id FROM wa_groups WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, id).Scan(&prev); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "group not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	var accountExists bool
+	if err := q.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM customer_accounts WHERE tenant_id = $1 AND id = $2)`, tc.TenantID, accountID).Scan(&accountExists); err != nil {
+		http.Error(w, "failed to read account", http.StatusInternalServerError)
+		return
+	}
+	if !accountExists {
+		http.Error(w, "account not found", http.StatusNotFound)
+		return
+	}
+	if prev == nil || *prev != accountID {
+		if _, err := q.Exec(r.Context(), `
+			UPDATE wa_groups SET account_id = $3, account_set_by = $4, account_set_at = now(), updated_at = now()
+			WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id, accountID, tc.ActorID); err != nil {
+			http.Error(w, "failed to save group", http.StatusInternalServerError)
+			return
+		}
+		h.record(r, tc, id, auditdomain.ActionGroupAccountLinked, map[string]any{"account_id": accountID})
+	}
+	it, err := scanGroup(q.QueryRow(r.Context(), groupSelect+` WHERE g.tenant_id = $1 AND g.id = $2`, tc.TenantID, id))
+	if err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// UnlinkAccount removes a group's "cliente final" link, leaving it unlinked (found by List's
+// account_id=none filter) until someone links it again. Idempotent; a no-op is not audited.
+func (h *Handler) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
+	tc, ok := h.session(w, r, permManage)
+	if !ok {
+		return
+	}
+	id, ok := groupID(w, r)
+	if !ok {
+		return
+	}
+	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+	var prev *uuid.UUID
+	if err := q.QueryRow(r.Context(), `SELECT account_id FROM wa_groups WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, id).Scan(&prev); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "group not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	if prev != nil {
+		if _, err := q.Exec(r.Context(), `
+			UPDATE wa_groups SET account_id = NULL, updated_at = now() WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id); err != nil {
+			http.Error(w, "failed to save group", http.StatusInternalServerError)
+			return
+		}
+		h.record(r, tc, id, auditdomain.ActionGroupAccountUnlinked, map[string]any{"account_id": *prev})
+	}
+	it, err := scanGroup(q.QueryRow(r.Context(), groupSelect+` WHERE g.tenant_id = $1 AND g.id = $2`, tc.TenantID, id))
+	if err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
 }

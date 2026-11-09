@@ -34,6 +34,8 @@ import (
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	flowsapplication "github.com/omnira/omnira/internal/flows/application"
 	flowsports "github.com/omnira/omnira/internal/flows/ports"
+	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
+	groupsapp "github.com/omnira/omnira/internal/groups/application"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
 	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
@@ -517,6 +519,27 @@ func main() {
 		}
 		defer intelligenceConsumer.Stop()
 		log.Printf("Conversation Intelligence pipeline started (auto routing=%v)\n", intelligenceFlags.TopicAutoRoutingEnabled)
+	}
+
+	// Group AI observer (ADR-0055): suggest-only classification of WhatsApp group messages, never applied,
+	// never sent anywhere. Deliberately its own flag and its own small poller, NOT a branch of the
+	// Conversation Intelligence pipeline above — that pipeline's AI step (TopicAIRoutingEnabled) is a single
+	// global switch that would also turn AI classification on for every tenant's 1:1 conversations, not just
+	// the one group an administrator opted in (wa_groups.ai_observer_enabled). Off unless BOTH this flag and
+	// a group's own opt-in are true, so no AI call ever happens for a tenant that never asked for it.
+	if os.Getenv("OMNIRA_GROUP_AI_OBSERVER_ENABLED") == "true" {
+		if !cfg.AIReady() {
+			log.Printf("Group AI observer disabled: OMNIRA_AI_* is not configured\n")
+		} else if gen, gerr := aiadapters.NewTextGenerator(cfg.AIProvider, cfg.AIAPIKey, cfg.AIModel, time.Duration(cfg.AITimeoutSeconds)*time.Second); gerr != nil {
+			log.Printf("Group AI observer disabled: %v\n", gerr)
+		} else {
+			observerCfg := groupsapp.Config{Provider: cfg.AIProvider, Model: cfg.AIModel, MaxOutputTokens: 200, Timeout: time.Duration(cfg.AITimeoutSeconds) * time.Second}
+			observer := groupsapp.NewService(groupsadapters.NewPostgresObserverRepository(dbPool), gen, observerCfg, nil)
+			go observer.Run(workerCtx, 5*time.Second)
+			log.Printf("Group AI observer started (provider=%s, suggest-only, per-group opt-in)\n", cfg.AIProvider)
+		}
+	} else {
+		log.Printf("Group AI observer disabled (OMNIRA_GROUP_AI_OBSERVER_ENABLED != true)\n")
 	}
 
 	// Flow Builder runtime (ADR-0019), only when OMNIRA_FLOWS_ENABLED=true: the inbound-message consumer and the sweeper for

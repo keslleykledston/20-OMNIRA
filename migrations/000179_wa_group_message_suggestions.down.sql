@@ -1,0 +1,1 @@
+DROP TABLE wa_group_message_suggestions;

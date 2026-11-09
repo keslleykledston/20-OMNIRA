@@ -16,6 +16,12 @@ const group = (over: Partial<Group> = {}): Group => ({
   id: 'g-1',
   name: '0 - K3G Solutions Oficial',
   enabled: true,
+  purpose: 'other',
+  account_id: null,
+  account_name: null,
+  connection_id: 'c-1',
+  connection_account: '559200000000',
+  ai_observer_enabled: false,
   last_message_at: new Date().toISOString(),
   last_message: { author_name: 'Rafael', from_me: false, message_type: 'text', preview: 'certo' },
   ...over,
@@ -27,6 +33,7 @@ const msg = (id: string, minAgo: number, over: Partial<GroupMessage> = {}): Grou
   message_type: 'text',
   body: `texto ${id}`,
   sent_at: new Date(Date.now() - minAgo * 60_000).toISOString(),
+  suggestion: null,
   ...over,
 })
 

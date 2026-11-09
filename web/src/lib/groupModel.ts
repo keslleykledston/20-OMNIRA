@@ -1,4 +1,41 @@
-import type { Group, GroupMessage, GroupMessageType } from './groups'
+import type { Group, GroupMessage, GroupMessageType, GroupPurpose, GroupSuggestionCategory } from './groups'
+
+export const GROUP_PURPOSE_LABEL: Record<GroupPurpose, string> = {
+  client_management: 'Cliente · Gestão',
+  client_support: 'Cliente · Atendimento',
+  internal_management: 'Interno · Gestão',
+  internal_team: 'Interno · Equipe',
+  other: 'Outros',
+}
+
+export const GROUP_PURPOSE_BADGE_VARIANT: Record<GroupPurpose, 'default' | 'success' | 'warning' | 'info'> = {
+  client_management: 'info',
+  client_support: 'success',
+  internal_management: 'warning',
+  internal_team: 'default',
+  other: 'default',
+}
+
+export const GROUP_PURPOSE_OPTIONS: { value: GroupPurpose; label: string }[] = (
+  ['client_management', 'client_support', 'internal_management', 'internal_team', 'other'] as GroupPurpose[]
+).map((value) => ({ value, label: GROUP_PURPOSE_LABEL[value] }))
+
+// Suggestion left by the AI observer (ADR-0055) — a hint for a human to review, never acted on.
+export const GROUP_SUGGESTION_LABEL: Record<GroupSuggestionCategory, string> = {
+  request: 'Pedido',
+  complaint: 'Reclamação',
+  question: 'Dúvida',
+  info: 'Informativo',
+  other: 'Outro',
+}
+
+export const GROUP_SUGGESTION_BADGE_VARIANT: Record<GroupSuggestionCategory, 'default' | 'success' | 'warning' | 'info'> = {
+  request: 'info',
+  complaint: 'warning',
+  question: 'info',
+  info: 'default',
+  other: 'default',
+}
 
 const TYPE_LABEL: Record<GroupMessageType, string> = {
   text: '',

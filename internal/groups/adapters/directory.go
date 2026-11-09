@@ -18,8 +18,10 @@ type GroupLister interface {
 	ListGroups(ctx context.Context, conn channeldomain.ChannelConnection) ([]channeldomain.ProviderGroup, error)
 }
 
-// WahaDirectory lists the groups of the tenant's single active WAHA connection. More than one
-// active connection is ambiguous and refused rather than guessed.
+// WahaDirectory lists the groups of one of the tenant's active WAHA connections. A tenant may run more
+// than one WhatsApp instance at once; connectionHint uuid.Nil picks the tenant's single active connection
+// (ambiguous and refused, rather than guessed, when there is more than one); a non-nil hint picks exactly
+// that connection, refused if it is not an active WAHA connection of THIS tenant.
 type WahaDirectory struct {
 	conns  ConnectionFinder
 	lister GroupLister
@@ -29,7 +31,7 @@ func NewWahaDirectory(conns ConnectionFinder, lister GroupLister) *WahaDirectory
 	return &WahaDirectory{conns: conns, lister: lister}
 }
 
-func (d *WahaDirectory) List(ctx context.Context, tenantID uuid.UUID) (uuid.UUID, []channeldomain.ProviderGroup, error) {
+func (d *WahaDirectory) List(ctx context.Context, tenantID, connectionHint uuid.UUID) (uuid.UUID, []channeldomain.ProviderGroup, error) {
 	all, err := d.conns.FindByTenant(ctx, tenantID)
 	if err != nil {
 		return uuid.Nil, nil, err
@@ -40,16 +42,30 @@ func (d *WahaDirectory) List(ctx context.Context, tenantID uuid.UUID) (uuid.UUID
 			active = append(active, c)
 		}
 	}
-	switch len(active) {
-	case 0:
-		return uuid.Nil, nil, ErrNoConnection
-	case 1:
-	default:
-		return uuid.Nil, nil, ErrAmbiguousConnection
+	var chosen *channeldomain.ChannelConnection
+	if connectionHint != uuid.Nil {
+		for _, c := range active {
+			if c.ID == connectionHint {
+				chosen = c
+				break
+			}
+		}
+		if chosen == nil {
+			return uuid.Nil, nil, ErrNoConnection
+		}
+	} else {
+		switch len(active) {
+		case 0:
+			return uuid.Nil, nil, ErrNoConnection
+		case 1:
+			chosen = active[0]
+		default:
+			return uuid.Nil, nil, ErrAmbiguousConnection
+		}
 	}
-	groups, err := d.lister.ListGroups(ctx, *active[0])
+	groups, err := d.lister.ListGroups(ctx, *chosen)
 	if err != nil {
 		return uuid.Nil, nil, err
 	}
-	return active[0].ID, groups, nil
+	return chosen.ID, groups, nil
 }

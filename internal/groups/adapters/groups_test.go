@@ -75,9 +75,15 @@ func (e *env) tenant() (tenant uuid.UUID, conn channeldomain.ChannelConnection) 
 		_, _ = e.seed.Exec(bg, `DELETE FROM channel_connections WHERE tenant_id=$1`, tenant)
 		_, _ = e.seed.Exec(bg, `DELETE FROM tenants WHERE id=$1`, tenant)
 	})
-	conn = channeldomain.ChannelConnection{ID: uuid.New(), TenantID: tenant, Channel: channeldomain.ChannelWhatsApp, Provider: channeldomain.ProviderWAHA, ProviderKind: channeldomain.ProviderKindUnofficial, Status: channeldomain.ConnectionStatusActive}
-	e.exec(`INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities) VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active','["text"]')`, conn.ID, tenant, conn.ID.String())
+	conn = e.connection(tenant)
 	return tenant, conn
+}
+
+// connection adds another active WAHA connection to an EXISTING tenant (a second WhatsApp instance).
+func (e *env) connection(tenant uuid.UUID) channeldomain.ChannelConnection {
+	conn := channeldomain.ChannelConnection{ID: uuid.New(), TenantID: tenant, Channel: channeldomain.ChannelWhatsApp, Provider: channeldomain.ProviderWAHA, ProviderKind: channeldomain.ProviderKindUnofficial, Status: channeldomain.ConnectionStatusActive}
+	e.exec(`INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities) VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active','["text"]')`, conn.ID, tenant, conn.ID.String())
+	return conn
 }
 
 func (e *env) member(tenant uuid.UUID, role, status string) uuid.UUID {
@@ -98,16 +104,41 @@ func (e *env) group(tenant uuid.UUID, conn channeldomain.ChannelConnection, jid,
 	return id
 }
 
+// account creates a "cliente final" (customer_accounts, ADR-0018) a group can be linked to.
+func (e *env) account(tenant uuid.UUID, name string) uuid.UUID {
+	id := uuid.New()
+	e.exec(`INSERT INTO customer_accounts(id,tenant_id,name) VALUES($1,$2,$3)`, id, tenant, name)
+	return id
+}
+
 type fakeDir struct {
 	conn   uuid.UUID
 	groups []channeldomain.ProviderGroup
 	err    error
 	calls  int
+
+	// otherActive simulates additional active connections that exist but are not conn (ambiguity testing):
+	// with no hint, List refuses with ErrAmbiguousConnection instead of silently picking one.
+	otherActive []uuid.UUID
 }
 
-func (d *fakeDir) List(_ context.Context, _ uuid.UUID) (uuid.UUID, []channeldomain.ProviderGroup, error) {
+func (d *fakeDir) List(_ context.Context, _, hint uuid.UUID) (uuid.UUID, []channeldomain.ProviderGroup, error) {
 	d.calls++
-	return d.conn, d.groups, d.err
+	if hint == uuid.Nil {
+		if len(d.otherActive) > 0 {
+			return uuid.Nil, nil, ErrAmbiguousConnection
+		}
+		return d.conn, d.groups, d.err
+	}
+	if hint == d.conn {
+		return d.conn, d.groups, d.err
+	}
+	for _, o := range d.otherActive {
+		if o == hint {
+			return o, nil, nil // a different instance: this fixture does not model its own groups
+		}
+	}
+	return uuid.Nil, nil, ErrNoConnection
 }
 
 func call(t *testing.T, pool *pgxpool.Pool, tenant, user uuid.UUID, method, target, body string, path map[string]string, fn http.HandlerFunc) *httptest.ResponseRecorder {
@@ -450,6 +481,327 @@ func TestGroupAPIPermissionsEnableDisableCursorAndDeleteAreTenantScoped(t *testi
 	}
 	if e.count(`SELECT count(*) FROM wa_groups WHERE tenant_id=$1 AND id<>$2 AND archive_purge_requested_at IS NOT NULL`, tenantB, gid) != 0 {
 		t.Fatal("tenant B's groups must not be touched")
+	}
+}
+
+// purpose (migration 000176) is a manual, closed-list tag an administrator picks per group, independent of
+// enabled/disabled and of the automatic conversation_kind. Validated, audited, tenant-scoped, idempotent.
+func TestGroupSetPurposeIsValidatedAuditedAndTenantScoped(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, _ := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	agent := e.member(tenantA, "tenant_agent", "active")
+	adminB := e.member(tenantB, "tenant_admin", "active")
+	gid := e.group(tenantA, connA, jid1, "Suporte ClienteX", true)
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	as := func(tenant, user uuid.UUID, body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodPatch, "/", body, map[string]string{"group_id": gid.String()}, h.SetEnabled)
+	}
+	audits := func(action string) int {
+		return e.count(`SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND action=$2`, tenantA, action)
+	}
+
+	// New group defaults to "other" until someone tags it.
+	if got := e.count(`SELECT count(*) FROM wa_groups WHERE id=$1 AND purpose='other'`, gid); got != 1 {
+		t.Fatalf("default purpose must be other, query matched %d rows", got)
+	}
+
+	// Validated: an unknown value is rejected before anything is written.
+	if rec := as(tenantA, admin, `{"purpose":"made_up"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid purpose: %d, want 400", rec.Code)
+	}
+
+	// Permission: group.manage only, same as enable/disable.
+	if rec := as(tenantA, agent, `{"purpose":"client_support"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("agent setting purpose: %d, want 403", rec.Code)
+	}
+
+	// Set: 200, reflected on the response, audited once with from/to.
+	var it groupItem
+	rec := as(tenantA, admin, `{"purpose":"client_support"}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &it) != nil || it.Purpose != "client_support" || !it.Enabled {
+		t.Fatalf("set purpose = %d %s", rec.Code, rec.Body.String())
+	}
+	if audits("group.purpose_set") != 1 {
+		t.Fatalf("group.purpose_set audits = %d", audits("group.purpose_set"))
+	}
+	var from, to string
+	if err := e.seed.QueryRow(e.ctx, `SELECT metadata->>'from', metadata->>'to' FROM audit_events WHERE tenant_id=$1 AND action='group.purpose_set'`, tenantA).Scan(&from, &to); err != nil || from != "other" || to != "client_support" {
+		t.Fatalf("audit from/to = %q/%q (%v)", from, to, err)
+	}
+
+	// Idempotent: re-sending the same purpose changes nothing and is not re-audited.
+	rec = as(tenantA, admin, `{"purpose":"client_support"}`)
+	if rec.Code != http.StatusOK || audits("group.purpose_set") != 1 {
+		t.Fatalf("repeat set: %d, audits=%d, want no new audit", rec.Code, audits("group.purpose_set"))
+	}
+
+	// enabled and purpose can change together in one call, each audited under its own action.
+	rec = as(tenantA, admin, `{"enabled":false,"purpose":"internal_team"}`)
+	if json.Unmarshal(rec.Body.Bytes(), &it); rec.Code != http.StatusOK || it.Enabled || it.Purpose != "internal_team" {
+		t.Fatalf("combined update = %d %s", rec.Code, rec.Body.String())
+	}
+	if audits("group.purpose_set") != 2 || audits("group.disabled") != 1 {
+		t.Fatalf("combined audits: purpose_set=%d disabled=%d", audits("group.purpose_set"), audits("group.disabled"))
+	}
+
+	// Tenant B: A's group id behaves exactly like an unknown one.
+	if rec := call(t, e.app, tenantB, adminB, http.MethodPatch, "/", `{"purpose":"other"}`, map[string]string{"group_id": gid.String()}, h.SetEnabled); rec.Code != http.StatusNotFound {
+		t.Fatalf("B setting A's group purpose: %d, want 404", rec.Code)
+	}
+	if got := e.count(`SELECT count(*) FROM wa_groups WHERE id=$1 AND purpose='internal_team'`, gid); got != 1 {
+		t.Fatal("tenant B must not have changed tenant A's group purpose")
+	}
+}
+
+// ai_observer_enabled (ADR-0055, migration 000178): suggest-only AI classification, opt-in per group,
+// independent of purpose, but never on for a group that is not reading — there would be nothing to observe.
+func TestGroupAIObserverToggleRequiresReadingAndIsAudited(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, _ := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	agent := e.member(tenantA, "tenant_agent", "active")
+	adminB := e.member(tenantB, "tenant_admin", "active")
+	gid := e.group(tenantA, connA, jid1, "Homologação", true)
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	as := func(tenant, user uuid.UUID, body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodPatch, "/", body, map[string]string{"group_id": gid.String()}, h.SetEnabled)
+	}
+	audits := func(action string) int {
+		return e.count(`SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND action=$2`, tenantA, action)
+	}
+
+	// New group defaults to the observer off.
+	if got := e.count(`SELECT count(*) FROM wa_groups WHERE id=$1 AND NOT ai_observer_enabled`, gid); got != 1 {
+		t.Fatal("default must be ai_observer_enabled=false")
+	}
+
+	// Permission: group.manage only, same as everything else SetEnabled does.
+	if rec := as(tenantA, agent, `{"ai_observer_enabled":true}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("agent toggling observer: %d, want 403", rec.Code)
+	}
+
+	// Turn it on: 200, reflected, audited.
+	var it groupItem
+	rec := as(tenantA, admin, `{"ai_observer_enabled":true}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &it) != nil || !it.AIObserverEnabled {
+		t.Fatalf("enable observer = %d %s", rec.Code, rec.Body.String())
+	}
+	if audits("group.ai_observer_enabled") != 1 {
+		t.Fatalf("group.ai_observer_enabled audits = %d", audits("group.ai_observer_enabled"))
+	}
+
+	// Idempotent: resending the same value changes nothing and is not re-audited.
+	rec = as(tenantA, admin, `{"ai_observer_enabled":true}`)
+	if rec.Code != http.StatusOK || audits("group.ai_observer_enabled") != 1 {
+		t.Fatalf("repeat enable: %d, audits=%d, want no new audit", rec.Code, audits("group.ai_observer_enabled"))
+	}
+
+	// Turning reading off while the observer would stay on is rejected outright — nothing silently cascades;
+	// the caller must say explicitly what happens to the observer in the same request.
+	if rec := as(tenantA, admin, `{"enabled":false}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("disable reading while observer stays on: %d, want 400", rec.Code)
+	}
+	rec = as(tenantA, admin, `{"enabled":false,"ai_observer_enabled":false}`)
+	if rec.Code != http.StatusOK || audits("group.ai_observer_disabled") != 1 || audits("group.disabled") != 1 {
+		t.Fatalf("disable reading together with the observer: %d, observer audits=%d, disabled audits=%d",
+			rec.Code, audits("group.ai_observer_disabled"), audits("group.disabled"))
+	}
+
+	gid2 := e.group(tenantA, connA, jid2, "Outro, desligado", false)
+	as2 := func(body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenantA, admin, http.MethodPatch, "/", body, map[string]string{"group_id": gid2.String()}, h.SetEnabled)
+	}
+	if rec := as2(`{"ai_observer_enabled":true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("observer on, reading off (and staying off): %d, want 400", rec.Code)
+	}
+	if rec := as2(`{"enabled":true,"ai_observer_enabled":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("observer on together with turning reading on: %d, want 200", rec.Code)
+	}
+
+	// Disabling the observer alone, with reading left on, is its own audited action too.
+	if rec := as2(`{"ai_observer_enabled":false}`); rec.Code != http.StatusOK {
+		t.Fatalf("disable observer alone: %d", rec.Code)
+	}
+	if n := audits("group.ai_observer_disabled"); n != 2 {
+		t.Fatalf("group.ai_observer_disabled audits = %d, want 2 (gid's combined disable + gid2's standalone one)", n)
+	}
+
+	// Tenant B: A's group id behaves exactly like an unknown one.
+	if rec := call(t, e.app, tenantB, adminB, http.MethodPatch, "/", `{"ai_observer_enabled":true}`, map[string]string{"group_id": gid.String()}, h.SetEnabled); rec.Code != http.StatusNotFound {
+		t.Fatalf("B toggling A's group observer: %d, want 404", rec.Code)
+	}
+}
+
+// account_id (migration 000177) links a group to the "cliente final" it belongs to, reusing customer_accounts
+// (ADR-0018) instead of a second company catalog. Validated against the SAME tenant, audited, idempotent,
+// and List's account_id filter finds both "this client's groups" and "groups nobody linked yet".
+func TestGroupAccountLinkIsValidatedAuditedAndTenantScoped(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, connB := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	agent := e.member(tenantA, "tenant_agent", "active")
+	adminB := e.member(tenantB, "tenant_admin", "active")
+	accountA := e.account(tenantA, "Cliente A")
+	accountB := e.account(tenantB, "Cliente B")
+	g1 := e.group(tenantA, connA, jid1, "Grupo 1", true)
+	g2 := e.group(tenantA, connA, jid2, "Grupo 2", true)
+	e.group(tenantB, connB, jid3, "Grupo de B", true)
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	link := func(tenant, user, gid uuid.UUID, body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodPut, "/", body, map[string]string{"group_id": gid.String()}, h.LinkAccount)
+	}
+	unlink := func(tenant, user, gid uuid.UUID) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodDelete, "/", "", map[string]string{"group_id": gid.String()}, h.UnlinkAccount)
+	}
+	audits := func(action string) int {
+		return e.count(`SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND action=$2`, tenantA, action)
+	}
+
+	// Validated: not JSON, missing, and not-a-uuid are all 400 before anything is written.
+	for name, body := range map[string]string{"missing": `{}`, "not a uuid": `{"account_id":"nope"}`, "not json": `x`} {
+		if rec := link(tenantA, admin, g1, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("link %s: %d, want 400", name, rec.Code)
+		}
+	}
+	// An account id that does not exist in THIS tenant (including a real id from tenant B): 404.
+	if rec := link(tenantA, admin, g1, `{"account_id":"`+uuid.NewString()+`"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown account: %d, want 404", rec.Code)
+	}
+	if rec := link(tenantA, admin, g1, `{"account_id":"`+accountB.String()+`"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("tenant B's real account from tenant A: %d, want 404", rec.Code)
+	}
+
+	// Permission: group.manage only.
+	if rec := link(tenantA, agent, g1, `{"account_id":"`+accountA.String()+`"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("agent linking: %d, want 403", rec.Code)
+	}
+
+	// Link: 200, reflected on the response (id and the account's own name), audited once.
+	var it groupItem
+	rec := link(tenantA, admin, g1, `{"account_id":"`+accountA.String()+`"}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &it) != nil || it.AccountID == nil || *it.AccountID != accountA || it.AccountName == nil || *it.AccountName != "Cliente A" {
+		t.Fatalf("link = %d %s", rec.Code, rec.Body.String())
+	}
+	if audits("group.account_linked") != 1 {
+		t.Fatalf("group.account_linked audits = %d", audits("group.account_linked"))
+	}
+	// Idempotent: linking the same account again changes nothing and is not re-audited.
+	if rec := link(tenantA, admin, g1, `{"account_id":"`+accountA.String()+`"}`); rec.Code != http.StatusOK || audits("group.account_linked") != 1 {
+		t.Fatalf("repeat link: %d, audits=%d", rec.Code, audits("group.account_linked"))
+	}
+
+	// List's account_id filter: this client's groups, and the ones nobody linked yet.
+	var list struct {
+		Items []groupItem `json:"items"`
+	}
+	rec = call(t, e.app, tenantA, admin, http.MethodGet, "/?account_id="+accountA.String(), "", nil, h.List)
+	if json.Unmarshal(rec.Body.Bytes(), &list); rec.Code != 200 || len(list.Items) != 1 || list.Items[0].ID != g1 {
+		t.Fatalf("list by account = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = call(t, e.app, tenantA, admin, http.MethodGet, "/?account_id=none", "", nil, h.List)
+	if json.Unmarshal(rec.Body.Bytes(), &list); rec.Code != 200 || len(list.Items) != 1 || list.Items[0].ID != g2 {
+		t.Fatalf("list unlinked = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := call(t, e.app, tenantA, admin, http.MethodGet, "/?account_id=not-a-uuid", "", nil, h.List); rec.Code != http.StatusBadRequest {
+		t.Fatalf("list bad account_id: %d, want 400", rec.Code)
+	}
+
+	// Tenant B: A's group id behaves exactly like an unknown one for link and unlink alike.
+	if rec := link(tenantB, adminB, g1, `{"account_id":"`+accountB.String()+`"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("B linking A's group: %d, want 404", rec.Code)
+	}
+	if rec := unlink(tenantB, adminB, g1); rec.Code != http.StatusNotFound {
+		t.Fatalf("B unlinking A's group: %d, want 404", rec.Code)
+	}
+	if got := e.count(`SELECT count(*) FROM wa_groups WHERE id=$1 AND account_id=$2`, g1, accountA); got != 1 {
+		t.Fatal("tenant B must not have changed tenant A's group account link")
+	}
+
+	// Unlink: 200, audited, idempotent; the group remains (only the link is cleared).
+	if rec := unlink(tenantA, agent, g1); rec.Code != http.StatusForbidden {
+		t.Fatalf("agent unlinking: %d, want 403", rec.Code)
+	}
+	rec = unlink(tenantA, admin, g1)
+	if json.Unmarshal(rec.Body.Bytes(), &it); rec.Code != http.StatusOK || it.AccountID != nil {
+		t.Fatalf("unlink = %d %s", rec.Code, rec.Body.String())
+	}
+	if audits("group.account_unlinked") != 1 {
+		t.Fatalf("group.account_unlinked audits = %d", audits("group.account_unlinked"))
+	}
+	if rec := unlink(tenantA, admin, g1); rec.Code != http.StatusOK || audits("group.account_unlinked") != 1 {
+		t.Fatalf("repeat unlink: %d, audits=%d, want no new audit", rec.Code, audits("group.account_unlinked"))
+	}
+	if e.count(`SELECT count(*) FROM wa_groups WHERE id=$1`, g1) != 1 {
+		t.Fatal("unlinking must not delete the group")
+	}
+}
+
+// A tenant running more than one WhatsApp instance at once (e.g. a second number connected to train on
+// one group before mixing it with the main line) must never have its groups merged into one pool: Available
+// and Enable stay ambiguous (409) without a connection_id hint, resolve correctly with one, and List's
+// connection_id filter separates each instance's enabled groups.
+func TestGroupsAreScopedPerWhatsAppInstanceWhenATenantRunsMoreThanOne(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	connA2 := e.connection(tenantA) // a second WhatsApp instance of the SAME tenant
+	admin := e.member(tenantA, "tenant_admin", "active")
+	g1 := e.group(tenantA, connA, jid1, "Grupo da instância 1", true)
+	g2 := e.group(tenantA, connA2, jid2, "Grupo da instância 2", true)
+
+	dir := &fakeDir{conn: connA.ID, groups: []channeldomain.ProviderGroup{{JID: jid1, Name: "Grupo da instância 1", ParticipantCount: 3}}, otherActive: []uuid.UUID{connA2.ID}}
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), dir)
+
+	// No hint, two active connections: ambiguous, exactly like today with a single instance's worth of API surface.
+	if rec := call(t, e.app, tenantA, admin, http.MethodGet, "/", "", nil, h.Available); rec.Code != http.StatusConflict {
+		t.Fatalf("available, ambiguous: %d, want 409", rec.Code)
+	}
+	if rec := call(t, e.app, tenantA, admin, http.MethodPost, "/", `{"provider_group_id":"`+jid1+`"}`, nil, h.Enable); rec.Code != http.StatusConflict {
+		t.Fatalf("enable, ambiguous: %d, want 409", rec.Code)
+	}
+
+	// A connection_id hint resolves it: Available reports which connection the results belong to.
+	var avail struct {
+		Items        []availableItem `json:"items"`
+		ConnectionID uuid.UUID       `json:"connection_id"`
+	}
+	rec := call(t, e.app, tenantA, admin, http.MethodGet, "/?connection_id="+connA.ID.String(), "", nil, h.Available)
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &avail) != nil || avail.ConnectionID != connA.ID || len(avail.Items) != 1 {
+		t.Fatalf("available with hint = %d %s", rec.Code, rec.Body.String())
+	}
+	// A hint that is not one of the tenant's active connections at all (an unrelated, real connection id of
+	// another tenant) is refused exactly like a connection this tenant never had.
+	if rec := call(t, e.app, tenantA, admin, http.MethodGet, "/?connection_id="+uuid.NewString(), "", nil, h.Available); rec.Code != http.StatusConflict {
+		t.Fatalf("available, unknown hint: %d, want 409", rec.Code)
+	}
+	if rec := call(t, e.app, tenantA, admin, http.MethodGet, "/?connection_id=not-a-uuid", "", nil, h.Available); rec.Code != http.StatusBadRequest {
+		t.Fatalf("available, malformed hint: %d, want 400", rec.Code)
+	}
+
+	// List: each instance's enabled groups stay separate; the item itself also carries its connection id.
+	var list struct {
+		Items []groupItem `json:"items"`
+	}
+	rec = call(t, e.app, tenantA, admin, http.MethodGet, "/?connection_id="+connA.ID.String(), "", nil, h.List)
+	if json.Unmarshal(rec.Body.Bytes(), &list); rec.Code != 200 || len(list.Items) != 1 || list.Items[0].ID != g1 || list.Items[0].ConnectionID != connA.ID {
+		t.Fatalf("list by connection 1 = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = call(t, e.app, tenantA, admin, http.MethodGet, "/?connection_id="+connA2.ID.String(), "", nil, h.List)
+	if json.Unmarshal(rec.Body.Bytes(), &list); rec.Code != 200 || len(list.Items) != 1 || list.Items[0].ID != g2 {
+		t.Fatalf("list by connection 2 = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = call(t, e.app, tenantA, admin, http.MethodGet, "/", "", nil, h.List)
+	if json.Unmarshal(rec.Body.Bytes(), &list); rec.Code != 200 || len(list.Items) != 2 {
+		t.Fatalf("list with no filter must still show both instances' groups = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := call(t, e.app, tenantA, admin, http.MethodGet, "/?connection_id=not-a-uuid", "", nil, h.List); rec.Code != http.StatusBadRequest {
+		t.Fatalf("list, malformed connection_id: %d, want 400", rec.Code)
 	}
 }
 

@@ -1107,6 +1107,8 @@ func (s *Server) RegisterGroupHandlers(dbPool *pgxpool.Pool, h *groupsadapters.H
 	s.mux.Handle("PATCH "+base+"/{group_id}", wrap(h.SetEnabled))
 	s.mux.Handle("GET "+base+"/{group_id}/messages", wrap(h.ListMessages))
 	s.mux.Handle("DELETE "+base+"/{group_id}/messages", wrap(h.DeleteHistory))
+	s.mux.Handle("PUT "+base+"/{group_id}/account", wrap(h.LinkAccount))
+	s.mux.Handle("DELETE "+base+"/{group_id}/account", wrap(h.UnlinkAccount))
 }
 
 // RegisterAttendanceHandlers exposes finalizing an attendance and the contact's attendance history (ADR-0020) behind authn +

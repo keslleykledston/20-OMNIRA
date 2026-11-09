@@ -1,11 +1,21 @@
 import { useMemo, useState } from 'react'
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, ConfirmDialog, Icon } from '../primitives'
+import { useMutation, useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
+import { Badge, Button, ConfirmDialog, Icon } from '../primitives'
 import { useThreadScroll } from '../../hooks/useThreadScroll'
-import { authorLabel, messageText, sortGroupMessages } from '../../lib/groupModel'
-import { groupErrorMessage, groupsAPI, type Group, type GroupMessage } from '../../lib/groups'
+import {
+  authorLabel,
+  GROUP_PURPOSE_BADGE_VARIANT,
+  GROUP_PURPOSE_LABEL,
+  GROUP_PURPOSE_OPTIONS,
+  GROUP_SUGGESTION_BADGE_VARIANT,
+  GROUP_SUGGESTION_LABEL,
+  messageText,
+  sortGroupMessages,
+} from '../../lib/groupModel'
+import { groupErrorMessage, groupsAPI, type Group, type GroupMessage, type GroupPurpose } from '../../lib/groups'
 import { dayLabel } from '../../lib/inboxModel'
 import { getTenantId } from '../../lib/session'
+import { GroupAccountLink } from './GroupAccountLink'
 import clsx from 'clsx'
 
 interface Props {
@@ -26,6 +36,20 @@ export function GroupThread({ group, canManage, onBack }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const setPurpose = useMutation({
+    mutationFn: (purpose: GroupPurpose) => groupsAPI.setPurpose(group.id, purpose),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['groups-list', tenantId] }),
+    onError: (err) => setError(groupErrorMessage(err)),
+  })
+
+  // ADR-0055: suggest-only AI classification, opt-in per group. Never acts, never sends anything —
+  // only shows a suggestion next to each message for a human to review.
+  const setAIObserver = useMutation({
+    mutationFn: (aiObserverEnabled: boolean) => groupsAPI.setAIObserverEnabled(group.id, aiObserverEnabled),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['groups-list', tenantId] }),
+    onError: (err) => setError(groupErrorMessage(err)),
+  })
 
   const { data, hasNextPage, isFetchingNextPage, fetchNextPage, isLoading } = useInfiniteQuery({
     queryKey: ['group-messages', tenantId, group.id],
@@ -73,13 +97,52 @@ export function GroupThread({ group, canManage, onBack }: Props) {
           <div className="min-w-0">
             <h3 className="truncate font-semibold text-text-primary">{group.name || 'Grupo sem nome'}</h3>
             <p className="text-xs text-text-secondary">Somente leitura · nada é enviado ao grupo</p>
+            <div className="mt-1">
+              <GroupAccountLink group={group} canManage={canManage} />
+            </div>
           </div>
         </div>
-        {canManage && (
-          <Button size="sm" variant="tertiary" onClick={() => setConfirmDelete(true)} disabled={messages.length === 0 && !hasNextPage}>
-            Apagar histórico
-          </Button>
-        )}
+        <div className="flex flex-shrink-0 items-center gap-2">
+          {canManage ? (
+            <label className="flex items-center gap-1.5">
+              <span className="sr-only">Classificação do grupo</span>
+              <select
+                aria-label="Classificação do grupo"
+                value={group.purpose}
+                disabled={setPurpose.isPending}
+                onChange={(e) => setPurpose.mutate(e.target.value as GroupPurpose)}
+                className="rounded-control border border-border-subtle bg-surface px-2 py-1 text-xs text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+              >
+                {GROUP_PURPOSE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <Badge variant={GROUP_PURPOSE_BADGE_VARIANT[group.purpose]} size="sm">
+              {GROUP_PURPOSE_LABEL[group.purpose]}
+            </Badge>
+          )}
+          {canManage && (
+            <label className="flex items-center gap-1.5 text-xs text-text-secondary" title="Sugestão de IA por mensagem, só para revisão interna — nada é enviado ao grupo">
+              <input
+                type="checkbox"
+                checked={group.ai_observer_enabled}
+                disabled={setAIObserver.isPending || !group.enabled}
+                onChange={(e) => setAIObserver.mutate(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-border-subtle"
+              />
+              IA observadora
+            </label>
+          )}
+          {canManage && (
+            <Button size="sm" variant="tertiary" onClick={() => setConfirmDelete(true)} disabled={messages.length === 0 && !hasNextPage}>
+              Apagar histórico
+            </Button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -127,6 +190,14 @@ export function GroupThread({ group, canManage, onBack }: Props) {
                       >
                         {newAuthor && !m.from_me && <p className="mb-0.5 text-xs font-semibold text-accent-primary">{authorLabel(m)}</p>}
                         <p className={clsx('break-words whitespace-pre-wrap', !m.body.trim() && 'italic text-text-secondary')}>{messageText(m)}</p>
+                        {canManage && m.suggestion && (
+                          <div className="mt-1 flex items-center gap-1.5" title={m.suggestion.summary}>
+                            <Badge variant={GROUP_SUGGESTION_BADGE_VARIANT[m.suggestion.category]} size="sm">
+                              IA: {GROUP_SUGGESTION_LABEL[m.suggestion.category]}
+                            </Badge>
+                            <span className="truncate text-[11px] text-text-secondary">{m.suggestion.summary}</span>
+                          </div>
+                        )}
                         <time className="mt-0.5 block text-right text-[11px] text-text-secondary">
                           {new Date(m.sent_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                         </time>

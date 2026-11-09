@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import clsx from 'clsx'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Icon, PermissionState } from '../components/primitives'
@@ -19,14 +19,25 @@ export default function GroupsPage() {
   const accessReady = !access.isLoading
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [managing, setManaging] = useState(false)
+  const [onlyUnlinked, setOnlyUnlinked] = useState(false)
+  const [connectionFilter, setConnectionFilter] = useState<string>('all')
 
   const groups = useQuery({
-    queryKey: ['groups-list', tenantId],
-    queryFn: groupsAPI.list,
+    queryKey: ['groups-list', tenantId, onlyUnlinked],
+    queryFn: () => groupsAPI.list(onlyUnlinked ? 'none' : undefined),
     enabled: canRead,
     retry: false,
     refetchInterval: 30_000,
   })
+
+  // Derived client-side from the (capped, small) enabled-groups list: a tenant running more than one
+  // WhatsApp instance at once sees them kept apart here too, not just in "Gerenciar grupos".
+  const allItems = groups.data ?? []
+  const instances = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const g of allItems) if (!seen.has(g.connection_id)) seen.set(g.connection_id, g.connection_account || g.connection_id.slice(0, 8))
+    return [...seen.entries()].map(([id, label]) => ({ id, label }))
+  }, [allItems])
 
   if (!access.isLoading && !canRead) {
     return (
@@ -36,7 +47,7 @@ export default function GroupsPage() {
     )
   }
 
-  const items = groups.data ?? []
+  const items = connectionFilter === 'all' ? allItems : allItems.filter((g) => g.connection_id === connectionFilter)
   const selected = items.find((g) => g.id === selectedId) ?? null
 
   return (
@@ -53,6 +64,30 @@ export default function GroupsPage() {
                 Gerenciar grupos
               </Button>
             )}
+          </div>
+          <div className="space-y-1.5 border-b border-border-subtle px-4 py-2">
+            {instances.length > 1 && (
+              <label className="flex items-center gap-1.5 text-xs text-text-secondary">
+                Instância
+                <select
+                  aria-label="Filtrar por instância"
+                  value={connectionFilter}
+                  onChange={(e) => setConnectionFilter(e.target.value)}
+                  className="flex-1 rounded-control border border-border-subtle bg-surface px-1.5 py-1 text-xs text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+                >
+                  <option value="all">Todas</option>
+                  {instances.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="flex items-center gap-1.5 text-xs text-text-secondary">
+              <input type="checkbox" checked={onlyUnlinked} onChange={(e) => setOnlyUnlinked(e.target.checked)} />
+              Só grupos sem cliente vinculado
+            </label>
           </div>
           <div className="flex-1 overflow-y-auto">
             {groups.isError ? (
@@ -73,7 +108,13 @@ export default function GroupsPage() {
                 )}
               </div>
             ) : (
-              <GroupList groups={items} selectedId={selectedId} onSelect={setSelectedId} isLoading={groups.isLoading} />
+              <GroupList
+                groups={items}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                isLoading={groups.isLoading}
+                showInstanceLabel={instances.length > 1}
+              />
             )}
           </div>
         </div>
