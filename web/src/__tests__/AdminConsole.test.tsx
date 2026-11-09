@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import axios from 'axios'
@@ -207,6 +208,9 @@ describe('the agent app', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     )
+    // Sidebar always renders its link directly; MobileNav's now lives behind "Mais" (a drawer, not nowhere).
+    await screen.findAllByRole('link', { name: 'Conversas' })
+    await userEvent.click(screen.getByRole('button', { name: 'Mais' }))
     const links = await screen.findAllByRole('link', { name: 'Administração' })
     expect(links).toHaveLength(2)
     for (const l of links) expect(l).toHaveAttribute('href', '/admin/')
@@ -225,6 +229,9 @@ describe('the agent app', () => {
     )
     await screen.findAllByRole('link', { name: 'Conversas' })
     await waitFor(() => expect(get).toHaveBeenCalled())
+    expect(screen.queryByRole('link', { name: 'Administração' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Mais' }))
+    await screen.findByRole('dialog')
     expect(screen.queryByRole('link', { name: 'Administração' })).toBeNull()
   })
 })

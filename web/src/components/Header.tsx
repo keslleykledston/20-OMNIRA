@@ -51,13 +51,15 @@ export default function Header({ onSearch }: { onSearch?: () => void } = {}) {
         'z-10'
       )}
     >
-      {/* Brand only where the sidebar is hidden; on desktop it lives in the sidebar. */}
-      <div className="flex items-center gap-2 lg:invisible">
+      {/* Brand only where the sidebar is hidden; on desktop it lives in the sidebar. Hidden outright on the
+          narrowest phones (the bottom nav already carries app identity there) so the right-hand controls —
+          search, tenant switcher, avatar, sign out — have room to stay legible instead of truncating. */}
+      <div className="hidden items-center gap-2 sm:flex lg:invisible">
         <BrandMark size={28} />
         <span className="text-lg font-bold text-text-primary">OMNIRA</span>
       </div>
 
-      <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+      <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-4">
         {onSearch && (
           <button
             type="button"
@@ -94,12 +96,9 @@ export default function Header({ onSearch }: { onSearch?: () => void } = {}) {
             <Avatar alt={user.name} initials={user.name?.substring(0, 2).toUpperCase()} size="md" />
           </div>
         )}
-        <Button
-          onClick={handleLogout}
-          variant="secondary"
-          size="sm"
-        >
-          Sair
+        <Button onClick={handleLogout} variant="secondary" size="sm" aria-label="Sair" title="Sair" className="px-2 sm:px-3">
+          <Icon name="logout" size={16} className="sm:hidden" />
+          <span className="hidden sm:inline">Sair</span>
         </Button>
       </div>
     </header>
