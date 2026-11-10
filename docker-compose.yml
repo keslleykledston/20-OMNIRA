@@ -116,6 +116,9 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_PRIVATE_HANDOFF_ENABLED: ${OMNIRA_PRIVATE_HANDOFF_ENABLED-}
   OMNIRA_MULTIMODAL_ANALYSIS_ENABLED: ${OMNIRA_MULTIMODAL_ANALYSIS_ENABLED-}
   OMNIRA_AUTO_TICKET_POLICY_ENABLED: ${OMNIRA_AUTO_TICKET_POLICY_ENABLED-}
+  # Group AI observer (ADR-0055): suggest-only, per-group opt-in, own queue — separate from the topic switches
+  # above on purpose (see ADR-0055 "Alternativas").
+  OMNIRA_GROUP_AI_OBSERVER_ENABLED: ${OMNIRA_GROUP_AI_OBSERVER_ENABLED-}
 
 services:
   postgres:
