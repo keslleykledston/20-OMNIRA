@@ -1,21 +1,29 @@
-# Machine-local settings (untracked). Time zone: instants are stored and transported in UTC everywhere;
-# only logs and text written for a person use Manaus (UTC-4). Infra containers (postgres, keycloak, waha,
-# nats, valkey) are NOT restarted for this: they keep logging in UTC, and the database presents Manaus to
-# new sessions through ALTER DATABASE ... SET timezone.
 services:
   api:
-    ports: !override
-      - "127.0.0.1:28080:8080"
+    # auth.devops.k3gsolutions.com.br não existe no DNS interno do Docker; sem
+    # isso o container cai no DNS público, mas o hairpin NAT (container ->
+    # bridge -> host -> firewall de borda -> nginx) não volta, e a troca de
+    # token falha com "identity provider unavailable". Apontar direto para o
+    # nginx local (gateway da bridge) e liberar essa sub-rede na allowlist do
+    # vhost (ver /etc/nginx/sites-available/omnira) resolve sem abrir a
+    # allowlist para a internet.
+    extra_hosts:
+    - auth.devops.k3gsolutions.com.br:172.18.0.1
+    ports: null
     environment:
       TZ: America/Manaus
     volumes:
-      # media files live on the roomy /opt partition (same mount target as the tracked file, so this replaces it)
-      - /opt/omnira-media:/var/lib/omnira/media:ro
+    - /opt/omnira-media:/var/lib/omnira/media:ro
   worker:
     environment:
       TZ: America/Manaus
     volumes:
-      - /opt/omnira-media:/var/lib/omnira/media
+    - /opt/omnira-media:/var/lib/omnira/media
+  waha:
+    environment:
+      WAHA_API_KEY: ${OMNIRA_WAHA_API_KEY-}
+    ports:
+    - 127.0.0.1:33000:3000
   web:
     environment:
       TZ: America/Manaus
