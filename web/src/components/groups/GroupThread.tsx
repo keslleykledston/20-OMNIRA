@@ -51,6 +51,14 @@ export function GroupThread({ group, canManage, onBack }: Props) {
     onError: (err) => setError(groupErrorMessage(err)),
   })
 
+  // ADR-0058: the ONE exception to "nothing is sent to a group" — at most one group per tenant, and never one
+  // linked to a customer account (enforced by the server either way).
+  const setAlertChannel = useMutation({
+    mutationFn: (isAlertChannel: boolean) => groupsAPI.setAlertChannel(group.id, isAlertChannel),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['groups-list', tenantId] }),
+    onError: (err) => setError(groupErrorMessage(err)),
+  })
+
   const { data, hasNextPage, isFetchingNextPage, fetchNextPage, isLoading } = useInfiniteQuery({
     queryKey: ['group-messages', tenantId, group.id],
     initialPageParam: '' as string,
@@ -135,6 +143,25 @@ export function GroupThread({ group, canManage, onBack }: Props) {
                 className="h-3.5 w-3.5 rounded border-border-subtle"
               />
               IA observadora
+            </label>
+          )}
+          {canManage && (
+            <label
+              className="flex items-center gap-1.5 text-xs text-text-secondary"
+              title={
+                group.account_id
+                  ? 'Um grupo vinculado a um cliente não pode ser o canal de alerta'
+                  : 'Canal de alerta: recebe uma mensagem real quando o SLA de uma conversa estoura. No máximo um grupo por conta, nunca um grupo de cliente.'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={group.is_alert_channel}
+                disabled={setAlertChannel.isPending || !group.enabled || !!group.account_id}
+                onChange={(e) => setAlertChannel.mutate(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-border-subtle"
+              />
+              Canal de alerta
             </label>
           )}
           {canManage && (

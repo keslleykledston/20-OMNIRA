@@ -637,6 +637,95 @@ func TestGroupAIObserverToggleRequiresReadingAndIsAudited(t *testing.T) {
 	}
 }
 
+// ADR-0058: is_alert_channel is the one exception to "nothing is ever sent to a group" — kept as narrow as the
+// database itself can make it. Only one group per tenant, never a group linked to a customer account, in
+// either order of the two updates, and requires the group to actually be read.
+func TestGroupAlertChannelIsValidatedAuditedAndTenantScoped(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, _ := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	agent := e.member(tenantA, "tenant_agent", "active")
+	adminB := e.member(tenantB, "tenant_admin", "active")
+	account := e.account(tenantA, "Cliente A")
+	gid := e.group(tenantA, connA, jid1, "Canal interno", true)
+	gid2 := e.group(tenantA, connA, jid2, "Outro grupo", true)
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	setEnabled := func(tenant, user, gid uuid.UUID, body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodPatch, "/", body, map[string]string{"group_id": gid.String()}, h.SetEnabled)
+	}
+	link := func(tenant, user, gid uuid.UUID, body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodPut, "/", body, map[string]string{"group_id": gid.String()}, h.LinkAccount)
+	}
+	audits := func(action string) int {
+		return e.count(`SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND action=$2`, tenantA, action)
+	}
+
+	// New group defaults to no alert channel.
+	if got := e.count(`SELECT count(*) FROM wa_groups WHERE id=$1 AND NOT is_alert_channel`, gid); got != 1 {
+		t.Fatal("default must be is_alert_channel=false")
+	}
+
+	// Permission: group.manage only.
+	if rec := setEnabled(tenantA, agent, gid, `{"is_alert_channel":true}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("agent toggling alert channel: %d, want 403", rec.Code)
+	}
+
+	// Cannot turn it on while reading is off (and staying off).
+	g3 := e.group(tenantA, connA, jid3, "Lido depois", false)
+	if rec := setEnabled(tenantA, admin, g3, `{"is_alert_channel":true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("alert channel without reading: %d, want 400", rec.Code)
+	}
+
+	// Turn it on: 200, reflected, audited.
+	var it groupItem
+	rec := setEnabled(tenantA, admin, gid, `{"is_alert_channel":true}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &it) != nil || !it.IsAlertChannel {
+		t.Fatalf("enable alert channel = %d %s", rec.Code, rec.Body.String())
+	}
+	if audits("group.alert_channel_enabled") != 1 {
+		t.Fatalf("group.alert_channel_enabled audits = %d", audits("group.alert_channel_enabled"))
+	}
+	// Idempotent: resending the same value changes nothing and is not re-audited.
+	if rec := setEnabled(tenantA, admin, gid, `{"is_alert_channel":true}`); rec.Code != http.StatusOK || audits("group.alert_channel_enabled") != 1 {
+		t.Fatalf("repeat enable: %d, audits=%d", rec.Code, audits("group.alert_channel_enabled"))
+	}
+
+	// Only one group per tenant: a second group cannot also become the alert channel.
+	if rec := setEnabled(tenantA, admin, gid2, `{"is_alert_channel":true}`); rec.Code != http.StatusConflict {
+		t.Fatalf("second group as alert channel: %d, want 409", rec.Code)
+	}
+
+	// Never a group linked to a customer account, in either order.
+	e.exec(`UPDATE wa_groups SET is_alert_channel=false WHERE id=$1`, gid)
+	if rec := link(tenantA, admin, gid2, `{"account_id":"`+account.String()+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("link account to gid2: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := setEnabled(tenantA, admin, gid2, `{"is_alert_channel":true}`); rec.Code != http.StatusConflict {
+		t.Fatalf("alert channel on a client-linked group: %d, want 409", rec.Code)
+	}
+	if rec := setEnabled(tenantA, admin, gid, `{"is_alert_channel":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("re-enable on the unlinked group: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := link(tenantA, admin, gid, `{"account_id":"`+account.String()+`"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("linking an account to the current alert channel: %d, want 409", rec.Code)
+	}
+
+	// Disabling is its own audited action.
+	if rec := setEnabled(tenantA, admin, gid, `{"is_alert_channel":false}`); rec.Code != http.StatusOK {
+		t.Fatalf("disable alert channel: %d", rec.Code)
+	}
+	if audits("group.alert_channel_disabled") != 1 {
+		t.Fatalf("group.alert_channel_disabled audits = %d", audits("group.alert_channel_disabled"))
+	}
+
+	// Tenant B: A's group id behaves exactly like an unknown one.
+	if rec := setEnabled(tenantB, adminB, gid, `{"is_alert_channel":true}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("B toggling A's group alert channel: %d, want 404", rec.Code)
+	}
+}
+
 // ADR-0056: ListMessages surfaces a stored suggestion's suggested_action alongside category/summary/confidence,
 // and a message with no suggestion yet carries a nil Suggestion — same JSON shape as before this ADR, just one
 // more field.

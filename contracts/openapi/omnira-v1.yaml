@@ -6741,7 +6741,7 @@ components:
         preview: { type: string, description: First 160 characters of the body }
     GroupItem:
       type: object
-      required: [id, name, enabled, purpose, account_id, account_name, connection_id, connection_account, ai_observer_enabled, last_message_at, last_message]
+      required: [id, name, enabled, purpose, account_id, account_name, connection_id, connection_account, ai_observer_enabled, is_alert_channel, last_message_at, last_message]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -6752,6 +6752,7 @@ components:
         connection_id: { type: string, format: uuid, description: 'Which WhatsApp instance (channel connection) this group belongs to; a tenant may run more than one.' }
         connection_account: { type: string, description: 'That connection''s own account/number, for display (may be empty).' }
         ai_observer_enabled: { type: boolean, description: 'Per-group opt-in for the AI observer (ADR-0055, migration 000178): suggests a classification per message for a human to review, never acts, never sends anything. Can only be true while `enabled` is also true.' }
+        is_alert_channel: { type: boolean, description: 'ADR-0058: at most one group per tenant may be this. The ONE exception to "nothing is sent to a group" — a real WhatsApp message is sent here when a conversation''s SLA breaches. Can only be true while `enabled` is also true, and never while the group is linked to a customer account (account_id).' }
         last_message_at: { type: string, format: date-time, nullable: true }
         last_message: { type: object, nullable: true, allOf: [{ $ref: '#/components/schemas/GroupLastMessage' }] }
     GroupPurpose:
@@ -6794,15 +6795,18 @@ components:
     SetGroupEnabledRequest:
       type: object
       description: |
-        At least one of `enabled`/`purpose`/`ai_observer_enabled` must be set; any subset may be set together.
-        `ai_observer_enabled` can never end up true while `enabled` ends up false in the same request (400) —
-        nothing cascades silently.
+        At least one of `enabled`/`purpose`/`ai_observer_enabled`/`is_alert_channel` must be set; any subset may
+        be set together. `ai_observer_enabled` and `is_alert_channel` can never end up true while `enabled` ends
+        up false in the same request (400) — nothing cascades silently. `is_alert_channel` additionally refuses
+        (409) a group already linked to a customer account, or a tenant that already has a different alert
+        channel group (ADR-0058).
       minProperties: 1
       additionalProperties: false
       properties:
         enabled: { type: boolean }
         purpose: { $ref: '#/components/schemas/GroupPurpose' }
         ai_observer_enabled: { type: boolean }
+        is_alert_channel: { type: boolean }
     GroupMessageSuggestion:
       type: object
       description: 'The AI observer''s suggestion for this message (ADR-0055, extended by ADR-0056) — never acted on, shown only to a human with group.read.'

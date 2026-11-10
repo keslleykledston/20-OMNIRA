@@ -27,6 +27,9 @@ export interface Group {
   connection_id: string
   connection_account: string
   ai_observer_enabled: boolean
+  // ADR-0058: at most one group per tenant may be true — the one exception to "nothing is sent to a group".
+  // A real WhatsApp message goes here when a conversation's SLA breaches.
+  is_alert_channel: boolean
   last_message_at: string | null
   last_message: GroupLastMessage | null
 }
@@ -103,6 +106,8 @@ export const groupsAPI = {
     call<Group>(() => axios.patch(`${base()}/${id}`, { purpose }, { headers: authHeaders() })),
   setAIObserverEnabled: (id: string, aiObserverEnabled: boolean) =>
     call<Group>(() => axios.patch(`${base()}/${id}`, { ai_observer_enabled: aiObserverEnabled }, { headers: authHeaders() })),
+  setAlertChannel: (id: string, isAlertChannel: boolean) =>
+    call<Group>(() => axios.patch(`${base()}/${id}`, { is_alert_channel: isAlertChannel }, { headers: authHeaders() })),
   linkAccount: (id: string, accountId: string) =>
     call<Group>(() => axios.put(`${base()}/${id}/account`, { account_id: accountId }, { headers: authHeaders() })),
   unlinkAccount: (id: string) => call<Group>(() => axios.delete(`${base()}/${id}/account`, { headers: authHeaders() })),
@@ -114,13 +119,21 @@ export const groupsAPI = {
 }
 
 export function groupErrorMessage(err: unknown): string {
-  switch ((err as { response?: { status?: number } })?.response?.status) {
+  const response = (err as { response?: { status?: number; data?: unknown } })?.response
+  switch (response?.status) {
     case 403:
       return 'Você não tem permissão para esta ação nos grupos.'
     case 404:
       return 'Grupo não encontrado na conta do WhatsApp.'
-    case 409:
+    case 409: {
+      // ADR-0058: the server's plain-text body already says exactly which alert-channel rule was hit; the
+      // generic fallback below is for the older 409 (no active WhatsApp connection to list groups).
+      const body = typeof response.data === 'string' ? response.data : ''
+      if (body.includes('already the alert channel')) return 'Só pode haver um grupo canal de alerta por conta — desative o outro primeiro.'
+      if (body.includes('cannot be set on a group linked') || body.includes('cannot be linked to a customer account'))
+        return 'Um grupo de cliente não pode ser o canal de alerta (e vice-versa).'
       return 'Não há uma conexão ativa do WhatsApp para listar os grupos.'
+    }
     case 502:
       return 'O WhatsApp não respondeu. Tente de novo em instantes.'
     default:

@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
@@ -110,6 +111,7 @@ type groupItem struct {
 	ConnectionID      uuid.UUID    `json:"connection_id"`
 	ConnectionAccount string       `json:"connection_account"`
 	AIObserverEnabled bool         `json:"ai_observer_enabled"`
+	IsAlertChannel    bool         `json:"is_alert_channel"`
 	LastMessageAt     *time.Time   `json:"last_message_at"`
 	LastMessage       *lastMessage `json:"last_message"`
 }
@@ -170,6 +172,30 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func pgCode(err error) string {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) {
+		return pg.Code
+	}
+	return ""
+}
+
+// attempt runs one statement that may violate a constraint (ADR-0058's alert-channel CHECK/unique index) inside
+// a savepoint: on failure only the savepoint is rolled back, so the request's own transaction stays usable and
+// the handler can still answer with a normal HTTP error instead of leaving an aborted transaction for the
+// caller to commit (same pattern as internal/sectors/adapters.attempt).
+func attempt(ctx context.Context, q platformdb.Querier, run func() error) error {
+	if _, err := q.Exec(ctx, `SAVEPOINT group_attempt`); err != nil {
+		return err
+	}
+	if err := run(); err != nil {
+		_, _ = q.Exec(ctx, `ROLLBACK TO SAVEPOINT group_attempt`)
+		return err
+	}
+	_, err := q.Exec(ctx, `RELEASE SAVEPOINT group_attempt`)
+	return err
 }
 
 func groupID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -244,7 +270,7 @@ func directoryError(w http.ResponseWriter, err error) {
 
 const groupSelect = `
 	SELECT g.id, g.name, g.enabled, g.purpose, g.account_id, ca.name, g.channel_connection_id, cc.external_account_id,
-	       g.ai_observer_enabled, g.last_message_at, lm.author_name, lm.from_me, lm.message_type, left(lm.body, 160)
+	       g.ai_observer_enabled, g.is_alert_channel, g.last_message_at, lm.author_name, lm.from_me, lm.message_type, left(lm.body, 160)
 	FROM wa_groups g
 	LEFT JOIN customer_accounts ca ON ca.tenant_id = g.tenant_id AND ca.id = g.account_id
 	LEFT JOIN channel_connections cc ON cc.tenant_id = g.tenant_id AND cc.id = g.channel_connection_id
@@ -261,7 +287,7 @@ func scanGroup(row pgx.Row) (groupItem, error) {
 	var author, mtype, preview *string
 	var fromMe *bool
 	if err := row.Scan(&it.ID, &it.Name, &it.Enabled, &it.Purpose, &it.AccountID, &it.AccountName, &it.ConnectionID, &it.ConnectionAccount,
-		&it.AIObserverEnabled, &it.LastMessageAt, &author, &fromMe, &mtype, &preview); err != nil {
+		&it.AIObserverEnabled, &it.IsAlertChannel, &it.LastMessageAt, &author, &fromMe, &mtype, &preview); err != nil {
 		return it, err
 	}
 	if author != nil && fromMe != nil && mtype != nil && preview != nil {
@@ -498,11 +524,12 @@ func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 		Enabled           *bool   `json:"enabled"`
 		Purpose           *string `json:"purpose"`
 		AIObserverEnabled *bool   `json:"ai_observer_enabled"`
+		AlertChannel      *bool   `json:"is_alert_channel"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || (req.Enabled == nil && req.Purpose == nil && req.AIObserverEnabled == nil) {
-		http.Error(w, "enabled, purpose and/or ai_observer_enabled must be set", http.StatusBadRequest)
+	if err := dec.Decode(&req); err != nil || (req.Enabled == nil && req.Purpose == nil && req.AIObserverEnabled == nil && req.AlertChannel == nil) {
+		http.Error(w, "enabled, purpose, ai_observer_enabled and/or is_alert_channel must be set", http.StatusBadRequest)
 		return
 	}
 	if req.Purpose != nil && !groupPurposes[*req.Purpose] {
@@ -510,10 +537,11 @@ func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
-	var prevEnabled, prevAIObserver bool
+	var prevEnabled, prevAIObserver, prevAlertChannel bool
 	var prevPurpose string
-	err := q.QueryRow(r.Context(), `SELECT enabled, purpose, ai_observer_enabled FROM wa_groups WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, id).
-		Scan(&prevEnabled, &prevPurpose, &prevAIObserver)
+	var accountID *uuid.UUID
+	err := q.QueryRow(r.Context(), `SELECT enabled, purpose, ai_observer_enabled, is_alert_channel, account_id FROM wa_groups WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, id).
+		Scan(&prevEnabled, &prevPurpose, &prevAIObserver, &prevAlertChannel, &accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "group not found", http.StatusNotFound)
 		return
@@ -522,7 +550,7 @@ func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read group", http.StatusInternalServerError)
 		return
 	}
-	newEnabled, newPurpose, newAIObserver := prevEnabled, prevPurpose, prevAIObserver
+	newEnabled, newPurpose, newAIObserver, newAlertChannel := prevEnabled, prevPurpose, prevAIObserver, prevAlertChannel
 	if req.Enabled != nil {
 		newEnabled = *req.Enabled
 	}
@@ -532,22 +560,50 @@ func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 	if req.AIObserverEnabled != nil {
 		newAIObserver = *req.AIObserverEnabled
 	}
+	if req.AlertChannel != nil {
+		newAlertChannel = *req.AlertChannel
+	}
 	if newAIObserver && !newEnabled {
 		http.Error(w, "ai_observer_enabled requires the group to be reading (enabled)", http.StatusBadRequest)
 		return
 	}
-	enabledChanged, purposeChanged, aiObserverChanged := newEnabled != prevEnabled, newPurpose != prevPurpose, newAIObserver != prevAIObserver
-	if enabledChanged || purposeChanged || aiObserverChanged {
-		if _, err := q.Exec(r.Context(), `
-			UPDATE wa_groups SET enabled = $3, purpose = $4, ai_observer_enabled = $8, updated_at = now(),
-			  enabled_by = CASE WHEN $3 AND NOT $5 THEN $6::uuid ELSE enabled_by END,
-			  enabled_at = CASE WHEN $3 AND NOT $5 THEN now() ELSE enabled_at END,
-			  purpose_set_by = CASE WHEN $7 THEN $6::uuid ELSE purpose_set_by END,
-			  purpose_set_at = CASE WHEN $7 THEN now() ELSE purpose_set_at END,
-			  ai_observer_set_by = CASE WHEN $9 THEN $6::uuid ELSE ai_observer_set_by END,
-			  ai_observer_set_at = CASE WHEN $9 THEN now() ELSE ai_observer_set_at END
-			WHERE tenant_id = $1 AND id = $2`,
-			tc.TenantID, id, newEnabled, newPurpose, prevEnabled, tc.ActorID, purposeChanged, newAIObserver, aiObserverChanged); err != nil {
+	// ADR-0058: the only group-send exception in the whole product, so it is kept as narrow as the database
+	// itself can make it — never a group tied to a customer account, and (same "no dependent without the
+	// thing it depends on" rule as the AI observer) never a group that is not even being read.
+	if newAlertChannel && !newEnabled {
+		http.Error(w, "is_alert_channel requires the group to be reading (enabled)", http.StatusBadRequest)
+		return
+	}
+	if newAlertChannel && accountID != nil {
+		http.Error(w, "is_alert_channel cannot be set on a group linked to a customer account", http.StatusConflict)
+		return
+	}
+	enabledChanged := newEnabled != prevEnabled
+	purposeChanged := newPurpose != prevPurpose
+	aiObserverChanged := newAIObserver != prevAIObserver
+	alertChannelChanged := newAlertChannel != prevAlertChannel
+	if enabledChanged || purposeChanged || aiObserverChanged || alertChannelChanged {
+		updateErr := attempt(r.Context(), q, func() error {
+			_, err := q.Exec(r.Context(), `
+				UPDATE wa_groups SET enabled = $3, purpose = $4, ai_observer_enabled = $8, is_alert_channel = $10, updated_at = now(),
+				  enabled_by = CASE WHEN $3 AND NOT $5 THEN $6::uuid ELSE enabled_by END,
+				  enabled_at = CASE WHEN $3 AND NOT $5 THEN now() ELSE enabled_at END,
+				  purpose_set_by = CASE WHEN $7 THEN $6::uuid ELSE purpose_set_by END,
+				  purpose_set_at = CASE WHEN $7 THEN now() ELSE purpose_set_at END,
+				  ai_observer_set_by = CASE WHEN $9 THEN $6::uuid ELSE ai_observer_set_by END,
+				  ai_observer_set_at = CASE WHEN $9 THEN now() ELSE ai_observer_set_at END,
+				  alert_channel_set_by = CASE WHEN $11 THEN $6::uuid ELSE alert_channel_set_by END,
+				  alert_channel_set_at = CASE WHEN $11 THEN now() ELSE alert_channel_set_at END
+				WHERE tenant_id = $1 AND id = $2`,
+				tc.TenantID, id, newEnabled, newPurpose, prevEnabled, tc.ActorID, purposeChanged, newAIObserver, aiObserverChanged,
+				newAlertChannel, alertChannelChanged)
+			return err
+		})
+		if updateErr != nil {
+			if pgCode(updateErr) == "23505" {
+				http.Error(w, "another group in this tenant is already the alert channel", http.StatusConflict)
+				return
+			}
 			http.Error(w, "failed to save group", http.StatusInternalServerError)
 			return
 		}
@@ -565,6 +621,13 @@ func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 			action := auditdomain.ActionGroupAIObserverDisabled
 			if newAIObserver {
 				action = auditdomain.ActionGroupAIObserverEnabled
+			}
+			h.record(r, tc, id, action, map[string]any{})
+		}
+		if alertChannelChanged {
+			action := auditdomain.ActionGroupAlertChannelDisabled
+			if newAlertChannel {
+				action = auditdomain.ActionGroupAlertChannelEnabled
 			}
 			h.record(r, tc, id, action, map[string]any{})
 		}
@@ -746,9 +809,19 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if prev == nil || *prev != accountID {
-		if _, err := q.Exec(r.Context(), `
-			UPDATE wa_groups SET account_id = $3, account_set_by = $4, account_set_at = now(), updated_at = now()
-			WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id, accountID, tc.ActorID); err != nil {
+		linkErr := attempt(r.Context(), q, func() error {
+			_, err := q.Exec(r.Context(), `
+				UPDATE wa_groups SET account_id = $3, account_set_by = $4, account_set_at = now(), updated_at = now()
+				WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id, accountID, tc.ActorID)
+			return err
+		})
+		if linkErr != nil {
+			// ADR-0058: a CHECK on wa_groups refuses to combine is_alert_channel with an account link, in
+			// either order — this is the order "link an account to the current alert channel".
+			if pgCode(linkErr) == "23514" {
+				http.Error(w, "this group is the tenant's SLA alert channel and cannot be linked to a customer account", http.StatusConflict)
+				return
+			}
 			http.Error(w, "failed to save group", http.StatusInternalServerError)
 			return
 		}
