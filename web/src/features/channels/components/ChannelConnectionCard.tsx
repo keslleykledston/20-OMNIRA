@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import clsx from 'clsx'
 import { Badge, Button, Card, DropdownMenu, Icon, Skeleton, type MenuAction } from '../../../components/primitives'
 import type { ChannelConnection, ProviderDescriptor } from '../../../lib/integrations'
 import {
@@ -13,6 +15,18 @@ interface Props {
   provider?: ProviderDescriptor
   actions: MenuAction[]
   onOpenDetails?: () => void
+}
+
+const EXPANDED_STORE = 'omnira.channels.card.expanded.'
+
+/** Per-instance, remembered per viewer — same idiom as CollapsibleSection in the inbox context pane. */
+function rememberedExpanded(id: string): boolean {
+  try {
+    const v = localStorage.getItem(EXPANDED_STORE + id)
+    return v === null ? true : v === '1'
+  } catch {
+    return true
+  }
 }
 
 /** Derived from the descriptor's connect method so it works for any provider. */
@@ -38,6 +52,19 @@ export function ChannelConnectionCard({ connection, provider, actions, onOpenDet
   const kind = connection.provider_kind
   const account = formatAccount(connection.external_account_id)
   const name = provider?.name ?? connection.provider
+  const [expanded, setExpanded] = useState(() => rememberedExpanded(connection.id))
+
+  const toggleExpanded = () => {
+    setExpanded((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem(EXPANDED_STORE + connection.id, next ? '1' : '0')
+      } catch {
+        /* the choice just is not remembered */
+      }
+      return next
+    })
+  }
 
   return (
     <Card padding="compact" className="flex items-start gap-4">
@@ -56,27 +83,42 @@ export function ChannelConnectionCard({ connection, provider, actions, onOpenDet
             <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
             {STATE_LABEL[state]}
           </Badge>
+          <button
+            type="button"
+            onClick={toggleExpanded}
+            aria-expanded={expanded}
+            aria-label={expanded ? `Recolher dados de ${name}` : `Expandir dados de ${name}`}
+            className="ml-auto flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-text-tertiary hover:bg-surface-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+          >
+            <Icon
+              name="chevron-down"
+              size={14}
+              className={clsx('transition-transform motion-reduce:transition-none', expanded && 'rotate-180')}
+            />
+          </button>
         </div>
 
         <p className="mt-0.5 text-body-sm text-text-secondary">{connectionSummary(provider)}</p>
 
-        <dl className="mt-3 space-y-1 text-body-sm">
-          <div className="flex gap-2">
-            <dt className="text-text-secondary">Número:</dt>
-            <dd className="truncate text-text-primary">{account ?? 'não configurado'}</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="text-text-secondary">Sessão:</dt>
-            {/* short connection id only — never a session token or credential reference */}
-            <dd className="truncate font-mono text-text-primary">{connection.id.slice(0, 8)}…</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="text-text-secondary">Criada em:</dt>
-            <dd className="truncate text-text-primary">
-              {new Date(connection.created_at).toLocaleDateString('pt-BR')}
-            </dd>
-          </div>
-        </dl>
+        {expanded && (
+          <dl className="mt-3 space-y-1 text-body-sm">
+            <div className="flex gap-2">
+              <dt className="text-text-secondary">Número:</dt>
+              <dd className="truncate text-text-primary">{account ?? 'não configurado'}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="text-text-secondary">Sessão:</dt>
+              {/* short connection id only — never a session token or credential reference */}
+              <dd className="truncate font-mono text-text-primary">{connection.id.slice(0, 8)}…</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="text-text-secondary">Criada em:</dt>
+              <dd className="truncate text-text-primary">
+                {new Date(connection.created_at).toLocaleDateString('pt-BR')}
+              </dd>
+            </div>
+          </dl>
+        )}
       </div>
 
       <div className="flex flex-shrink-0 items-center gap-2">
