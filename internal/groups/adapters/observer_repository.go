@@ -68,10 +68,10 @@ func (r *PostgresObserverRepository) Save(ctx context.Context, c groupsapp.Candi
 	var saved bool
 	err := r.system(ctx, func(ctx context.Context, q platformdb.Querier) error {
 		tag, err := q.Exec(ctx, `
-			INSERT INTO wa_group_message_suggestions (tenant_id, group_message_id, category, summary, confidence, model_provider, model_name, latency_ms)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			INSERT INTO wa_group_message_suggestions (tenant_id, group_message_id, category, summary, suggested_action, confidence, model_provider, model_name, latency_ms)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 			ON CONFLICT (tenant_id, group_message_id) DO NOTHING`,
-			c.TenantID, c.ID, s.Category, s.Summary, s.Confidence, modelProvider, modelName, latencyMS)
+			c.TenantID, c.ID, s.Category, s.Summary, s.SuggestedAction, s.Confidence, modelProvider, modelName, latencyMS)
 		if err != nil {
 			return err
 		}

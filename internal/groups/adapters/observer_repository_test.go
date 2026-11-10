@@ -84,7 +84,7 @@ func TestObserverClaimSkipsAlreadySuggestedMessages(t *testing.T) {
 	if err != nil || len(got) != 1 {
 		t.Fatalf("first claim: %v %+v", err, got)
 	}
-	saved, err := repo.Save(context.Background(), got[0], groupsapp.Suggestion{Category: "question", Summary: "Pergunta sobre horário", Confidence: 0.6}, "fake", "mini", 42)
+	saved, err := repo.Save(context.Background(), got[0], groupsapp.Suggestion{Category: "question", Summary: "Pergunta sobre horário", SuggestedAction: "confirmar horário de atendimento", Confidence: 0.6}, "fake", "mini", 42)
 	if err != nil || !saved {
 		t.Fatalf("save: saved=%v err=%v", saved, err)
 	}
@@ -92,11 +92,11 @@ func TestObserverClaimSkipsAlreadySuggestedMessages(t *testing.T) {
 	if err != nil || len(got) != 0 {
 		t.Fatalf("second claim must find nothing left, got %v %+v", err, got)
 	}
-	var category, summary string
+	var category, summary, suggestedAction string
 	var confidence float64
-	if err := e.seed.QueryRow(e.ctx, `SELECT category, summary, confidence FROM wa_group_message_suggestions WHERE tenant_id=$1 AND group_message_id=$2`, tenant, mid).
-		Scan(&category, &summary, &confidence); err != nil || category != "question" || summary != "Pergunta sobre horário" || confidence != 0.6 {
-		t.Fatalf("stored suggestion = %q %q %v (%v)", category, summary, confidence, err)
+	if err := e.seed.QueryRow(e.ctx, `SELECT category, summary, suggested_action, confidence FROM wa_group_message_suggestions WHERE tenant_id=$1 AND group_message_id=$2`, tenant, mid).
+		Scan(&category, &summary, &suggestedAction, &confidence); err != nil || category != "question" || summary != "Pergunta sobre horário" || suggestedAction != "confirmar horário de atendimento" || confidence != 0.6 {
+		t.Fatalf("stored suggestion = %q %q %q %v (%v)", category, summary, suggestedAction, confidence, err)
 	}
 }
 

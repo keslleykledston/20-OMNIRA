@@ -38,6 +38,7 @@ export type GroupSuggestionCategory = 'request' | 'complaint' | 'question' | 'in
 export interface GroupMessageSuggestion {
   category: GroupSuggestionCategory
   summary: string
+  suggested_action: string
   confidence: number
 }
 

@@ -191,11 +191,18 @@ export function GroupThread({ group, canManage, onBack }: Props) {
                         {newAuthor && !m.from_me && <p className="mb-0.5 text-xs font-semibold text-accent-primary">{authorLabel(m)}</p>}
                         <p className={clsx('break-words whitespace-pre-wrap', !m.body.trim() && 'italic text-text-secondary')}>{messageText(m)}</p>
                         {canManage && m.suggestion && (
-                          <div className="mt-1 flex items-center gap-1.5" title={m.suggestion.summary}>
-                            <Badge variant={GROUP_SUGGESTION_BADGE_VARIANT[m.suggestion.category]} size="sm">
-                              IA: {GROUP_SUGGESTION_LABEL[m.suggestion.category]}
-                            </Badge>
-                            <span className="truncate text-[11px] text-text-secondary">{m.suggestion.summary}</span>
+                          <div className="mt-1" title={m.suggestion.summary}>
+                            <div className="flex items-center gap-1.5">
+                              <Badge variant={GROUP_SUGGESTION_BADGE_VARIANT[m.suggestion.category]} size="sm">
+                                IA: {GROUP_SUGGESTION_LABEL[m.suggestion.category]}
+                              </Badge>
+                              <span className="truncate text-[11px] text-text-secondary">{m.suggestion.summary}</span>
+                            </div>
+                            {m.suggestion.suggested_action && (
+                              <p className="mt-0.5 truncate text-[11px] italic text-text-tertiary">
+                                Sugestão: {m.suggestion.suggested_action}
+                              </p>
+                            )}
                           </div>
                         )}
                         <time className="mt-0.5 block text-right text-[11px] text-text-secondary">

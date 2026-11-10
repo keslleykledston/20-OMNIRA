@@ -637,6 +637,45 @@ func TestGroupAIObserverToggleRequiresReadingAndIsAudited(t *testing.T) {
 	}
 }
 
+// ADR-0056: ListMessages surfaces a stored suggestion's suggested_action alongside category/summary/confidence,
+// and a message with no suggestion yet carries a nil Suggestion — same JSON shape as before this ADR, just one
+// more field.
+func TestGroupMessageSuggestionIncludesSuggestedAction(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	gid := e.group(tenantA, connA, jid1, "Homologação", true)
+
+	withSuggestion := uuid.New()
+	e.exec(`INSERT INTO wa_group_messages(id,tenant_id,group_id,provider_message_id,author_name,message_type,body,sent_at) VALUES($1,$2,$3,'m1','Rafael','text','preciso de ajuda',now())`,
+		withSuggestion, tenantA, gid)
+	e.exec(`INSERT INTO wa_group_message_suggestions(tenant_id,group_message_id,category,summary,suggested_action,confidence,model_provider,model_name,latency_ms)
+		VALUES($1,$2,'request','Pedido de ajuda','verificar o que o cliente precisa',0.75,'fake','mini',10)`, tenantA, withSuggestion)
+	withoutSuggestion := uuid.New()
+	e.exec(`INSERT INTO wa_group_messages(id,tenant_id,group_id,provider_message_id,author_name,message_type,body,sent_at) VALUES($1,$2,$3,'m2','Rafael','text','oi',now() + interval '1 minute')`,
+		withoutSuggestion, tenantA, gid)
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	rec := call(t, e.app, tenantA, admin, http.MethodGet, "/", "", map[string]string{"group_id": gid.String()}, h.ListMessages)
+	var page struct {
+		Items []messageItem `json:"items"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+		t.Fatalf("list messages: %d %s", rec.Code, rec.Body.String())
+	}
+	byID := map[uuid.UUID]messageItem{}
+	for _, m := range page.Items {
+		byID[m.ID] = m
+	}
+	got := byID[withSuggestion].Suggestion
+	if got == nil || got.Category != "request" || got.Summary != "Pedido de ajuda" || got.SuggestedAction != "verificar o que o cliente precisa" || got.Confidence != 0.75 {
+		t.Fatalf("suggestion = %+v", got)
+	}
+	if byID[withoutSuggestion].Suggestion != nil {
+		t.Fatalf("message without a suggestion must carry nil, got %+v", byID[withoutSuggestion].Suggestion)
+	}
+}
+
 // account_id (migration 000177) links a group to the "cliente final" it belongs to, reusing customer_accounts
 // (ADR-0018) instead of a second company catalog. Validated against the SAME tenant, audited, idempotent,
 // and List's account_id filter finds both "this client's groups" and "groups nobody linked yet".

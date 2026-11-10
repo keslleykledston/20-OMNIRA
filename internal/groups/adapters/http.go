@@ -117,9 +117,10 @@ type groupItem struct {
 // suggestionItem is the AI observer's suggestion for one message (ADR-0055) — never anything acted on, just
 // shown to whoever already has group.read so a human can review it.
 type suggestionItem struct {
-	Category   string  `json:"category"`
-	Summary    string  `json:"summary"`
-	Confidence float64 `json:"confidence"`
+	Category        string  `json:"category"`
+	Summary         string  `json:"summary"`
+	SuggestedAction string  `json:"suggested_action"`
+	Confidence      float64 `json:"confidence"`
 }
 
 type availableItem struct {
@@ -621,7 +622,7 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	args = append(args, opts.Limit+1)
 	rows, err := q.Query(r.Context(), `
 		SELECT m.id, COALESCE(NULLIF(ct.alias, ''), m.author_name), m.from_me, m.message_type, m.body, m.sent_at,
-		       s.category, s.summary, s.confidence
+		       s.category, s.summary, s.suggested_action, s.confidence
 		FROM wa_group_messages m
 		LEFT JOIN channel_participants cp ON cp.tenant_id = m.tenant_id AND cp.id = m.sender_channel_participant_id
 		LEFT JOIN contacts ct ON ct.tenant_id = cp.tenant_id AND ct.id = cp.contact_id
@@ -636,15 +637,19 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	var last messageItem
 	// Check the limit BEFORE rows.Next(): the extra row (LIMIT n+1) must stay for the hasMore probe.
 	for len(items) < opts.Limit && rows.Next() {
-		var category, summary *string
+		var category, summary, suggestedAction *string
 		var confidence *float64
 		last.Suggestion = nil
-		if err := rows.Scan(&last.ID, &last.AuthorName, &last.FromMe, &last.MessageType, &last.Body, &last.SentAt, &category, &summary, &confidence); err != nil {
+		if err := rows.Scan(&last.ID, &last.AuthorName, &last.FromMe, &last.MessageType, &last.Body, &last.SentAt, &category, &summary, &suggestedAction, &confidence); err != nil {
 			http.Error(w, "failed to read messages", http.StatusInternalServerError)
 			return
 		}
 		if category != nil {
-			last.Suggestion = &suggestionItem{Category: *category, Summary: *summary, Confidence: *confidence}
+			action := ""
+			if suggestedAction != nil {
+				action = *suggestedAction
+			}
+			last.Suggestion = &suggestionItem{Category: *category, Summary: *summary, SuggestedAction: action, Confidence: *confidence}
 		}
 		items = append(items, last)
 	}

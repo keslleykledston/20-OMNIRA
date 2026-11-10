@@ -12,11 +12,11 @@ import (
 )
 
 func TestParseSuggestionAcceptsAWellFormedAnswer(t *testing.T) {
-	s, err := ParseSuggestion(`{"category":"request","summary":"Cliente pede atualização do pedido 123","confidence":0.82}`)
+	s, err := ParseSuggestion(`{"category":"request","summary":"Cliente pede atualização do pedido 123","suggested_action":"verificar status do pedido","confidence":0.82}`)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if s.Category != "request" || s.Summary != "Cliente pede atualização do pedido 123" || s.Confidence != 0.82 {
+	if s.Category != "request" || s.Summary != "Cliente pede atualização do pedido 123" || s.SuggestedAction != "verificar status do pedido" || s.Confidence != 0.82 {
 		t.Fatalf("got %+v", s)
 	}
 }
@@ -36,6 +36,17 @@ func TestParseSuggestionTruncatesAnOverlongSummary(t *testing.T) {
 	}
 	if r := []rune(s.Summary); len(r) != maxSummaryRunes {
 		t.Fatalf("summary length = %d, want %d", len(r), maxSummaryRunes)
+	}
+}
+
+func TestParseSuggestionTruncatesAnOverlongSuggestedAction(t *testing.T) {
+	long := strings.Repeat("a", maxActionRunes+50)
+	s, err := ParseSuggestion(`{"category":"other","summary":"x","suggested_action":"` + long + `","confidence":0.1}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if r := []rune(s.SuggestedAction); len(r) != maxActionRunes {
+		t.Fatalf("suggested_action length = %d, want %d", len(r), maxActionRunes)
 	}
 }
 

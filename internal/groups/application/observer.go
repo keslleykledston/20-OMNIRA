@@ -21,7 +21,7 @@ import (
 )
 
 // PromptVersion is stored with every suggestion so a change of recipe is traceable.
-const PromptVersion = "group-observer-v1"
+const PromptVersion = "group-observer-v2"
 
 // Categories is the closed list a suggestion's category must be one of (migration 000179's CHECK). Never
 // open-ended: a human reviewing suggestions in the Grupos tab sees a small, stable set of labels.
@@ -37,10 +37,13 @@ func validCategory(c string) bool {
 }
 
 const maxSummaryRunes = 140
+const maxActionRunes = 80 // matches the ~80-char guidance given to the model; migration 000180's CHECK allows up to 160
 const maxBodyRunes = 4000 // a group message's body is already capped at 20000 chars by the DB; bound what reaches the prompt too
 
-// Instructions is the fixed, server-owned system prompt (ADR-0055 decision 6). Never built from message
-// content; the message itself is always DATA passed as Input, never concatenated into this string.
+// Instructions is the fixed, server-owned system prompt (ADR-0055 decision 6, extended by ADR-0056 decision 2).
+// Never built from message content; the message itself is always DATA passed as Input, never concatenated into
+// this string. The suggested action is deliberately free text, not a closed list (ADR-0056 decision 1) — the
+// examples below only calibrate style, the model is never told to pick from them.
 const Instructions = `Você observa UMA mensagem de um grupo de WhatsApp interno de atendimento e sugere, só para um
 operador humano revisar depois, o que ela representa. Você NUNCA responde ao grupo, nunca age, apenas sugere.
 
@@ -54,14 +57,21 @@ Escolha exatamente UMA categoria desta lista fechada:
 - info: a mensagem é só um aviso ou informação, sem pedir nada
 - other: não se encaixa claramente em nenhuma das anteriores
 
+Além disso, escreva uma ação sugerida: uma frase curta (até 80 caracteres), em texto livre, descrevendo o que
+provavelmente precisa ser feito em resposta — não uma categoria fixa, apenas a ação mais provável nesse contexto
+específico. Exemplos de ESTILO (não é uma lista pra escolher, são só exemplos de como responder): "verificar status
+do anúncio do bloco", "checar flap ou oscilação no link", "confirmar se o chamado com a operadora já tem retorno".
+Se a mensagem não pedir nenhuma ação (ex: é só um aviso), descreva isso mesmo (ex: "nenhuma ação necessária").
+
 Responda em JSON estrito, nesta forma exata, sem nenhum texto fora do JSON:
-{"category":"request|complaint|question|info|other","summary":"resumo de até 140 caracteres em português do que a mensagem pede ou comunica","confidence":0.0}`
+{"category":"request|complaint|question|info|other","summary":"resumo de até 140 caracteres em português do que a mensagem pede ou comunica","suggested_action":"ação sugerida de até 80 caracteres em português","confidence":0.0}`
 
 // Suggestion is the model's parsed, validated answer.
 type Suggestion struct {
-	Category   string
-	Summary    string
-	Confidence float64
+	Category        string
+	Summary         string
+	SuggestedAction string
+	Confidence      float64
 }
 
 // ErrInvalidOutput means the model's answer could not be trusted as a suggestion; the caller stores nothing.
@@ -79,9 +89,10 @@ func ParseSuggestion(raw string) (Suggestion, error) {
 	dec := json.NewDecoder(strings.NewReader(s))
 	dec.DisallowUnknownFields()
 	var in struct {
-		Category   *string  `json:"category"`
-		Summary    string   `json:"summary"`
-		Confidence *float64 `json:"confidence"`
+		Category        *string  `json:"category"`
+		Summary         string   `json:"summary"`
+		SuggestedAction string   `json:"suggested_action"`
+		Confidence      *float64 `json:"confidence"`
 	}
 	if err := dec.Decode(&in); err != nil || dec.More() {
 		return Suggestion{}, fmt.Errorf("%w: not a single JSON object", ErrInvalidOutput)
@@ -99,7 +110,11 @@ func ParseSuggestion(raw string) (Suggestion, error) {
 	if r := []rune(summary); len(r) > maxSummaryRunes {
 		summary = string(r[:maxSummaryRunes])
 	}
-	return Suggestion{Category: *in.Category, Summary: summary, Confidence: *in.Confidence}, nil
+	action := sanitize(in.SuggestedAction)
+	if r := []rune(action); len(r) > maxActionRunes {
+		action = string(r[:maxActionRunes])
+	}
+	return Suggestion{Category: *in.Category, Summary: summary, SuggestedAction: action, Confidence: *in.Confidence}, nil
 }
 
 // sanitize strips control characters a model could still emit despite the prompt (never trust derived text verbatim).
