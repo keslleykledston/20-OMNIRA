@@ -20,6 +20,13 @@ func (f *fakeAlertRepo) AlertChannelForConversation(ctx context.Context, convers
 	return f.ch, f.err
 }
 
+type fakeFeatureFlag struct {
+	enabled bool
+	err     error
+}
+
+func (f *fakeFeatureFlag) Enabled(ctx context.Context) (bool, error) { return f.enabled, f.err }
+
 type fakeSender struct {
 	sent []channelsdomain.OutboundTextMessage
 	conn uuid.UUID
@@ -38,7 +45,7 @@ func (f *fakeSender) SendText(ctx context.Context, connID uuid.UUID, msg channel
 func TestSLAAlertNeverSendsWhenNoChannelIsConfigured(t *testing.T) {
 	repo := &fakeAlertRepo{ch: nil}
 	sender := &fakeSender{}
-	s := NewSLAAlertService(repo, sender, nil)
+	s := NewSLAAlertService(repo, nil, sender, nil)
 	s.HandleBreach(context.Background(), uuid.New(), "first_response", "key-1")
 	if len(sender.sent) != 0 {
 		t.Fatalf("sent = %d, want 0 (no channel configured)", len(sender.sent))
@@ -48,13 +55,13 @@ func TestSLAAlertNeverSendsWhenNoChannelIsConfigured(t *testing.T) {
 func TestSLAAlertNeverPropagatesALookupOrSendFailure(t *testing.T) {
 	repo := &fakeAlertRepo{err: errors.New("boom")}
 	sender := &fakeSender{}
-	s := NewSLAAlertService(repo, sender, nil)
+	s := NewSLAAlertService(repo, nil, sender, nil)
 	s.HandleBreach(context.Background(), uuid.New(), "resolution", "key-2") // must not panic, must not block on error
 
 	group := &AlertChannel{GroupID: uuid.New(), ConnectionID: uuid.New(), ProviderGroupID: "123@g.us"}
 	repo2 := &fakeAlertRepo{ch: group}
 	sender2 := &fakeSender{err: errors.New("waha down")}
-	s2 := NewSLAAlertService(repo2, sender2, nil)
+	s2 := NewSLAAlertService(repo2, nil, sender2, nil)
 	s2.HandleBreach(context.Background(), uuid.New(), "queue_wait", "key-3")
 	if len(sender2.sent) != 0 {
 		t.Fatalf("sent = %d, want 0 (send failed)", len(sender2.sent))
@@ -65,7 +72,7 @@ func TestSLAAlertSendsToTheConfiguredChannelWithTheIdempotencyKeyAndNeverClientC
 	group := &AlertChannel{GroupID: uuid.New(), ConnectionID: uuid.New(), ProviderGroupID: "555@g.us"}
 	repo := &fakeAlertRepo{ch: group}
 	sender := &fakeSender{}
-	s := NewSLAAlertService(repo, sender, nil)
+	s := NewSLAAlertService(repo, nil, sender, nil)
 	s.HandleBreach(context.Background(), uuid.New(), "first_response", "idem-key-1")
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent = %d, want 1", len(sender.sent))
@@ -79,5 +86,31 @@ func TestSLAAlertSendsToTheConfiguredChannelWithTheIdempotencyKeyAndNeverClientC
 	}
 	if !strings.Contains(got.Text, "primeira resposta") {
 		t.Fatalf("text = %q, want it to name the metric", got.Text)
+	}
+}
+
+// The operator kill switch (ADR-0058 addendum) is checked BEFORE the channel lookup: disabled means
+// nothing is sent, regardless of whether a channel is configured.
+func TestSLAAlertNeverSendsWhenTheFeatureFlagIsDisabled(t *testing.T) {
+	group := &AlertChannel{GroupID: uuid.New(), ConnectionID: uuid.New(), ProviderGroupID: "555@g.us"}
+	repo := &fakeAlertRepo{ch: group}
+	sender := &fakeSender{}
+	s := NewSLAAlertService(repo, &fakeFeatureFlag{enabled: false}, sender, nil)
+	s.HandleBreach(context.Background(), uuid.New(), "first_response", "key-flag-off")
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent = %d, want 0 (feature disabled)", len(sender.sent))
+	}
+}
+
+// A failure to read the flag is the same "best-effort, never propagate" contract as a lookup/send
+// failure: it must never panic, block or send.
+func TestSLAAlertNeverPropagatesAFeatureFlagLookupFailure(t *testing.T) {
+	group := &AlertChannel{GroupID: uuid.New(), ConnectionID: uuid.New(), ProviderGroupID: "555@g.us"}
+	repo := &fakeAlertRepo{ch: group}
+	sender := &fakeSender{}
+	s := NewSLAAlertService(repo, &fakeFeatureFlag{err: errors.New("db down")}, sender, nil)
+	s.HandleBreach(context.Background(), uuid.New(), "first_response", "key-flag-err")
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent = %d, want 0 (flag lookup failed)", len(sender.sent))
 	}
 }

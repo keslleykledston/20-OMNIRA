@@ -119,9 +119,6 @@ x-omnira-runtime: &omnira-runtime
   # Group AI observer (ADR-0055): suggest-only, per-group opt-in, own queue — separate from the topic switches
   # above on purpose (see ADR-0055 "Alternativas").
   OMNIRA_GROUP_AI_OBSERVER_ENABLED: ${OMNIRA_GROUP_AI_OBSERVER_ENABLED-}
-  # Group SLA alert channel (ADR-0058): the ONE exception to "nothing is sent to a group". Off unless this flag
-  # AND a tenant's own opt-in group (wa_groups.is_alert_channel) are both set.
-  OMNIRA_GROUP_SLA_ALERT_ENABLED: ${OMNIRA_GROUP_SLA_ALERT_ENABLED-}
 
 services:
   postgres:

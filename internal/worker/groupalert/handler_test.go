@@ -27,7 +27,7 @@ func (f *fakeSender) SendText(ctx context.Context, connID uuid.UUID, msg channel
 
 func TestHandleIgnoresAMalformedEnvelopeWithoutError(t *testing.T) {
 	sender := &fakeSender{}
-	h := NewHandler(groupsapp.NewSLAAlertService(&fakeRepo{}, sender, nil))
+	h := NewHandler(groupsapp.NewSLAAlertService(&fakeRepo{}, nil, sender, nil))
 	for _, raw := range []string{`not json`, `{}`, `{"aggregate_id":"not-a-uuid"}`, `{"aggregate_id":"` + uuid.Nil.String() + `"}`} {
 		h.Handle(context.Background(), []byte(raw)) // must never panic
 	}
@@ -39,7 +39,7 @@ func TestHandleIgnoresAMalformedEnvelopeWithoutError(t *testing.T) {
 func TestHandleSendsForAWellFormedEnvelopeWhenAChannelIsConfigured(t *testing.T) {
 	group := &groupsapp.AlertChannel{GroupID: uuid.New(), ConnectionID: uuid.New(), ProviderGroupID: "999@g.us"}
 	sender := &fakeSender{}
-	h := NewHandler(groupsapp.NewSLAAlertService(&fakeRepo{ch: group}, sender, nil))
+	h := NewHandler(groupsapp.NewSLAAlertService(&fakeRepo{ch: group}, nil, sender, nil))
 	conv := uuid.New()
 	raw := `{"id":"evt-1","aggregate_id":"` + conv.String() + `","payload":{"metric":"assignment"}}`
 	h.Handle(context.Background(), []byte(raw))

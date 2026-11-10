@@ -28,6 +28,7 @@ import {
 import type { usePlatformOperator } from '../hooks/usePlatformOperator'
 import { currentUserId, handleUnauthorized, isUnauthorized } from '../lib/session'
 import { showToast } from '../lib/toast'
+import { groupSlaAlertFeatureFlagAPI, type GroupSlaAlertFeatureFlag } from '../lib/platformFeatureFlags'
 import {
   describePlatformReleaseError,
   isTerminalRunState,
@@ -52,10 +53,11 @@ import {
 // como pendência em IMPLEMENTATION-STATUS.md). Esta tela faz o acompanhamento por polling real
 // (ver RunTracking abaixo) — a mesma adaptação, do mesmo jeito documentada aqui (F7).
 
-type SectionId = 'catalogo' | 'atualizacoes'
+type SectionId = 'catalogo' | 'atualizacoes' | 'funcionalidades'
 const TAB_ITEMS: TabItem<SectionId>[] = [
   { id: 'catalogo', label: 'Catálogo' },
   { id: 'atualizacoes', label: 'Atualizações' },
+  { id: 'funcionalidades', label: 'Funcionalidades' },
 ]
 
 // Achado Codex [P2] (8a rodada/9a rodada de revisão): `crypto.randomUUID()` chamado DENTRO de
@@ -356,6 +358,8 @@ export default function PlatformReleasesPage() {
             onTrack={trackRun}
           />
         )}
+
+        {section === 'funcionalidades' && <FeatureFlagsSection />}
       </div>
 
       <Modal open={setVersionOpen} title="Registrar versão instalada" onClose={() => { setVersionKey.spend(); setSetVersionOpen(false) }}>
@@ -375,6 +379,54 @@ function Field({ label, value, warn }: { label: string; value: string; warn?: bo
       <dt className="text-body-sm text-text-secondary">{label}</dt>
       <dd className={warn ? 'font-medium text-status-warning-strong' : 'font-medium text-text-primary'}>{value}</dd>
     </div>
+  )
+}
+
+// Group SLA alert kill switch (ADR-0058 addendum): a button in place of editing
+// OMNIRA_GROUP_SLA_ALERT_ENABLED in .env and restarting the worker. The worker checks this on
+// every SLA breach event, so flipping it here takes effect immediately — no redeploy.
+function FeatureFlagsSection() {
+  const qc = useQueryClient()
+  const flag = useQuery({ queryKey: ['group-sla-alert-flag'], queryFn: () => groupSlaAlertFeatureFlagAPI.get(), retry: false })
+  const setFlag = useMutation({
+    mutationFn: (enabled: boolean) => groupSlaAlertFeatureFlagAPI.set(enabled),
+    onSuccess: (data) => qc.setQueryData<GroupSlaAlertFeatureFlag>(['group-sla-alert-flag'], data),
+    onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
+  })
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-section-md font-semibold text-text-primary">Alerta de SLA em grupo (ADR-0058)</h2>
+      </CardHeader>
+      <CardBody>
+        {flag.isLoading ? (
+          <LoadingState message="Carregando…" />
+        ) : flag.isError ? (
+          <ErrorState title="Não foi possível carregar" message={describePlatformReleaseError(flag.error)} action={{ label: 'Tentar novamente', onClick: () => void flag.refetch() }} />
+        ) : (
+          <>
+            <p className="text-body-sm text-text-secondary">
+              Chave geral da plataforma: quando uma conversa estoura o SLA, envia uma mensagem de verdade ao grupo de WhatsApp que cada tenant escolheu como "canal de
+              alerta" (tela Grupos). Esta chave é independente dessa escolha — as duas precisam estar ligadas para a mensagem ser enviada.
+            </p>
+            <label className="mt-4 flex items-center gap-2 text-body-md font-medium text-text-primary">
+              <input
+                type="checkbox"
+                checked={flag.data?.enabled ?? false}
+                disabled={setFlag.isPending}
+                onChange={(e) => setFlag.mutate(e.target.checked)}
+                className="h-4 w-4 rounded border-border-subtle"
+              />
+              {flag.data?.enabled ? 'Ligado' : 'Desligado'}
+            </label>
+            {flag.data?.updated_at && (
+              <p className="mt-2 text-body-sm text-text-secondary">Última alteração: {new Date(flag.data.updated_at).toLocaleString('pt-BR')}</p>
+            )}
+          </>
+        )}
+      </CardBody>
+    </Card>
   )
 }
 

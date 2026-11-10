@@ -400,6 +400,7 @@ func main() {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
+	srv.RegisterSLAAlertFeatureFlagHandlers(dbPool, groupsadapters.NewSLAAlertFeatureFlagHandler(dbPool))
 	if cfg.ServiceContextEnabled {
 		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
 		if cfg.ServiceFinalizeHookEnabled {

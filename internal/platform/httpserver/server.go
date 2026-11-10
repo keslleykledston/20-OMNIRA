@@ -1111,6 +1111,21 @@ func (s *Server) RegisterGroupHandlers(dbPool *pgxpool.Pool, h *groupsadapters.H
 	s.mux.Handle("DELETE "+base+"/{group_id}/account", wrap(h.UnlinkAccount))
 }
 
+// RegisterSLAAlertFeatureFlagHandlers mounts the ADR-0058 operator kill switch's admin endpoint:
+// platform-wide, never tenant-scoped (same shape as RegisterPlatformReleaseHandlers), authority is
+// IsPlatformOperator alone, checked inside the handler.
+func (s *Server) RegisterSLAAlertFeatureFlagHandlers(dbPool *pgxpool.Pool, h *groupsadapters.SLAAlertFeatureFlagHandler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(userSession(fn)) }
+	const base = "/api/v1/platform/group-sla-alert"
+	s.mux.Handle("GET "+base, wrap(h.Get))
+	s.mux.Handle("PUT "+base, wrap(h.Set))
+}
+
 // RegisterAttendanceHandlers exposes finalizing an attendance and the contact's attendance history (ADR-0020) behind authn +
 // the tenant session. Permissions (conversation.claim / conversation.manage) are checked by the service.
 func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendanceadapters.Handler) {

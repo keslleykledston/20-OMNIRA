@@ -2060,6 +2060,36 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: 'version missing, or the Idempotency-Key was used with different fields' }
+  /platform/group-sla-alert:
+    get:
+      operationId: getGroupSlaAlertFeatureFlag
+      tags: [PlatformRelease]
+      summary: The group SLA alert channel kill switch (platform operator, ADR-0058)
+      description: |
+        Platform-wide, never tenant-scoped: whether the ADR-0058 group SLA alert (the one exception to
+        "nothing is sent to a group") is live at all. Replaces the earlier OMNIRA_GROUP_SLA_ALERT_ENABLED
+        env var + worker restart with a button in the admin console — checked by the worker on every SLA
+        breach event, so a change here takes effect immediately. A tenant still needs its own
+        wa_groups.is_alert_channel group chosen independently of this switch.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GroupSlaAlertFeatureFlag' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    put:
+      operationId: setGroupSlaAlertFeatureFlag
+      tags: [PlatformRelease]
+      summary: Flip the group SLA alert channel kill switch (platform operator, ADR-0058)
+      description: Audited as a platform-wide event (group_sla_alert_feature.enabled/disabled).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [enabled], properties: { enabled: { type: boolean } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GroupSlaAlertFeatureFlag' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /platform/monitoring/status:
     get:
       operationId: getPlatformMonitoringStatus
@@ -6093,6 +6123,13 @@ components:
         current_version: { type: string }
         current_release_id: { type: string }
         current_digests: { type: object }
+        updated_at: { type: string, format: date-time }
+    GroupSlaAlertFeatureFlag:
+      type: object
+      required: [enabled, updated_at]
+      properties:
+        enabled: { type: boolean }
+        updated_by: { type: string, format: uuid }
         updated_at: { type: string, format: date-time }
     PlatformBackupRecord:
       type: object

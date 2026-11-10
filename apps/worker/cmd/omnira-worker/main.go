@@ -349,19 +349,20 @@ func main() {
 		// Group SLA alert (ADR-0058): the ONE exception to "nothing is sent to a group". Consumes the SAME
 		// job.routing.sla_breached.v1 the toast of ADR-0057 reacts to client-side — a second, independent
 		// consumer of an event that already exists, not a new producer. Needs a configured channel provider
-		// to have anything to send through, which is why this lives inside this WAHA/Meta block; gated on
-		// top by its own flag, same kill-switch pattern as OMNIRA_GROUP_AI_OBSERVER_ENABLED.
-		if os.Getenv("OMNIRA_GROUP_SLA_ALERT_ENABLED") == "true" {
-			alertSvc := groupsapp.NewSLAAlertService(groupsadapters.NewPostgresAlertChannelRepository(dbPool), channelSvc, nil)
-			alertConsumer, err := groupalert.StartConsumer(workerCtx, js, groupalert.NewHandler(alertSvc))
-			if err != nil {
-				log.Fatalf("failed to start group alert consumer: %v", err)
-			}
-			defer alertConsumer.Stop()
-			log.Printf("Group SLA alert consumer started (suggest-and-send exception, ADR-0058)\n")
-		} else {
-			log.Printf("Group SLA alert disabled (OMNIRA_GROUP_SLA_ALERT_ENABLED != true)\n")
+		// to have anything to send through, which is why this lives inside this WAHA/Meta block. The consumer
+		// always starts; whether it actually sends is the group_sla_alert_feature kill switch (migration
+		// 000182), checked by SLAAlertService on EVERY event — a platform operator's button in the admin
+		// console, not an env var + worker restart.
+		alertSvc := groupsapp.NewSLAAlertService(
+			groupsadapters.NewPostgresAlertChannelRepository(dbPool),
+			groupsadapters.NewPostgresSLAAlertFeatureFlagRepository(dbPool),
+			channelSvc, nil)
+		alertConsumer, err := groupalert.StartConsumer(workerCtx, js, groupalert.NewHandler(alertSvc))
+		if err != nil {
+			log.Fatalf("failed to start group alert consumer: %v", err)
 		}
+		defer alertConsumer.Stop()
+		log.Printf("Group SLA alert consumer started (suggest-and-send exception, ADR-0058; live only when the admin console's switch is on)\n")
 	} else {
 		log.Printf("Outbound delivery disabled (OMNIRA_WAHA_ENABLED != true)\n")
 	}

@@ -7,6 +7,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 
@@ -14,6 +15,11 @@ import (
 
 	channelsdomain "github.com/omnira/omnira/internal/channels/domain"
 )
+
+// ErrNotPlatformOperator is returned by a write to the feature flag (ADR-0058 addendum) made by anyone
+// who is not an active platform operator — the same uniform denial the HTTP handler maps to 404, never
+// a 403 (no enumeration oracle, same convention as internal/platformrelease/updatemgr).
+var ErrNotPlatformOperator = errors.New("groups: caller is not an active platform operator")
 
 // AlertChannel is the tenant's single alert-channel group, as the repository finds it.
 type AlertChannel struct {
@@ -46,6 +52,20 @@ type noAlertMetrics struct{}
 
 func (noAlertMetrics) Alerted(string) {}
 
+// SLAAlertFeatureFlagRepository is the platform operator's kill switch — independent of, and checked
+// in addition to, each tenant's own is_alert_channel choice. Unlike the OMNIRA_GROUP_SLA_ALERT_ENABLED
+// env var it replaces, this is read on EVERY breach event, never only once at worker startup: an
+// operator flipping it off takes effect on the very next event, no restart needed.
+type SLAAlertFeatureFlagRepository interface {
+	Enabled(ctx context.Context) (bool, error)
+}
+
+// noFeatureFlag keeps tests that don't care about the flag free of boilerplate: nil in
+// NewSLAAlertService means "always enabled", same nil-is-a-no-op convention as SLAAlertMetrics.
+type noFeatureFlag struct{}
+
+func (noFeatureFlag) Enabled(context.Context) (bool, error) { return true, nil }
+
 var metricLabel = map[string]string{
 	"first_response": "primeira resposta",
 	"queue_wait":     "espera na fila",
@@ -55,21 +75,35 @@ var metricLabel = map[string]string{
 
 type SLAAlertService struct {
 	repo    AlertChannelRepository
+	flags   SLAAlertFeatureFlagRepository
 	sender  Sender
 	metrics SLAAlertMetrics
 }
 
-func NewSLAAlertService(repo AlertChannelRepository, sender Sender, m SLAAlertMetrics) *SLAAlertService {
+func NewSLAAlertService(repo AlertChannelRepository, flags SLAAlertFeatureFlagRepository, sender Sender, m SLAAlertMetrics) *SLAAlertService {
+	if flags == nil {
+		flags = noFeatureFlag{}
+	}
 	if m == nil {
 		m = noAlertMetrics{}
 	}
-	return &SLAAlertService{repo: repo, sender: sender, metrics: m}
+	return &SLAAlertService{repo: repo, flags: flags, sender: sender, metrics: m}
 }
 
 // HandleBreach is best-effort (ADR-0058 decision 7): a failure here is logged and swallowed, never propagated
 // to the caller — it must never hold up or retry-storm the job queue over a WhatsApp/WAHA hiccup. The durable
 // record of the breach itself is the outbox event (ADR-0044); this is only a side-effect notification.
 func (s *SLAAlertService) HandleBreach(ctx context.Context, conversationID uuid.UUID, metric, idempotencyKey string) {
+	enabled, err := s.flags.Enabled(ctx)
+	if err != nil {
+		s.metrics.Alerted("flag_error")
+		log.Printf("groups: sla alert feature flag check failed (%v)", err)
+		return
+	}
+	if !enabled {
+		s.metrics.Alerted("feature_disabled")
+		return
+	}
 	ch, err := s.repo.AlertChannelForConversation(ctx, conversationID)
 	if err != nil {
 		s.metrics.Alerted("lookup_error")
