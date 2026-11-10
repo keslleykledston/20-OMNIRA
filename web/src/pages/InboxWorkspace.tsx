@@ -19,6 +19,29 @@ import { useChannelLines } from '../lib/channelLines';
 import { isActing } from '../lib/acting';
 import { useAccess } from '../lib/useAccess';
 import DelegatedContextPane from '../components/inbox/DelegatedContextPane';
+import type { RealtimeEvent } from '../types/api';
+import { showToast } from '../lib/toast';
+
+// ADR-0057: SLA alerts reuse the realtime_emit() the message/conversation triggers already use (migration
+// 000026) — no new transport. Broadcast to the whole tenant (every agent, not just supervisors — explicit
+// product decision), toast only, no persistence: whoever has this screen open right now sees it, whoever
+// does not simply misses it, same as any other realtime event in this app.
+const SLA_METRIC_LABEL: Record<string, string> = {
+  first_response: 'primeira resposta',
+  queue_wait: 'espera na fila',
+  assignment: 'atribuição',
+  resolution: 'resolução',
+};
+
+function slaToast(event: RealtimeEvent) {
+  const metric = (event.data as { metric?: string } | undefined)?.metric ?? ''
+  const label = SLA_METRIC_LABEL[metric] ?? (metric || 'SLA')
+  if (event.type === 'sla_breach') {
+    showToast(`SLA de ${label} estourado numa conversa.`, 'error')
+  } else if (event.type === 'sla_at_risk') {
+    showToast(`SLA de ${label} em risco numa conversa.`, 'info')
+  }
+}
 
 // PRODUCT.6-O2D2: the frozen deep-link contract is /inbox?conversation_id=
 // <uuid> — never /inbox/:id (that path pattern is dead, see InboxPage.tsx/
@@ -113,7 +136,11 @@ export default function InboxWorkspace() {
   // the previous InboxPage, which had this wired via the same hook).
   useRealtimeEvents({
     tenantId,
-    onEvent: () => {
+    onEvent: (event) => {
+      if (event.type === 'sla_at_risk' || event.type === 'sla_breach') {
+        slaToast(event);
+        return;
+      }
       void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
     },
     onReconnect: () => {

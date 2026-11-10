@@ -11,8 +11,11 @@ import { renderAt, mockGets, setSession } from './testUtils';
 // these tests. The SSE hook is stubbed exactly like ConversationPage.test.tsx
 // already does, so no real fetch()-based stream is ever opened.
 vi.mock('axios');
+let onEvent: ((e: any) => void) | undefined;
 vi.mock('../hooks/useRealtimeEvents', () => ({
-  useRealtimeEvents: () => {},
+  useRealtimeEvents: (opts: any) => {
+    onEvent = opts.onEvent;
+  },
 }));
 
 // jsdom does not implement scrollIntoView; ChatPane calls it on every
@@ -326,5 +329,32 @@ describe('InboxWorkspace — list paging, search and filters', () => {
     await waitFor(() => expect(listCalls().some((p) => p.q === 'k3g')).toBe(true));
     // the keystrokes are debounced: no request per letter
     expect(listCalls().filter((p) => p.q === 'k').length).toBe(0);
+  });
+
+  // ADR-0057: sla_at_risk/sla_breach realtime events become a toast, not a conversation-list refetch, and
+  // never reach the inbox-conversations query cache as if they were an ordinary update.
+  it('turns an sla_at_risk/sla_breach realtime event into a toast, not a list refetch', async () => {
+    mockGets(mockDefaultList());
+    renderAt(<InboxWorkspace />, '/inbox');
+    await screen.findByRole('tab', { name: 'Todas' });
+    const before = vi.mocked(axios.get).mock.calls.length;
+    const toasts: Array<{ text: string; kind: string }> = [];
+    const onToast = (e: Event) => {
+      const d = (e as CustomEvent<{ text: string; kind: string }>).detail;
+      toasts.push({ text: d.text, kind: d.kind });
+    };
+    window.addEventListener('omnira:toast', onToast);
+    try {
+      onEvent?.({ type: 'sla_at_risk', id: 'conv-x', timestamp: new Date().toISOString(), data: { metric: 'first_response' } });
+      onEvent?.({ type: 'sla_breach', id: 'conv-y', timestamp: new Date().toISOString(), data: { metric: 'queue_wait' } });
+    } finally {
+      window.removeEventListener('omnira:toast', onToast);
+    }
+    expect(toasts).toEqual([
+      { text: 'SLA de primeira resposta em risco numa conversa.', kind: 'info' },
+      { text: 'SLA de espera na fila estourado numa conversa.', kind: 'error' },
+    ]);
+    // an SLA event is not a "something in the list changed" signal: no extra list fetch was triggered by it.
+    expect(vi.mocked(axios.get).mock.calls.length).toBe(before);
   });
 });

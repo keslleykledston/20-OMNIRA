@@ -365,12 +365,21 @@ func (e *Engine) slaEvent(ctx context.Context, q platformdb.Querier, tenant, con
 		tenant, conv, st.episode, st.step, ev.kind+":"+ev.metric, queueKey(st), reason, ev.metric); err != nil {
 		return err
 	}
+	realtimeType := "sla_at_risk"
 	eventType := string(outboxdomain.EventRoutingSLAAtRisk)
 	if ev.kind == "sla_breach" {
+		realtimeType = "sla_breach"
 		eventType = string(outboxdomain.EventRoutingSLABreached)
 	}
-	_, err := q.Exec(ctx, `INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
-		VALUES ($1,$2,$3,'conversation',$4,$5, jsonb_build_object('metric', $6::text))`, uuid.New(), tenant, eventType, conv.String(), uuid.New(), ev.metric)
+	if _, err := q.Exec(ctx, `INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
+		VALUES ($1,$2,$3,'conversation',$4,$5, jsonb_build_object('metric', $6::text))`, uuid.New(), tenant, eventType, conv.String(), uuid.New(), ev.metric); err != nil {
+		return err
+	}
+	// ADR-0057: also a live, best-effort toast for whoever has an Inbox screen open right now — reuses the same
+	// realtime_emit() the message/conversation triggers already use (migration 000026), never message content,
+	// no new transport. The durable outbox insert above is the source of truth; this is only a UI convenience
+	// and can be lost without consequence if the realtime bridge is down.
+	_, err := q.Exec(ctx, `SELECT realtime_emit($1, $2, $3, jsonb_build_object('metric', $4::text))`, tenant, realtimeType, conv, ev.metric)
 	return err
 }
 
