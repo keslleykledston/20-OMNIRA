@@ -361,21 +361,38 @@ function RoleSelect({ id, value, onChange }: { id: string; value: GroupLinkRole;
   );
 }
 
+const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function AddCatalogEntryModal({ hubId, tenants, open, onClose, onDone }: { hubId: string; tenants: Tenant[]; open: boolean; onClose: () => void; onDone: () => void }) {
   const [tenantId, setTenantId] = useState('');
   const [connectionId, setConnectionId] = useState('');
   const [providerGroupId, setProviderGroupId] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [manual, setManual] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (open) { setTenantId(''); setConnectionId(''); setProviderGroupId(''); setDisplayName(''); setError(null); }
+    if (open) { setTenantId(''); setConnectionId(''); setProviderGroupId(''); setDisplayName(''); setManual(false); setError(null); }
   }, [open]);
+  const canDiscover = open && !!tenantId && uuidRe.test(connectionId);
+  // Real groups already known to the tenant's own wa_groups, so the operator picks one instead of typing
+  // a JID by hand with nowhere in the product to copy it from (found broken live in production). A group
+  // the tenant's own team has never opened once in their Groups page will not be offered here yet — manual
+  // entry (below) always stays available as a fallback.
+  const discovery = useQuery({
+    queryKey: ['hub-group-discover', hubId, tenantId, connectionId],
+    queryFn: () => groupOrganizerAPI.discover(hubId, tenantId, connectionId),
+    enabled: canDiscover,
+    retry: false,
+  });
+  useEffect(() => { setProviderGroupId(''); setDisplayName(''); setManual(false); }, [tenantId, connectionId]);
   const mutation = useMutation({
     mutationFn: () => groupOrganizerAPI.upsertCatalogEntry(hubId, { source_tenant_id: tenantId, source_channel_connection_id: connectionId, provider_group_id: providerGroupId, display_name: displayName }),
     onSuccess: onDone,
     onError: (err) => { if (isUnauthorized(err)) handleUnauthorized(); else setError(describeGroupOrganizerError(err)); },
   });
   const valid = tenantId && connectionId && providerGroupId;
+  const discovered = discovery.data ?? [];
+  const showPicker = canDiscover && !manual && !discovery.isError;
   return (
     <Modal open={open} title="Adicionar grupo ao catálogo" description="Metadados mínimos do grupo (nunca mensagens). Conexão e identificador de grupo são os já usados na origem." onClose={onClose}
       footer={<>
@@ -388,14 +405,48 @@ function AddCatalogEntryModal({ hubId, tenants, open, onClose, onDone }: { hubId
           <span className="font-medium text-text-primary">ID da conexão (canal) na origem</span>
           <input id="catalog-connection" value={connectionId} onChange={(e) => setConnectionId(e.target.value)} placeholder="UUID da conexão" className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm" />
         </label>
-        <label className="block space-y-1 text-sm" htmlFor="catalog-group-id">
-          <span className="font-medium text-text-primary">Identificador do grupo (provider_group_id)</span>
-          <input id="catalog-group-id" value={providerGroupId} onChange={(e) => setProviderGroupId(e.target.value)} placeholder="1203xxxxxxxxx@g.us" className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm" />
-        </label>
-        <label className="block space-y-1 text-sm" htmlFor="catalog-display-name">
-          <span className="font-medium text-text-primary">Nome de exibição</span>
-          <input id="catalog-display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm" />
-        </label>
+        {showPicker ? (
+          <label className="block space-y-1 text-sm" htmlFor="catalog-group-picker">
+            <span className="font-medium text-text-primary">Grupo</span>
+            {discovery.isLoading ? (
+              <p className="text-sm text-text-secondary">Buscando grupos já conhecidos nesta conexão…</p>
+            ) : discovered.length === 0 ? (
+              <p className="text-sm text-text-secondary">
+                Nenhum grupo disponível nessa conexão ainda (precisa ter sido aberto ao menos uma vez na tela de Grupos do Tenant).{' '}
+                <button type="button" className="text-accent-primary underline" onClick={() => setManual(true)}>Digitar manualmente</button>
+              </p>
+            ) : (
+              <>
+                <select
+                  id="catalog-group-picker"
+                  value={providerGroupId}
+                  onChange={(e) => {
+                    const g = discovered.find((d) => d.provider_group_id === e.target.value);
+                    setProviderGroupId(e.target.value);
+                    setDisplayName(g?.name ?? '');
+                  }}
+                  className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary"
+                >
+                  <option value="">Selecione um grupo</option>
+                  {discovered.map((g) => <option key={g.provider_group_id} value={g.provider_group_id}>{g.name || g.provider_group_id}</option>)}
+                </select>
+                <button type="button" className="text-xs text-accent-primary underline" onClick={() => setManual(true)}>Não encontrou? Digitar manualmente</button>
+              </>
+            )}
+          </label>
+        ) : (
+          <>
+            <label className="block space-y-1 text-sm" htmlFor="catalog-group-id">
+              <span className="font-medium text-text-primary">Identificador do grupo (provider_group_id)</span>
+              <input id="catalog-group-id" value={providerGroupId} onChange={(e) => setProviderGroupId(e.target.value)} placeholder="1203xxxxxxxxx@g.us" className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm" />
+            </label>
+            <label className="block space-y-1 text-sm" htmlFor="catalog-display-name">
+              <span className="font-medium text-text-primary">Nome de exibição</span>
+              <input id="catalog-display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm" />
+            </label>
+            {canDiscover && <button type="button" className="text-xs text-accent-primary underline" onClick={() => setManual(false)}>Voltar para a lista de grupos</button>}
+          </>
+        )}
         {error && <p role="alert" className="text-sm text-status-danger">{error}</p>}
       </div>
     </Modal>

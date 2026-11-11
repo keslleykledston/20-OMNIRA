@@ -230,6 +230,20 @@ describe('ManageGroupsModal (via the page)', () => {
     expect(vi.mocked(axios.get).mock.calls.some(([, c]) => (c as any)?.params?.q === 'cobr')).toBe(true)
   })
 
+  it('shows the WhatsApp id so an operator can copy it (found live in production: nowhere else showed it)', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    serve({ permissions: MANAGE, groups: [], available: [avail()] })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: 'Gerenciar grupos' }))
+    expect(await screen.findByText('120363000000000001@g.us')).toBeInTheDocument()
+    const copyButtons = screen.getAllByRole('button', { name: 'Copiar' })
+    await user.click(copyButtons[copyButtons.length - 1]) // the row's own copy button (not the connection id one, when present)
+    expect(writeText).toHaveBeenCalledWith('120363000000000001@g.us')
+    expect(await screen.findByText('Copiado')).toBeInTheDocument()
+  })
+
   it('explains a missing WhatsApp connection instead of failing silently', async () => {
     const user = userEvent.setup()
     serve({ permissions: MANAGE, groups: [] })

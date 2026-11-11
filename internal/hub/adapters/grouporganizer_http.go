@@ -78,6 +78,37 @@ type upsertCatalogRequest struct {
 	DisplayName               string    `json:"display_name"`
 }
 
+// GET /api/v1/hubs/{hub_id}/groups/discover?source_tenant_id=<uuid>&source_channel_connection_id=<uuid>
+//
+// Named source_tenant_id/source_channel_connection_id (not tenant_id/channel_connection_id) on purpose:
+// requestScope refuses any Hub request carrying a literal "tenant_id" query key, because on every other
+// route here the acting tenant is derived from the caller's own grants, never chosen by the client. This
+// route is the one deliberate exception — the operator IS choosing which of their delegated tenants to
+// browse — so it borrows the catalog's own field names instead of the forbidden one, and authorization is
+// still re-proven for that exact tenant inside the service (and again inside hub_discover_tenant_groups).
+func (h *GroupOrganizerHandler) DiscoverGroups(w http.ResponseWriter, r *http.Request) {
+	actor, hub, ok := requestScope(w, r)
+	if !ok {
+		return
+	}
+	sourceTenant, err := uuid.Parse(r.URL.Query().Get("source_tenant_id"))
+	if err != nil {
+		httpError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	channelConnection, err := uuid.Parse(r.URL.Query().Get("source_channel_connection_id"))
+	if err != nil {
+		httpError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	items, err := h.svc.DiscoverGroups(r.Context(), actor, hub, sourceTenant, channelConnection)
+	if err != nil {
+		writeGroupOrganizerError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
+
 // POST /api/v1/hubs/{hub_id}/groups/catalog
 func (h *GroupOrganizerHandler) UpsertCatalogEntry(w http.ResponseWriter, r *http.Request) {
 	actor, hub, ok := requestScope(w, r)

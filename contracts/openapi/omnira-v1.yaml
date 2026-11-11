@@ -2599,6 +2599,32 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: Another pool already answers for that instance or queue }
+  /hubs/{hub_id}/groups/discover:
+    get:
+      operationId: discoverHubTenantGroups
+      tags: [Hub]
+      summary: Groups wa_groups already knows about for one tenant's connection (requires `groups` management on that tenant)
+      description: >
+        Feeds the "add to catalog" UI with real provider_group_id/name pairs instead of a blank field the
+        operator has nowhere to copy one into. Read-only; never returns wa_groups.enabled, never a message.
+        Source is wa_groups, not a live WAHA call: a group the tenant's own team has never opened once in
+        their own Groups page will not appear here yet. Query parameters are named source_tenant_id /
+        source_channel_connection_id, not tenant_id — this is the one route where the caller explicitly
+        chooses which of their delegated tenants to browse; access is still re-proven for that exact tenant
+        on every call.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: source_tenant_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: source_channel_connection_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The groups already known for that tenant's connection
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/HubGroupDiscoveredItem' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /hubs/{hub_id}/groups/catalog:
     get:
       operationId: listHubGroupCatalog
@@ -6279,6 +6305,12 @@ components:
                         valid_until: { type: string, format: date-time }
                   direct_instances: { type: array, items: { type: string, format: uuid }, description: Companies where the person is an active member in their own right }
                   instances: { type: integer, description: Distinct companies the person works in (grants plus direct memberships) }
+    HubGroupDiscoveredItem:
+      type: object
+      required: [provider_group_id, name]
+      properties:
+        provider_group_id: { type: string }
+        name: { type: string }
     HubGroupCatalogEntry:
       type: object
       required: [id, hub_id, source_tenant_id, source_channel_connection_id, provider_group_id, display_name, source_state, version, created_at, updated_at, last_seen_at]

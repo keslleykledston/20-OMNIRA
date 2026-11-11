@@ -550,7 +550,21 @@ export interface GroupRelationship {
   updated_at: string
 }
 
+export interface DiscoveredGroup {
+  provider_group_id: string
+  name: string
+}
+
 export const groupOrganizerAPI = {
+  // Groups wa_groups already knows about for one tenant's connection — never enabled, never a message.
+  // A group the tenant's own team has never opened once in their own Groups page will not appear yet.
+  discover: (hubId: string, sourceTenantId: string, sourceChannelConnectionId: string): Promise<DiscoveredGroup[]> =>
+    axios
+      .get<{ items: DiscoveredGroup[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/discover`, {
+        headers: authHeaders(),
+        params: { source_tenant_id: sourceTenantId, source_channel_connection_id: sourceChannelConnectionId },
+      })
+      .then((r) => r.data.items),
   catalog: (hubId: string): Promise<GroupCatalogEntry[]> =>
     axios.get<{ items: GroupCatalogEntry[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/catalog`, { headers: authHeaders(), params: { limit: 200 } }).then((r) => r.data.items),
   upsertCatalogEntry: (

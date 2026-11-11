@@ -58,6 +58,17 @@ export function ManageGroupsModal({ open, onClose }: Props) {
 
   const items = available.data?.items ?? []
   const total = available.data?.total ?? 0
+  const effectiveConnectionId = connectionId ?? (instances.length === 1 ? instances[0]?.id : undefined)
+  const [copied, setCopied] = useState<string | null>(null)
+  const copy = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(value)
+      window.setTimeout(() => setCopied((c) => (c === value ? null : c)), 1500)
+    } catch {
+      /* the id is selectable text; copying by hand still works */
+    }
+  }
 
   return (
     <Modal
@@ -98,6 +109,15 @@ export function ManageGroupsModal({ open, onClose }: Props) {
           </p>
         )}
 
+        {effectiveConnectionId && (
+          <p className="flex items-center gap-2 text-xs text-text-tertiary">
+            ID da conexão: <code className="rounded bg-surface-subtle px-1 py-0.5">{effectiveConnectionId}</code>
+            <button type="button" className="text-accent-primary underline" onClick={() => copy(effectiveConnectionId)}>
+              {copied === effectiveConnectionId ? 'Copiado' : 'Copiar'}
+            </button>
+          </p>
+        )}
+
         <SearchField
           aria-label="Buscar grupo"
           placeholder="Buscar grupo pelo nome..."
@@ -129,6 +149,12 @@ export function ManageGroupsModal({ open, onClose }: Props) {
                 <p className="truncate text-sm font-medium text-text-primary">{g.name || 'Grupo sem nome'}</p>
                 <p className="text-xs text-text-secondary">
                   {g.participant_count} {g.participant_count === 1 ? 'participante' : 'participantes'}
+                </p>
+                <p className="flex items-center gap-1 text-xs text-text-tertiary">
+                  <code className="truncate">{g.provider_group_id}</code>
+                  <button type="button" className="flex-shrink-0 text-accent-primary underline" onClick={() => copy(g.provider_group_id)}>
+                    {copied === g.provider_group_id ? 'Copiado' : 'Copiar'}
+                  </button>
                 </p>
               </div>
               <div className="flex flex-shrink-0 items-center gap-2">

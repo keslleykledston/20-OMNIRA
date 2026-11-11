@@ -230,6 +230,47 @@ func (s *Service) UpsertCatalogEntry(ctx context.Context, actor, hub, sourceTena
 	return out, err
 }
 
+// DiscoveredGroup is one WhatsApp group already known to the tenant's own wa_groups table — never
+// its enabled status, never a message, never a participant.
+type DiscoveredGroup struct {
+	ProviderGroupID string `json:"provider_group_id"`
+	Name            string `json:"name"`
+}
+
+// DiscoverGroups lists the groups wa_groups already knows about for one tenant's connection, so the "add
+// to catalog" UI can offer real groups instead of a blank text field the operator has nowhere to copy a
+// JID into (found broken live in production: UpsertCatalogEntry always worked, but nothing in the product
+// ever showed an operator a provider_group_id to type there). A group the tenant's own team has never
+// opened once in their Groups page — so it was never written to wa_groups — will not appear here yet; a
+// live WAHA listing would need 'channels'-scoped channel_credentials, a materially bigger grant than
+// 'groups' was ever meant to carry (ADR-0059 §3), so that stays explicitly out of scope here.
+func (s *Service) DiscoverGroups(ctx context.Context, actor, hub, sourceTenant, channelConnection uuid.UUID) ([]DiscoveredGroup, error) {
+	if sourceTenant == uuid.Nil || channelConnection == uuid.Nil {
+		return nil, invalid("source_tenant_id and source_channel_connection_id are required")
+	}
+	out := []DiscoveredGroup{}
+	err := s.tx(ctx, actor, func(c context.Context, q platformdb.Querier) error {
+		if err := authorize(c, q, sourceTenant, actor, hub); err != nil {
+			return err
+		}
+		rows, err := q.Query(c, `SELECT provider_group_id, name FROM hub_discover_tenant_groups($1, $2, $3, $4)`,
+			hub, sourceTenant, channelConnection, actor)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var g DiscoveredGroup
+			if err := rows.Scan(&g.ProviderGroupID, &g.Name); err != nil {
+				return err
+			}
+			out = append(out, g)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 func mapWriteErr(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

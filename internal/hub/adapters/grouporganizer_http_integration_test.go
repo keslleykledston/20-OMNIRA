@@ -38,6 +38,7 @@ func newGroupOrganizerAPI(t *testing.T, w *world) *groupOrganizerAPI {
 	}
 	session := tenancyadapters.UserSessionMiddleware(w.app)
 	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/discover", shim(session(http.HandlerFunc(h.DiscoverGroups))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog", shim(session(http.HandlerFunc(h.ListCatalog))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog", shim(session(http.HandlerFunc(h.UpsertCatalogEntry))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", shim(session(http.HandlerFunc(h.ListLinks))))
@@ -124,6 +125,64 @@ func TestGroupOrganizerAPI_UpsertCatalogIsIdempotentByNaturalKeyAndRequiresOrigi
 	}
 	if n := w.count(`SELECT count(*) FROM hub_group_catalog WHERE hub_id = $1 AND source_tenant_id = $2`, w.hub, w.tenant["A"]); n != 1 {
 		t.Fatalf("two upserts of the same identity created %d row(s), want 1 (no duplicate)", n)
+	}
+}
+
+// TestGroupOrganizerAPI_DiscoverGroups proves the migration-000185 bridge found missing live in
+// production: the "add to catalog" UI had nowhere to get a real provider_group_id/name from, and this
+// closes that gap without ever touching wa_groups.enabled or leaking across tenants.
+func TestGroupOrganizerAPI_DiscoverGroups(t *testing.T) {
+	w := newWorld(t)
+	api := newGroupOrganizerAPI(t, w)
+	connA := w.channelConnection("A")
+	connB := w.channelConnection("B")
+	w.waGroup("A", connA, "551199990000001@g.us", "Alpha Suporte", true)
+	w.waGroup("A", connA, "551199990000002@g.us", "Alpha Vendas", false)
+	w.waGroup("B", connB, "551199990000003@g.us", "Beta Logistica", true)
+
+	alice := w.hubAgent("alice")
+	w.canManage(w.grant(alice, "A"))
+	w.groupsScope("A") // alice gets 'groups' on A only, never on B
+
+	discoverA := "/groups/discover?source_tenant_id=" + w.tenant["A"].String() + "&source_channel_connection_id=" + connA.String()
+	discoverB := "/groups/discover?source_tenant_id=" + w.tenant["B"].String() + "&source_channel_connection_id=" + connB.String()
+
+	code, resp := api.call("GET", discoverA, alice, "", nil)
+	if code != 200 {
+		t.Fatalf("alice discovering A (has 'groups' there): got %d, want 200", code)
+	}
+	items, _ := resp["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2 (both of A's wa_groups rows)", len(items))
+	}
+	for _, raw := range items {
+		it, _ := raw.(map[string]any)
+		if _, ok := it["enabled"]; ok {
+			t.Fatalf("response must never include 'enabled' (ADR-0015 boundary): %v", it)
+		}
+		if _, ok := it["provider_group_id"]; !ok {
+			t.Fatalf("missing provider_group_id: %v", it)
+		}
+		if len(it) != 2 { // exactly provider_group_id + name, nothing else
+			t.Fatalf("expected exactly 2 fields (provider_group_id, name), got %v", it)
+		}
+	}
+
+	if code, resp := api.call("GET", discoverB, alice, "", nil); code != 404 {
+		t.Fatalf("alice discovering B (no 'groups' there, even though B has real wa_groups rows): got %d, want 404, body=%v", code, resp)
+	}
+
+	bob := w.hubAgent("bob")
+	w.canManage(w.grant(bob, "A")) // can_manage on A, but the contract never delegated 'groups' to bob's scope check (groupsScope was never called for bob's own tenant key)
+	if code, _ := api.call("GET", discoverA, bob, "", nil); code != 200 {
+		// bob shares tenant A's contract scope with alice (scope lives on the contract, not per-grant), so this is
+		// expected to succeed too — the real negative case is tenant B above, and the next one: a stranger with no grant at all.
+		t.Fatalf("bob (shares A's contract 'groups' scope via his own can_manage grant): got %d, want 200", code)
+	}
+
+	stranger := w.hubAgent("stranger")
+	if code, _ := api.call("GET", discoverA, stranger, "", nil); code != 404 {
+		t.Fatalf("stranger (no grant at all): got %d, want 404", code)
 	}
 }
 

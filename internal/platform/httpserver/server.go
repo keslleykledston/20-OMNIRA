@@ -578,6 +578,7 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI, 
 				// like pools/access above — each call re-asks has_hub_manage_access(tenant, actor, 'groups', hub) for
 				// every tenant it touches, inside the caller's own RLS session (see internal/hub/grouporganizer).
 				grp := hubadapters.NewGroupOrganizerHandler(dbPool)
+				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/discover", authnMiddleware(userSession(http.HandlerFunc(grp.DiscoverGroups))))
 				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog", authnMiddleware(userSession(http.HandlerFunc(grp.ListCatalog))))
 				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog", authnMiddleware(userSession(http.HandlerFunc(grp.UpsertCatalogEntry))))
 				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", authnMiddleware(userSession(http.HandlerFunc(grp.ListLinks))))

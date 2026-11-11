@@ -35,6 +35,17 @@ func (w *world) catalogEntry(hub, sourceTenantKey string, conn uuid.UUID, provid
 	return id
 }
 
+// waGroup inserts a tenant-owned wa_groups row directly (bypassing RLS, like channelConnection above) so
+// hub_discover_tenant_groups (migration 000185) has something real to read. enabled is set so a test can
+// prove the discovery bridge never echoes it back.
+func (w *world) waGroup(tenantKey string, conn uuid.UUID, providerGroupID, name string, enabled bool) uuid.UUID {
+	id := uuid.New()
+	w.exec(`INSERT INTO wa_groups (id, tenant_id, channel_connection_id, provider_group_id, name, enabled)
+	        VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, w.tenant[tenantKey], conn, providerGroupID, name, enabled)
+	return id
+}
+
 // groupsScope delegates the 'groups' management scope on the given tenant's contract with this hub.
 // (world.canManage, used below, already exists in manage_integration_test.go.)
 func (w *world) groupsScope(tenantKey string) {
