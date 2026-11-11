@@ -2697,6 +2697,28 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: Invalid provider_group_id/display_name, or caller lacks groups management on the origin tenant }
+  /hubs/{hub_id}/groups/links:
+    get:
+      operationId: listHubGroupLinksForHub
+      tags: [Hub]
+      summary: Every group's links, in one call (prefer this over calling listHubGroupLinks once per catalog entry)
+      description: >
+        Same row-level visibility as listHubGroupLinks (RF-13/SEC-013): a caller authorized only for Alpha
+        never sees another group's link to Beta. Exists because the Organizer page used to call
+        listHubGroupLinks once PER catalog entry — fine for a handful of manually-added groups, but
+        autodiscovery (ADR-0059 addendum) can grow the catalog to dozens on its own, and that many
+        concurrent requests queued the environment's DB connection pool and hung the page indefinitely.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Every link this caller may see, across every catalog group of this hub
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/HubGroupLink' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /hubs/{hub_id}/groups/catalog/{group_id}/links:
     get:
       operationId: listHubGroupLinks

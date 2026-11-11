@@ -41,14 +41,17 @@ interface OrganizerData {
 }
 
 async function loadOrganizerData(hubId: string): Promise<OrganizerData> {
-  const [managed, catalog, relationships] = await Promise.all([hubManageAPI.managed(hubId), groupOrganizerAPI.catalog(hubId), groupOrganizerAPI.relationships(hubId)]);
+  // One request for every catalog entry's links, not one request PER entry: that N+1 pattern hung the
+  // page indefinitely once autodiscovery (ADR-0059 addendum) grew a real catalog to dozens of groups.
+  const [managed, catalog, relationships, links] = await Promise.all([
+    hubManageAPI.managed(hubId),
+    groupOrganizerAPI.catalog(hubId),
+    groupOrganizerAPI.relationships(hubId),
+    groupOrganizerAPI.linksForHub(hubId),
+  ]);
   const tenants = managed.filter((m) => m.scopes.includes('groups')).map((m) => ({ id: m.tenant_id, name: m.name }));
   const linksByGroup: Record<string, GroupLink[]> = {};
-  await Promise.all(
-    catalog.map(async (entry) => {
-      linksByGroup[entry.id] = await groupOrganizerAPI.links(hubId, entry.id);
-    }),
-  );
+  for (const l of links) (linksByGroup[l.hub_group_id] ??= []).push(l);
   return { tenants, catalog, relationships, linksByGroup };
 }
 

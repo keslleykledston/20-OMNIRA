@@ -42,6 +42,7 @@ func newGroupOrganizerAPI(t *testing.T, w *world) *groupOrganizerAPI {
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/discover", shim(session(http.HandlerFunc(h.DiscoverGroups))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog", shim(session(http.HandlerFunc(h.ListCatalog))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog", shim(session(http.HandlerFunc(h.UpsertCatalogEntry))))
+	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/links", shim(session(http.HandlerFunc(h.ListLinksForHub))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", shim(session(http.HandlerFunc(h.ListLinks))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", shim(session(http.HandlerFunc(h.CreateLink))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/revoke", shim(session(http.HandlerFunc(h.RevokeLink))))
@@ -86,6 +87,60 @@ func TestGroupOrganizerAPI_UnauthenticatedIsUniform401(t *testing.T) {
 	api := newGroupOrganizerAPI(t, w)
 	if code, _ := api.call("GET", "/groups/catalog", uuid.Nil, "", nil); code != 401 {
 		t.Fatalf("anonymous: got %d, want 401", code)
+	}
+}
+
+// TestGroupOrganizerAPI_ListLinksForHub_OneCallReturnsEveryGroupAndRespectsRLS is the regression test for
+// a bug found live in production: the Organizer page called ListLinks once PER catalog entry (N+1), which
+// autodiscovery (ADR-0059 addendum, migration 000187) exposed by growing a real catalog to dozens of
+// groups on its own — that many concurrent requests queued the environment's DB pool and hung the page on
+// "carregando" indefinitely. ListLinksForHub (GET /groups/links) replaces it with one call that still
+// respects the exact same per-row RLS as ListLinks (hub_group_tenant_links_rw, keyed on the link's own
+// tenant): an actor sees links for every group, but only the rows of tenants they are authorized for.
+func TestGroupOrganizerAPI_ListLinksForHub_OneCallReturnsEveryGroupAndRespectsRLS(t *testing.T) {
+	w := newWorld(t)
+	api := newGroupOrganizerAPI(t, w)
+	connA, connB := w.channelConnection("A"), w.channelConnection("B")
+	groupA := w.catalogEntry("", "A", connA, "551199990000010@g.us", "Grupo A")
+	groupB := w.catalogEntry("", "B", connB, "551199990000011@g.us", "Grupo B")
+	w.groupsScope("A")
+	w.groupsScope("B")
+	linkA := uuid.New()
+	w.exec(`INSERT INTO hub_group_tenant_links (id, hub_id, hub_group_id, tenant_id, role) VALUES ($1,$2,$3,$4,'consumer')`,
+		linkA, w.hub, groupA, w.tenant["A"])
+	linkB := uuid.New()
+	w.exec(`INSERT INTO hub_group_tenant_links (id, hub_id, hub_group_id, tenant_id, role) VALUES ($1,$2,$3,$4,'consumer')`,
+		linkB, w.hub, groupB, w.tenant["B"])
+
+	owner := w.hubAgent("owner")
+	w.canManage(w.grant(owner, "A"))
+	w.canManage(w.grant(owner, "B"))
+	onlyA := w.hubAgent("onlyA")
+	w.canManage(w.grant(onlyA, "A"))
+
+	code, resp := api.call("GET", "/groups/links", owner, "", nil)
+	if code != 200 {
+		t.Fatalf("owner: got %d, want 200", code)
+	}
+	items := resp["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("owner (authorized on both A and B): got %d links in one call, want 2 (%v)", len(items), items)
+	}
+	seen := map[string]bool{}
+	for _, it := range items {
+		seen[it.(map[string]any)["id"].(string)] = true
+	}
+	if !seen[linkA.String()] || !seen[linkB.String()] {
+		t.Fatalf("owner must see both group A's and group B's link in the same response: %v", items)
+	}
+
+	code, resp = api.call("GET", "/groups/links", onlyA, "", nil)
+	if code != 200 {
+		t.Fatalf("onlyA: got %d, want 200", code)
+	}
+	items = resp["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["id"].(string) != linkA.String() {
+		t.Fatalf("onlyA (authorized only on A): must see ONLY group A's link, got %v", items)
 	}
 }
 

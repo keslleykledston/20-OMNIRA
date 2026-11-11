@@ -151,6 +151,23 @@ func (h *GroupOrganizerHandler) UpsertCatalogEntry(w http.ResponseWriter, r *htt
 	_ = json.NewEncoder(w).Encode(e)
 }
 
+// GET /api/v1/hubs/{hub_id}/groups/links
+//
+// Every link of every catalog group of this hub, in one call — what the Organizer page actually needs to
+// render its folders/kanban, instead of one request per catalog entry (see Service.ListLinksForHub).
+func (h *GroupOrganizerHandler) ListLinksForHub(w http.ResponseWriter, r *http.Request) {
+	actor, hub, ok := requestScope(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.svc.ListLinksForHub(r.Context(), actor, hub)
+	if err != nil {
+		writeGroupOrganizerError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
+
 // GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links
 func (h *GroupOrganizerHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 	actor, hub, ok := requestScope(w, r)

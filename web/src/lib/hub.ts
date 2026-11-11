@@ -589,6 +589,12 @@ export const groupOrganizerAPI = {
   ): Promise<GroupCatalogEntry> => axios.post<GroupCatalogEntry>(`${API_BASE}/hubs/${enc(hubId)}/groups/catalog`, body, { headers: authHeaders() }).then((r) => r.data),
   links: (hubId: string, groupId: string): Promise<GroupLink[]> =>
     axios.get<{ items: GroupLink[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/catalog/${enc(groupId)}/links`, { headers: authHeaders() }).then((r) => r.data.items),
+  // Every link of every catalog group, in one call — what the Organizer page actually renders with.
+  // Use this instead of calling links() once per catalog entry: that N+1 pattern was fine for a handful
+  // of manually-added groups, but autodiscovery (ADR-0059 addendum) can grow the catalog to dozens on its
+  // own, and that many concurrent requests queued the environment's DB pool and hung the page indefinitely.
+  linksForHub: (hubId: string): Promise<GroupLink[]> =>
+    axios.get<{ items: GroupLink[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/links`, { headers: authHeaders() }).then((r) => r.data.items),
   createLink: (hubId: string, groupId: string, tenantId: string, role: GroupLinkRole, idempotencyKey: string): Promise<GroupLink> =>
     axios
       .post<GroupLink>(

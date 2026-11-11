@@ -43,6 +43,7 @@ function serve() {
     if (u.endsWith('/groups/relationships')) return { data: { items: relationships } };
     if (u.endsWith('/groups/discover-connections')) return { data: { items: discoveredConnections } };
     if (u.endsWith('/groups/discover')) return { data: { items: discovered } };
+    if (u.endsWith('/groups/links')) return { data: { items: Object.values(linksByGroup).flat() } };
     const linksMatch = /\/groups\/catalog\/([^/]+)\/links$/.exec(u);
     if (linksMatch) return { data: { items: linksByGroup[linksMatch[1]] ?? [] } };
     return Promise.reject({ response: { status: 404 } });
@@ -84,6 +85,14 @@ describe('HubGroupOrganizerPage', () => {
     const alphaRow = screen.getByText('Clientes Alpha').closest('tr')!;
     expect(within(alphaRow).getAllByText('ISP Roraima').length).toBeGreaterThan(0); // origem E vínculo, ambos ISP Roraima aqui
     expect(within(alphaRow).getByText('Consumidor')).toBeInTheDocument();
+  });
+
+  it('busca os vínculos de todos os grupos numa única chamada, nunca uma por item do catálogo (achado ao vivo: o catálogo pode crescer sozinho por autodescoberta)', async () => {
+    renderAt(<HubGroupOrganizerPage />);
+    await screen.findByText('Suporte geral')
+    const calls = vi.mocked(axios.get).mock.calls.map((c) => String(c[0]))
+    expect(calls.filter((u) => u.endsWith('/groups/links')).length).toBe(1)
+    expect(calls.some((u) => /\/groups\/catalog\/[^/]+\/links$/.test(u))).toBe(false)
   });
 
   it('pastas: deriva a pasta compartilhada SÓ da relação comercial + vínculos ativos dos dois lados, nunca manual', async () => {

@@ -379,6 +379,36 @@ func (s *Service) ListLinks(ctx context.Context, actor, hub, groupID uuid.UUID) 
 	return out, err
 }
 
+// ListLinksForHub returns every link (active or revoked) of every catalog group of this hub, in ONE
+// round trip — same RLS guarantee as ListLinks (hub_group_tenant_links_rw is per-row, keyed on the
+// link's own tenant: an actor only ever sees rows for tenants they are authorized for).
+//
+// Exists because the Organizer page used to call ListLinks once PER catalog entry (an N+1 of one HTTP
+// request per group): harmless while the catalog held a handful of manually-added groups, but autodiscovery
+// (ADR-0059 addendum, migration 000187) can grow the catalog to dozens of groups on its own, and that many
+// concurrent requests queued against this environment's small DB connection pool, found live in production
+// as the Organizer page hanging on "carregando" indefinitely. This collapses it back to one query.
+func (s *Service) ListLinksForHub(ctx context.Context, actor, hub uuid.UUID) ([]Link, error) {
+	out := []Link{}
+	err := s.tx(ctx, actor, func(c context.Context, q platformdb.Querier) error {
+		rows, err := q.Query(c, `SELECT `+linkCols+` FROM hub_group_tenant_links
+		                        WHERE hub_id = $1 ORDER BY hub_group_id, assigned_at`, hub)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			l, err := scanLink(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, l)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // originTenant reads the catalog group's source_tenant_id UNDER THE CALLER'S OWN RLS SESSION. If the
 // actor has no 'groups' access on the origin tenant, the row is invisible and this returns ErrNotFound —
 // which is also the correct authorization answer: nobody may create or move a link for a group whose
