@@ -34,6 +34,19 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/platform/opsmetrics"
+)
+
+// Telemetry (ADR-0059 Gate 5): closed-set label values only (docs/architecture/OBSERVABILITY.md), same
+// rule opsmetrics already enforces elsewhere in the Hub (internal/hub/adapters/events.go) — never a
+// hub/tenant/group id, a JID, a display name or any other value that came from a request.
+var (
+	writesTotal = opsmetrics.NewCounter("omnira_hub_group_organizer_writes_total",
+		"Smart Group Organizer writes by operation (ADR-0059)", "op",
+		"catalog_upsert", "link_create", "link_revoke", "link_transfer", "relationship_create", "relationship_revoke")
+	resolveTotal = opsmetrics.NewCounter("omnira_hub_group_organizer_resolve_context_total",
+		"Smart Group Organizer context resolutions by outcome (ADR-0059 Gate 4)", "status",
+		"resolved", "ambiguous", "no_access")
 )
 
 var (
@@ -207,8 +220,12 @@ func (s *Service) UpsertCatalogEntry(ctx context.Context, actor, hub, sourceTena
 		if perr != nil {
 			return mapWriteErr(perr)
 		}
-		return audit(c, q, actor, "hub.group_organizer.catalog.upserted", "hub_group_catalog", out.ID,
-			map[string]any{"hub_id": hub, "source_tenant_id": sourceTenant, "provider_group_id": providerGroupID})
+		if err := audit(c, q, actor, "hub.group_organizer.catalog.upserted", "hub_group_catalog", out.ID,
+			map[string]any{"hub_id": hub, "source_tenant_id": sourceTenant}); err != nil {
+			return err
+		}
+		writesTotal.Inc("catalog_upsert")
+		return nil
 	})
 	return out, err
 }
@@ -374,8 +391,12 @@ func (s *Service) CreateLink(ctx context.Context, actor, hub, groupID, tenant uu
 		if err := saveReceipt(c, q, hub, actor, "link.create", idempotencyKey, hash, &l.ID, nil); err != nil {
 			return err
 		}
-		return audit(c, q, actor, "hub.group_organizer.link.created", "hub_group_tenant_link", l.ID,
-			map[string]any{"hub_id": hub, "hub_group_id": groupID, "tenant_id": tenant, "role": role})
+		if err := audit(c, q, actor, "hub.group_organizer.link.created", "hub_group_tenant_link", l.ID,
+			map[string]any{"hub_id": hub, "hub_group_id": groupID, "tenant_id": tenant, "role": role}); err != nil {
+			return err
+		}
+		writesTotal.Inc("link_create")
+		return nil
 	})
 	return l, replayed, err
 }
@@ -398,8 +419,12 @@ func (s *Service) RevokeLink(ctx context.Context, actor, hub, groupID, tenant uu
 		if err != nil {
 			return err
 		}
-		return audit(c, q, actor, "hub.group_organizer.link.revoked", "hub_group_tenant_link", id,
-			map[string]any{"hub_id": hub, "hub_group_id": groupID, "tenant_id": tenant})
+		if err := audit(c, q, actor, "hub.group_organizer.link.revoked", "hub_group_tenant_link", id,
+			map[string]any{"hub_id": hub, "hub_group_id": groupID, "tenant_id": tenant}); err != nil {
+			return err
+		}
+		writesTotal.Inc("link_revoke")
+		return nil
 	})
 }
 
@@ -480,8 +505,12 @@ func (s *Service) TransferLink(ctx context.Context, actor, hub, groupID, from, t
 		if err := saveReceipt(c, q, hub, actor, "link.transfer", idempotencyKey, hash, &l.ID, nil); err != nil {
 			return err
 		}
-		return audit(c, q, actor, "hub.group_organizer.link.transferred", "hub_group_tenant_link", l.ID,
-			map[string]any{"hub_id": hub, "hub_group_id": groupID, "from_tenant_id": from, "to_tenant_id": to, "role": role})
+		if err := audit(c, q, actor, "hub.group_organizer.link.transferred", "hub_group_tenant_link", l.ID,
+			map[string]any{"hub_id": hub, "hub_group_id": groupID, "from_tenant_id": from, "to_tenant_id": to, "role": role}); err != nil {
+			return err
+		}
+		writesTotal.Inc("link_transfer")
+		return nil
 	})
 	return l, replayed, err
 }
@@ -547,6 +576,9 @@ func (s *Service) ResolveContext(ctx context.Context, actor, hub, groupID uuid.U
 		}
 		return nil
 	})
+	if err == nil {
+		resolveTotal.Inc(out.Status)
+	}
 	return out, err
 }
 
@@ -665,8 +697,12 @@ func (s *Service) CreateRelationship(ctx context.Context, actor, hub, consumer, 
 		if err := saveReceipt(c, q, hub, actor, "relationship.create", idempotencyKey, hash, nil, &r.ID); err != nil {
 			return err
 		}
-		return audit(c, q, actor, "hub.group_organizer.relationship.created", "hub_tenant_relationship", r.ID,
-			map[string]any{"hub_id": hub, "consumer_tenant_id": consumer, "supplier_tenant_id": supplier, "service_kind": serviceKind})
+		if err := audit(c, q, actor, "hub.group_organizer.relationship.created", "hub_tenant_relationship", r.ID,
+			map[string]any{"hub_id": hub, "consumer_tenant_id": consumer, "supplier_tenant_id": supplier, "service_kind": serviceKind}); err != nil {
+			return err
+		}
+		writesTotal.Inc("relationship_create")
+		return nil
 	})
 	return r, replayed, err
 }
@@ -699,7 +735,11 @@ func (s *Service) RevokeRelationship(ctx context.Context, actor, hub, relationsh
 		if tag.RowsAffected() == 0 {
 			return fmt.Errorf("%w: already revoked or suspended", ErrConflict)
 		}
-		return audit(c, q, actor, "hub.group_organizer.relationship.revoked", "hub_tenant_relationship", relationshipID,
-			map[string]any{"hub_id": hub})
+		if err := audit(c, q, actor, "hub.group_organizer.relationship.revoked", "hub_tenant_relationship", relationshipID,
+			map[string]any{"hub_id": hub}); err != nil {
+			return err
+		}
+		writesTotal.Inc("relationship_revoke")
+		return nil
 	})
 }

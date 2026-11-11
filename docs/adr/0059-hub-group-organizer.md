@@ -146,11 +146,47 @@ Para as tabelas novas, FORCE ROW LEVEL SECURITY com predicados baseados em
 - Rollout: feature flag `OMNIRA_GROUP_ORGANIZER_ENABLED=false` controla toda API/UI nova; o schema é
   aditivo e pode existir em produção com a flag desligada sem efeito observável.
 
-## Sequência de gates (mantida do pacote, com os ajustes de escopo acima)
+## Sequência de gates (mantida do pacote, com os ajustes de escopo acima) — status final
 
-- **Gate 1** (este, a seguir): migrations 000183 (scope `'groups'` + 3 tabelas + RLS), módulo Go
-  novo `internal/hub/grouporganizer` (domínio + portas, sem HTTP), testes Postgres reais A/B/C.
-- **Gate 2**: API HTTP (catálogo read-only, depois link/unlink/transfer, relações), OpenAPI, auditoria.
-- **Gate 3**: UI aditiva no Hub, sem DnD na primeira entrega.
-- **Gate 4** (opcional, decisão separada): resolvedor de contexto read-only.
-- **Gate 5**: hardening, telemetria, rollout faseado — nunca produção sem autorização explícita.
+Todos os 5 gates foram autorizados explicitamente pelo proprietário (Gates 1-3 um a um; Gates 4-5 em
+bloco, em 2026-11-11) e estão implementados. Evidências completas em `docs/adr/0059-evidence-matrix.md`.
+
+- **Gate 1** — commit `ddfcbf5`: migration 000183 (scope `'groups'` + `hub_group_catalog` +
+  `hub_group_tenant_links` + `hub_tenant_relationships`, todas FORCE RLS), testes adversariais
+  Postgres reais A/B/C. POSTGRES VERIFIED.
+- **Gate 2** — commit `496e825`: migration 000184 (recibos de idempotência), API HTTP de
+  catálogo/vínculos/relações, OpenAPI, auditoria em `audit_events`, feature flag
+  `OMNIRA_GROUP_ORGANIZER_ENABLED` (OFF por padrão). HTTP VERIFIED.
+- **Gate 3** — commit `4084921`: tela `/admin/grupos` (Lista/Pastas/Kanban, **sem** drag-and-drop —
+  D-12), `can_manage_groups` em `GET /hubs`, checkbox de escopo no `CompaniesPanel`. E2E VERIFIED
+  (Playwright real, prova explícita de ausência de `draggable`).
+- **Gate 4** — commit `e3c3e87`: `GET /hubs/{hub_id}/groups/catalog/{group_id}/resolve-context`,
+  read-only, 3 status (`resolved`/`ambiguous`/`no_access`), nunca soma dois tenants, não integrado a
+  nenhum motor de ticket/SLA/fila. HTTP VERIFIED.
+- **Gate 5** — hardening: removida uma duplicação evitável de `provider_group_id` (JID do WhatsApp) na
+  metadata de auditoria do catálogo; métricas novas de cardinalidade fechada
+  (`omnira_hub_group_organizer_writes_total`, `omnira_hub_group_organizer_resolve_context_total`);
+  matriz de evidências consolidada; plano de rollback/rollout abaixo. POSTGRES VERIFIED.
+
+### Plano de rollback
+
+A flag já é suficiente: `OMNIRA_GROUP_ORGANIZER_ENABLED=false` (padrão atual em todos os ambientes)
+remove as 10 rotas HTTP do organizador do roteamento (`internal/platform/httpserver/server.go`, bloco
+`if groupOrganizerAPI`) sem exigir migração reversa — o schema é aditivo e fica inerte. Reverter uma
+migração só seria necessário se o próprio schema precisasse ser desfeito (não é o caso para desligar a
+feature): `tools/migrate-sql.sh down 000184_hub_group_organizer_writes` e, em seguida,
+`down 000183_hub_group_organizer`, nessa ordem, já testados em Postgres descartável nos Gates 1 e 2.
+
+### Plano de rollout faseado (documentação — nenhuma flag foi ligada em nenhum ambiente)
+
+1. Ligar `OMNIRA_GROUP_ORGANIZER_ENABLED=true` em um ambiente de homologação primeiro, sem nenhum
+   contrato real com `'groups'` em `management_scopes` ainda — valida que a flag OFF→ON não altera
+   nenhum comportamento existente (rotas antigas, `/groups` do Tenant, Inbox, WAHA).
+2. Conceder `'groups'` a UM contrato Hub↔Tenant piloto (via `CompaniesPanel`, checkbox "Organização de
+   grupos") e registrar manualmente 1-2 grupos de teste no catálogo. Observar `audit_events` e as
+   métricas novas por um período curto antes de qualquer expansão.
+3. Expandir para outros contratos um a um, nunca em lote automático; cada concessão de escopo continua
+   exigindo uma ação humana explícita no `CompaniesPanel` — não há ativação em massa.
+4. Produção: só com autorização explícita e separada do proprietário, por fora desta ADR (regra
+   permanente do projeto — "nunca ligar em produção sozinho"). Esta ADR entrega o mecanismo e o plano;
+   não decide por si só quando executá-lo.
