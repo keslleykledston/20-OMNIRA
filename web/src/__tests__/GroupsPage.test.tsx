@@ -45,6 +45,7 @@ interface Server {
   pageSize?: number
   available?: AvailableGroup[]
   availableTotal?: number
+  hubs?: Array<{ id: string; name: string; role: string; can_manage_groups?: boolean }>
 }
 
 function serve(s: Server) {
@@ -63,6 +64,7 @@ function serve(s: Server) {
       return { data: { items, has_more: more, next_cursor: more ? String(offset + pageSize) : undefined } }
     }
     if (url.endsWith('/groups')) return { data: { items: s.groups ?? [] } }
+    if (url.endsWith('/hubs')) return { data: { items: s.hubs ?? [] } }
     return Promise.reject({ response: { status: 404 } })
   })
 }
@@ -117,6 +119,22 @@ describe('GroupsPage', () => {
     renderAt(<GroupsPage />)
     expect(await screen.findByText(/Um administrador escolhe/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Gerenciar grupos' })).not.toBeInTheDocument()
+  })
+
+  it('offers "Organizar no Hub" only to an operator the server reports as a Hub agent with the groups scope, and it navigates away', async () => {
+    const user = userEvent.setup()
+    serve({ permissions: MANAGE, groups: [], hubs: [{ id: 'hub-1', name: 'K3G', role: 'hub_agent', can_manage_groups: true }] })
+    renderAt(<GroupsPage />, '/grupos', '/grupos')
+    const link = await screen.findByRole('button', { name: 'Organizar no Hub' })
+    await user.click(link)
+    expect(await screen.findByTestId('elsewhere')).toBeInTheDocument()
+  })
+
+  it('hides "Organizar no Hub" for a tenant operator with no Hub groups access', async () => {
+    serve({ permissions: MANAGE, groups: [], hubs: [] })
+    renderAt(<GroupsPage />)
+    await screen.findByRole('button', { name: 'Gerenciar grupos' })
+    expect(screen.queryByRole('button', { name: 'Organizar no Hub' })).not.toBeInTheDocument()
   })
 
   it('opens a group read-only: oldest first, author on each run, own messages as Você, media named, no composer', async () => {

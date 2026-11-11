@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import clsx from 'clsx'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Icon, PermissionState } from '../components/primitives'
 import { GroupList } from '../components/groups/GroupList'
@@ -8,6 +9,7 @@ import { ManageGroupsModal } from '../components/groups/ManageGroupsModal'
 import { groupErrorMessage, groupsAPI } from '../lib/groups'
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
+import { useMyHubs } from '../hooks/useMyHubs'
 
 // WhatsApp groups an administrator chose to read (ADR-0015). A separate area from Conversas on purpose:
 // a group has no assignee, queue, waiting time or ticket, and nothing can be sent to it from here.
@@ -17,6 +19,11 @@ export default function GroupsPage() {
   const canRead = access.can('group.read')
   const canManage = access.can('group.manage')
   const accessReady = !access.isLoading
+  const navigate = useNavigate()
+  // Hub access is a separate privilege from the Tenant's own group.manage (ADR-0059 vs ADR-0015):
+  // only an operator the server already reports as a Hub agent with the 'groups' scope sees this.
+  const hubs = useMyHubs()
+  const canOrganizeInHub = (hubs.data ?? []).some((h) => h.can_manage_groups)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [managing, setManaging] = useState(false)
   const [onlyUnlinked, setOnlyUnlinked] = useState(false)
@@ -59,11 +66,18 @@ export default function GroupsPage() {
               <h2 className="text-base font-semibold text-text-primary">Grupos</h2>
               <p className="text-xs text-text-secondary">Leitura dos grupos habilitados</p>
             </div>
-            {canManage && (
-              <Button size="sm" variant="secondary" onClick={() => setManaging(true)}>
-                Gerenciar grupos
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {canOrganizeInHub && (
+                <Button size="sm" variant="tertiary" onClick={() => navigate('/admin/grupos')}>
+                  Organizar no Hub
+                </Button>
+              )}
+              {canManage && (
+                <Button size="sm" variant="secondary" onClick={() => setManaging(true)}>
+                  Gerenciar grupos
+                </Button>
+              )}
+            </div>
           </div>
           <div className="space-y-1.5 border-b border-border-subtle px-4 py-2">
             {instances.length > 1 && (
