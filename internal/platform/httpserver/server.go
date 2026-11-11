@@ -584,6 +584,7 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI, 
 				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", authnMiddleware(userSession(http.HandlerFunc(grp.CreateLink))))
 				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/revoke", authnMiddleware(userSession(http.HandlerFunc(grp.RevokeLink))))
 				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/transfer", authnMiddleware(userSession(http.HandlerFunc(grp.TransferLink))))
+				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/resolve-context", authnMiddleware(userSession(http.HandlerFunc(grp.ResolveContext))))
 				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/relationships", authnMiddleware(userSession(http.HandlerFunc(grp.ListRelationships))))
 				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/relationships", authnMiddleware(userSession(http.HandlerFunc(grp.CreateRelationship))))
 				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/relationships/{relationship_id}/revoke", authnMiddleware(userSession(http.HandlerFunc(grp.RevokeRelationship))))

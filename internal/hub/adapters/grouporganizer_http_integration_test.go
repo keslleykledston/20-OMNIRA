@@ -44,6 +44,7 @@ func newGroupOrganizerAPI(t *testing.T, w *world) *groupOrganizerAPI {
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", shim(session(http.HandlerFunc(h.CreateLink))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/revoke", shim(session(http.HandlerFunc(h.RevokeLink))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/transfer", shim(session(http.HandlerFunc(h.TransferLink))))
+	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/resolve-context", shim(session(http.HandlerFunc(h.ResolveContext))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/relationships", shim(session(http.HandlerFunc(h.ListRelationships))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/relationships", shim(session(http.HandlerFunc(h.CreateRelationship))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/relationships/{relationship_id}/revoke", shim(session(http.HandlerFunc(h.RevokeRelationship))))
@@ -297,5 +298,87 @@ func TestGroupOrganizerAPI_RelationshipRequiresBothSidesAndRevokeIsFinal(t *test
 	}
 	if code, _ := api.call("POST", "/groups/relationships/"+relID+"/revoke", owner, "", nil); code != 409 {
 		t.Fatalf("revoking an already-revoked relationship: got %d, want 409", code)
+	}
+}
+
+// ADR-0059 Gate 4: the context resolver. Read-only, zero side effects, and genuinely three-valued
+// (resolved / ambiguous / no_access) from the CALLER's own point of view — never a sum of two tenants.
+func TestGroupOrganizerAPI_ResolveContext(t *testing.T) {
+	w := newWorld(t)
+	api := newGroupOrganizerAPI(t, w)
+	conn := w.channelConnection("A")
+	group := w.catalogEntry("", "A", conn, "551199990000005@g.us", "Alpha Logistica")
+	w.groupsScope("A")
+	w.groupsScope("B")
+	w.groupsScope("C")
+
+	ownerAB := w.hubAgent("ownerAB") // can manage A and B, NOT C
+	w.canManage(w.grant(ownerAB, "A"))
+	w.canManage(w.grant(ownerAB, "B"))
+
+	ownerABC := w.hubAgent("ownerABC") // can manage all three
+	w.canManage(w.grant(ownerABC, "A"))
+	w.canManage(w.grant(ownerABC, "B"))
+	w.canManage(w.grant(ownerABC, "C"))
+
+	// no links at all yet: no_access for everyone, including the group's own origin manager.
+	if code, resp := api.call("GET", "/groups/catalog/"+group.String()+"/resolve-context", ownerABC, "", nil); code != 200 || resp["status"] != "no_access" {
+		t.Fatalf("no links yet: got %d %v, want 200 no_access", code, resp)
+	}
+
+	// link only to B -> resolved, for anyone who can manage B.
+	linkB := map[string]any{"tenant_id": w.tenant["B"], "role": "consumer"}
+	if code, _ := api.call("POST", "/groups/catalog/"+group.String()+"/links", ownerABC, "k-resolve-b", linkB); code != 201 {
+		t.Fatalf("link to B: got %d", code)
+	}
+	code, resp := api.call("GET", "/groups/catalog/"+group.String()+"/resolve-context", ownerAB, "", nil)
+	if code != 200 || resp["status"] != "resolved" {
+		t.Fatalf("exactly one accessible link (B): got %d %v, want 200 resolved", code, resp)
+	}
+	if resp["tenant_id"].(string) != w.tenant["B"].String() {
+		t.Fatalf("resolved tenant: got %v, want B", resp["tenant_id"])
+	}
+
+	// link also to C: ownerABC (manages A, B, C) now sees TWO candidates -> ambiguous, never merged.
+	linkC := map[string]any{"tenant_id": w.tenant["C"], "role": "consumer"}
+	if code, _ := api.call("POST", "/groups/catalog/"+group.String()+"/links", ownerABC, "k-resolve-c", linkC); code != 201 {
+		t.Fatalf("link to C: got %d", code)
+	}
+	code, resp = api.call("GET", "/groups/catalog/"+group.String()+"/resolve-context", ownerABC, "", nil)
+	if code != 200 || resp["status"] != "ambiguous" {
+		t.Fatalf("two accessible links (B and C): got %d %v, want 200 ambiguous", code, resp)
+	}
+	cands, _ := resp["candidates"].([]any)
+	if len(cands) != 2 {
+		t.Fatalf("ambiguous candidates: got %d, want 2 (%v)", len(cands), resp)
+	}
+	if resp["tenant_id"] != nil {
+		t.Fatalf("ambiguous must not pick a tenant_id for the caller: got %v", resp["tenant_id"])
+	}
+
+	// ownerAB cannot manage C: the SAME group, from their point of view, still resolves to exactly ONE
+	// tenant (B) — C's link is invisible to them, never counted, never merged into B's answer.
+	code, resp = api.call("GET", "/groups/catalog/"+group.String()+"/resolve-context", ownerAB, "", nil)
+	if code != 200 || resp["status"] != "resolved" {
+		t.Fatalf("ownerAB must still resolve to B alone (C is invisible to them): got %d %v", code, resp)
+	}
+	if resp["tenant_id"].(string) != w.tenant["B"].String() {
+		t.Fatalf("ownerAB's resolved tenant: got %v, want B", resp["tenant_id"])
+	}
+
+	// revoking B's link leaves only C active; ownerAB (no access to C) is back to no_access.
+	if code, _ := api.call("POST", "/groups/catalog/"+group.String()+"/links/"+w.tenant["B"].String()+"/revoke",
+		ownerABC, "", map[string]any{"expected_version": int64(1)}); code != 204 {
+		t.Fatalf("revoke B's link: got %d", code)
+	}
+	code, resp = api.call("GET", "/groups/catalog/"+group.String()+"/resolve-context", ownerAB, "", nil)
+	if code != 200 || resp["status"] != "no_access" {
+		t.Fatalf("ownerAB after B's link is revoked and only C remains: got %d %v, want no_access", code, resp)
+	}
+
+	// a nonexistent group id looks exactly like no_access (no enumeration oracle).
+	code, resp = api.call("GET", "/groups/catalog/"+uuid.New().String()+"/resolve-context", ownerABC, "", nil)
+	if code != 200 || resp["status"] != "no_access" {
+		t.Fatalf("nonexistent group: got %d %v, want 200 no_access", code, resp)
 	}
 }

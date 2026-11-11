@@ -2754,6 +2754,24 @@ paths:
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: FROM link is not active or expected_version is stale, or TO tenant already has an active link }
         '422': { description: Invalid role/tenants, or the Idempotency-Key was reused with a different request }
+  /hubs/{hub_id}/groups/catalog/{group_id}/resolve-context:
+    get:
+      operationId: resolveHubGroupContext
+      tags: [Hub]
+      summary: Pick which ONE tenant an operation on this group should act as, from the caller's own access
+      description: >
+        Read-only, no side effects (ADR-0059 Gate 4). Looks only at this group's ACTIVE links and keeps
+        the ones the caller may manage ('groups' scope) — RLS alone decides that set, same as every other
+        read in this module. Never merges or sums two tenants' access: EffectiveAccessResolver still
+        resolves exactly one tenant per request downstream of whichever tenant_id this returns.
+        `no_access` and "this group does not exist in this hub" look identical on purpose (no
+        enumeration oracle).
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: group_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Resolution outcome, content: { application/json: { schema: { $ref: '#/components/schemas/HubGroupContextResolution' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
   /hubs/{hub_id}/groups/relationships:
     get:
       operationId: listHubTenantRelationships
@@ -6293,6 +6311,21 @@ components:
         version: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    HubGroupContextResolution:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [resolved, ambiguous, no_access] }
+        tenant_id: { type: string, format: uuid, description: Present only when status is "resolved" }
+        candidates:
+          type: array
+          description: Present when status is "resolved" (one item) or "ambiguous" (two or more); absent for "no_access"
+          items:
+            type: object
+            required: [tenant_id, role]
+            properties:
+              tenant_id: { type: string, format: uuid }
+              role: { type: string, enum: [consumer, supplier, operator, partner, observer] }
     HubTenantRelationship:
       type: object
       required: [id, hub_id, consumer_tenant_id, supplier_tenant_id, service_kind, service_reference, status, valid_from, created_at, updated_at]

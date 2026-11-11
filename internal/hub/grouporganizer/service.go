@@ -486,6 +486,70 @@ func (s *Service) TransferLink(ctx context.Context, actor, hub, groupID, from, t
 	return l, replayed, err
 }
 
+// ------------------------------------------------------------------ context resolver (Gate 4)
+
+// ResolveCandidate is one tenant this group is actively linked to AND that the caller may manage —
+// RLS (hub_group_tenant_links_rw, migration 000183) is the only filter applied: a tenant the actor
+// cannot manage is invisible to the query below, never merely hidden by an extra check here.
+type ResolveCandidate struct {
+	TenantID uuid.UUID `json:"tenant_id"`
+	Role     string    `json:"role"`
+}
+
+// ResolveResult mirrors the package's own contract: "resolved" when exactly one tenant qualifies,
+// "ambiguous" when more than one does (the caller must pick explicitly — this never merges or sums
+// two tenants' access into one operation), "no_access" when none does. "no_access" is also what a
+// nonexistent or cross-hub group id produces: the RLS-filtered query simply returns zero rows either
+// way, so this endpoint is not an oracle for "does group X exist in this hub" (same no-enumeration
+// rule as the rest of this module).
+type ResolveResult struct {
+	Status     string             `json:"status"` // "resolved" | "ambiguous" | "no_access"
+	TenantID   *uuid.UUID         `json:"tenant_id,omitempty"`
+	Candidates []ResolveCandidate `json:"candidates,omitempty"`
+}
+
+// ResolveContext answers "which ONE tenant should THIS operation act as" for a given catalog group,
+// from the actor's own point of view. It is read-only and has no side effects: it does not create a
+// ticket, does not touch wa_groups, and is not wired into any ticket/SLA/queue engine — EffectiveAccessResolver
+// (internal/hub/application/effective_access.go) still resolves exactly one tenant per request; this
+// function only helps a caller pick WHICH tenant_id to hand it when a group's own links leave that
+// ambiguous. It never grants access by itself: the tenant_id it returns still has to pass the normal
+// Hub authorization chain (contract -> grant -> scope) on whatever request uses it next.
+func (s *Service) ResolveContext(ctx context.Context, actor, hub, groupID uuid.UUID) (ResolveResult, error) {
+	var out ResolveResult
+	err := s.tx(ctx, actor, func(c context.Context, q platformdb.Querier) error {
+		rows, err := q.Query(c, `SELECT tenant_id, role FROM hub_group_tenant_links
+		                         WHERE hub_id = $1 AND hub_group_id = $2 AND status = 'active'
+		                         ORDER BY tenant_id`, hub, groupID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		var candidates []ResolveCandidate
+		for rows.Next() {
+			var cand ResolveCandidate
+			if err := rows.Scan(&cand.TenantID, &cand.Role); err != nil {
+				return err
+			}
+			candidates = append(candidates, cand)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		switch len(candidates) {
+		case 0:
+			out = ResolveResult{Status: "no_access"}
+		case 1:
+			tenant := candidates[0].TenantID
+			out = ResolveResult{Status: "resolved", TenantID: &tenant, Candidates: candidates}
+		default:
+			out = ResolveResult{Status: "ambiguous", Candidates: candidates}
+		}
+		return nil
+	})
+	return out, err
+}
+
 // ------------------------------------------------------------------ relationships
 
 type Relationship struct {

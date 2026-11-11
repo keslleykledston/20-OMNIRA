@@ -226,6 +226,28 @@ func (h *GroupOrganizerHandler) TransferLink(w http.ResponseWriter, r *http.Requ
 	writeCreated(w, replayed, l)
 }
 
+// GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/resolve-context (ADR-0059 Gate 4)
+//
+// Read-only. Never creates a ticket, never sums two tenants' access: EffectiveAccessResolver still
+// decides exactly one tenant per request downstream of whatever this returns. "no_access" and "the
+// group does not exist in this hub" look identical on purpose (no enumeration oracle).
+func (h *GroupOrganizerHandler) ResolveContext(w http.ResponseWriter, r *http.Request) {
+	actor, hub, ok := requestScope(w, r)
+	if !ok {
+		return
+	}
+	group, ok := pathUUID(w, r, "group_id")
+	if !ok {
+		return
+	}
+	res, err := h.svc.ResolveContext(r.Context(), actor, hub, group)
+	if err != nil {
+		writeGroupOrganizerError(w, err)
+		return
+	}
+	writeJSON(w, res)
+}
+
 // GET /api/v1/hubs/{hub_id}/groups/relationships
 func (h *GroupOrganizerHandler) ListRelationships(w http.ResponseWriter, r *http.Request) {
 	actor, hub, ok := requestScope(w, r)
