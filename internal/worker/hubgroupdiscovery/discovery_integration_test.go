@@ -19,6 +19,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	channeldomain "github.com/omnira/omnira/internal/channels/domain"
+	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	"github.com/omnira/omnira/internal/testhelpers"
 	"github.com/omnira/omnira/internal/worker/hubgroupdiscovery"
 )
@@ -305,5 +308,64 @@ func TestRunOnce_RepeatedGroupOnSecondCycleDoesNotDuplicate(t *testing.T) {
 	if n := f.count(`SELECT count(*) FROM hub_group_catalog WHERE hub_id = $1 AND source_tenant_id = $2 AND source_channel_connection_id = $3 AND provider_group_id = $4`,
 		f.hub, tn.id, tn.conn, jid); n != 1 {
 		t.Fatalf("hub_group_catalog: expected exactly 1 row after two cycles, got %d", n)
+	}
+}
+
+// fakeGroupLister stands in for the live WAHA call underneath groupsadapters.WahaDirectory; everything
+// else below it (the connection lookup) is the REAL repository, hitting the REAL channel_connections RLS.
+type fakeGroupLister struct{ groups []channeldomain.ProviderGroup }
+
+func (f fakeGroupLister) ListGroups(context.Context, channeldomain.ChannelConnection) ([]channeldomain.ProviderGroup, error) {
+	return f.groups, nil
+}
+
+// realDirectoryAdapter mirrors apps/worker/cmd/omnira-worker/main.go's own hubGroupDiscoveryDirectory:
+// the exact translation production wires between groupsadapters.Directory and hubgroupdiscovery.Directory.
+type realDirectoryAdapter struct{ dir groupsadapters.Directory }
+
+func (a realDirectoryAdapter) List(ctx context.Context, tenantID, connectionID uuid.UUID) ([]hubgroupdiscovery.Group, error) {
+	_, groups, err := a.dir.List(ctx, tenantID, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]hubgroupdiscovery.Group, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, hubgroupdiscovery.Group{ProviderGroupID: g.JID, Name: g.Name})
+	}
+	return out, nil
+}
+
+// TestRunOnce_UsesRealConnectionRepositoryUnderRLS is the regression test for a bug found live in
+// production: runTriple used to call Directory.List on the OUTER (session-less) context, before entering
+// WithSystemTenantSession. channel_connections is RLS-protected ("has_active_membership(...) OR
+// is_system_admin()"), so the real PostgresChannelConnectionRepository.FindByTenant silently read back
+// zero rows on that bare context and WahaDirectory.List always returned ErrNoConnection ("no active
+// WhatsApp connection") for every single triple -- the job never wrote anything, in every environment,
+// even though the fake Directory used by the other tests in this file (which ignores its context
+// argument entirely) never could have caught this. This test wires the REAL connection repository
+// (only the provider HTTP call itself is faked) so the RLS path is genuinely exercised end to end.
+func TestRunOnce_UsesRealConnectionRepositoryUnderRLS(t *testing.T) {
+	f := newFx(t)
+	tn := f.tenant("Delta", true)
+	jid := "551188880000005@g.us"
+
+	realDir := groupsadapters.NewWahaDirectory(
+		channeladapters.NewPostgresChannelConnectionRepository(f.app),
+		fakeGroupLister{groups: []channeldomain.ProviderGroup{{JID: jid, Name: "Grupo Delta"}}},
+	)
+	job := hubgroupdiscovery.New(f.app, realDirectoryAdapter{dir: realDir})
+	if err := job.RunOnce(f.ctx); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	wa := f.waGroup(tn.id, tn.conn, jid)
+	if !wa.found {
+		t.Fatal("expected a wa_groups row to be created through the real connection repository")
+	}
+	if wa.enabled {
+		t.Fatal("autodiscovery must never set enabled=true (ADR-0015)")
+	}
+	if cat := f.catalog(tn.id, tn.conn, jid); !cat.found {
+		t.Fatal("expected a hub_group_catalog row to be created")
 	}
 }

@@ -176,17 +176,22 @@ func (j *Job) RunOnce(ctx context.Context) error {
 }
 
 func (j *Job) runTriple(ctx context.Context, t triple) error {
-	groups, err := j.dir.List(ctx, t.tenant, t.connection)
-	if err != nil {
-		return fmt.Errorf("list groups: %w", err)
-	}
-	groupsSeenMetric.Add("", uint64(len(groups)))
 	return platformdb.WithSystemTenantSession(ctx, j.pool, t.tenant, func(c context.Context) error {
 		// ADR-0038: a suspended tenant is frozen, never processed -- same guard hubprojector.run takes
 		// before writing anything.
 		if active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, j.pool), t.tenant); err != nil || !active {
 			return err
 		}
+		// j.dir.List must run INSIDE this session: the real ConnectionFinder (channel_connections) is
+		// RLS-protected ("has_active_membership(...) OR is_system_admin()") and a bare, session-less
+		// context reads back zero rows -- found live in production (every triple failed with "no active
+		// WhatsApp connection" even though the connection existed and was active) because this call used
+		// to run on the plain outer ctx, before entering the system session.
+		groups, err := j.dir.List(c, t.tenant, t.connection)
+		if err != nil {
+			return fmt.Errorf("list groups: %w", err)
+		}
+		groupsSeenMetric.Add("", uint64(len(groups)))
 		q := platformdb.QuerierFromContext(c, j.pool)
 		for _, g := range groups {
 			if ctx.Err() != nil {
