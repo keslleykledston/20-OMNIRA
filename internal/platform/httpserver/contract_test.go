@@ -96,7 +96,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterGroupHandlers(nil, groupsadapters.NewHandler(nil, nil, nil))
 	s.RegisterIntelligenceHandlers(nil, intelligenceadapters.NewTopicHandler(nil, nil, nil))
 	s.RegisterAIIntegrationHandlers(nil, tenancyadapters.NewAIIntegrationHandler(nil, nil, nil))
-	s.RegisterHubHandlers(nil, true, true)
+	s.RegisterHubHandlers(nil, true, true, true)
 	s.RegisterExternalHandlers(nil, true, ExternalOptions{Sealer: nilSealer{}})
 	s.RegisterPlatformReleaseHandlers(nil, true, updatemgr.New(nil, t.TempDir()+"/ledger.db", "inst-1", "omnira-api", time.Minute))
 	return s

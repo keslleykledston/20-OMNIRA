@@ -2599,6 +2599,223 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: Another pool already answers for that instance or queue }
+  /hubs/{hub_id}/groups/catalog:
+    get:
+      operationId: listHubGroupCatalog
+      tags: [Hub]
+      summary: WhatsApp group metadata the caller may organize (ADR-0059, behind OMNIRA_GROUP_ORGANIZER_ENABLED)
+      description: >
+        Metadata only — never message content. Visible rows are exactly those whose ORIGIN tenant
+        delegates the `groups` management scope to the caller (RLS, migration 000183); this never reads
+        wa_group_messages and never implies wa_groups.enabled.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: before, in: query, schema: { type: string, format: date-time }, description: Keyset cursor (created_at of the last item seen) }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: The catalog entries
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/HubGroupCatalogEntry' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: upsertHubGroupCatalogEntry
+      tags: [Hub]
+      summary: Register or refresh one group's metadata (requires `groups` management on the origin tenant)
+      description: >
+        Idempotent by its natural key (hub, source tenant, connection, provider group id): calling this
+        twice with the same identity updates the same row, never creates a duplicate.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source_tenant_id, source_channel_connection_id, provider_group_id]
+              properties:
+                source_tenant_id: { type: string, format: uuid }
+                source_channel_connection_id: { type: string, format: uuid }
+                provider_group_id: { type: string, pattern: '^[0-9]{5,20}(-[0-9]{1,20})?@g\.us$' }
+                display_name: { type: string, maxLength: 200 }
+      responses:
+        '200': { description: Registered or refreshed, content: { application/json: { schema: { $ref: '#/components/schemas/HubGroupCatalogEntry' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Invalid provider_group_id/display_name, or caller lacks groups management on the origin tenant }
+  /hubs/{hub_id}/groups/catalog/{group_id}/links:
+    get:
+      operationId: listHubGroupLinks
+      tags: [Hub]
+      summary: Tenants this group is linked to (active or revoked)
+      description: >
+        Row-level, not group-level (RF-13/SEC-013): visible rows are those whose OWN tenant_id the caller
+        may manage — a caller authorized only for Alpha never sees this same group's link to Beta, even
+        though they can see the catalog entry.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: group_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The links
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/HubGroupLink' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: createHubGroupLink
+      tags: [Hub]
+      summary: Link this group to a tenant, in a role ("Vincular a Beta sem remover Alpha")
+      description: >
+        Requires `groups` management on BOTH the group's origin tenant and the destination tenant.
+        Grants nothing by itself — a link is metadata, never access. Idempotency-Key required.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: group_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [tenant_id, role]
+              properties:
+                tenant_id: { type: string, format: uuid }
+                role: { type: string, enum: [consumer, supplier, operator, partner, observer] }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/HubGroupLink' } } } }
+        '200': { description: Replayed (same Idempotency-Key, same request), content: { application/json: { schema: { $ref: '#/components/schemas/HubGroupLink' } } } }
+        '400': { description: Missing/invalid Idempotency-Key or malformed body }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: That tenant already has an active link to this group, or another resource already exists }
+        '422': { description: Invalid role, or the Idempotency-Key was reused with a different request }
+  /hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/revoke:
+    post:
+      operationId: revokeHubGroupLink
+      tags: [Hub]
+      summary: End a tenant's link to this group
+      description: Optimistic concurrency — expected_version must match the link's current version (the caller must have read the row it is changing).
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: group_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [expected_version], properties: { expected_version: { type: integer, format: int64 } } }
+      responses:
+        '204': { description: Revoked }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: No active link, or expected_version is stale — reload and try again }
+  /hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/transfer:
+    post:
+      operationId: transferHubGroupLink
+      tags: [Hub]
+      summary: Move this group's link from {tenant_id} to another tenant ("Transferir de Alpha para Beta")
+      description: >
+        Atomic: revokes the FROM link and creates the TO link in the same transaction. Requires `groups`
+        management on the origin, {tenant_id} (from) and to_tenant_id (to). Idempotency-Key required.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: group_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid }, description: The FROM tenant }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [to_tenant_id, role, expected_version]
+              properties:
+                to_tenant_id: { type: string, format: uuid }
+                role: { type: string, enum: [consumer, supplier, operator, partner, observer] }
+                expected_version: { type: integer, format: int64, description: Current version of the FROM link }
+      responses:
+        '201': { description: Transferred, content: { application/json: { schema: { $ref: '#/components/schemas/HubGroupLink' } } } }
+        '200': { description: Replayed (same Idempotency-Key, same request), content: { application/json: { schema: { $ref: '#/components/schemas/HubGroupLink' } } } }
+        '400': { description: Missing/invalid Idempotency-Key or malformed body }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: FROM link is not active or expected_version is stale, or TO tenant already has an active link }
+        '422': { description: Invalid role/tenants, or the Idempotency-Key was reused with a different request }
+  /hubs/{hub_id}/groups/relationships:
+    get:
+      operationId: listHubTenantRelationships
+      tags: [Hub]
+      summary: Commercial relationships between tenants of this hub (e.g. Alpha buys from Beta)
+      description: >
+        Visible only to a caller authorized for BOTH sides (SEC-002) — a caller with only one side never
+        learns the relationship exists. Drives the "Alpha ↔ Beta" shared folders in the UI (D-07); never
+        grants access or sums privileges by itself.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The relationships
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/HubTenantRelationship' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: createHubTenantRelationship
+      tags: [Hub]
+      summary: Record that consumer_tenant_id buys service_kind from supplier_tenant_id
+      description: Requires `groups` management on BOTH tenants. Idempotency-Key required.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [consumer_tenant_id, supplier_tenant_id, service_kind]
+              properties:
+                consumer_tenant_id: { type: string, format: uuid }
+                supplier_tenant_id: { type: string, format: uuid }
+                service_kind: { type: string, minLength: 1, maxLength: 100 }
+                service_reference: { type: string, maxLength: 200 }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/HubTenantRelationship' } } } }
+        '200': { description: Replayed (same Idempotency-Key, same request), content: { application/json: { schema: { $ref: '#/components/schemas/HubTenantRelationship' } } } }
+        '400': { description: Missing/invalid Idempotency-Key or malformed body }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: An active relationship of this kind already exists between these tenants }
+        '422': { description: Invalid tenants/service_kind, or the Idempotency-Key was reused with a different request }
+  /hubs/{hub_id}/groups/relationships/{relationship_id}/revoke:
+    post:
+      operationId: revokeHubTenantRelationship
+      tags: [Hub]
+      summary: End a commercial relationship (does not touch any existing group link)
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: relationship_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Already revoked or suspended }
   /hubs/{hub_id}/inbox/{item_id}/transfer-candidates:
     get:
       operationId: listHubTransferCandidates
@@ -6041,6 +6258,53 @@ components:
                         valid_until: { type: string, format: date-time }
                   direct_instances: { type: array, items: { type: string, format: uuid }, description: Companies where the person is an active member in their own right }
                   instances: { type: integer, description: Distinct companies the person works in (grants plus direct memberships) }
+    HubGroupCatalogEntry:
+      type: object
+      required: [id, hub_id, source_tenant_id, source_channel_connection_id, provider_group_id, display_name, source_state, version, created_at, updated_at, last_seen_at]
+      properties:
+        id: { type: string, format: uuid }
+        hub_id: { type: string, format: uuid }
+        source_tenant_id: { type: string, format: uuid }
+        source_channel_connection_id: { type: string, format: uuid }
+        provider_group_id: { type: string }
+        display_name: { type: string }
+        source_state: { type: string, enum: [available, stale, unavailable, archived] }
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+    HubGroupLink:
+      type: object
+      required: [id, hub_id, hub_group_id, tenant_id, role, status, assigned_at, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        hub_id: { type: string, format: uuid }
+        hub_group_id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        role: { type: string, enum: [consumer, supplier, operator, partner, observer] }
+        status: { type: string, enum: [active, revoked] }
+        assigned_by: { type: string, format: uuid }
+        assigned_at: { type: string, format: date-time }
+        revoked_by: { type: string, format: uuid }
+        revoked_at: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    HubTenantRelationship:
+      type: object
+      required: [id, hub_id, consumer_tenant_id, supplier_tenant_id, service_kind, service_reference, status, valid_from, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        hub_id: { type: string, format: uuid }
+        consumer_tenant_id: { type: string, format: uuid }
+        supplier_tenant_id: { type: string, format: uuid }
+        service_kind: { type: string }
+        service_reference: { type: string }
+        status: { type: string, enum: [active, suspended, revoked] }
+        valid_from: { type: string, format: date-time }
+        valid_until: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     HubWorkPool:
       type: object
       required: [id, name, description, distribution, members, instances]

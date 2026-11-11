@@ -217,7 +217,7 @@ func main() {
 	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender, invitationLogins)
 	crmHandler := srv.RegisterInboxHandlers(dbPool, cfg)
 	if cfg.HubAPIEnabled {
-		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled, cfg.HubAccessAPIEnabled)
+		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled, cfg.HubAccessAPIEnabled, cfg.GroupOrganizerAPIEnabled)
 	}
 	// F6 (ADR-0054 §2.1): Update Manager API. holder "omnira-api" distingue este processo do
 	// daemon no lock do ledger local (nunca retido entre chamadas — ver updatemgr.Service.writeLedgerRun).

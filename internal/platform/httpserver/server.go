@@ -517,7 +517,7 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 // RegisterHubHandlers mounts the read-only Hub API (feature-flagged by the caller). Every route runs behind
 // the authn middleware and UserSessionMiddleware: the caller's own RLS session, never system admin. Tenant
 // authority is never taken from the request; see hubadapters.HTTPHandler.
-func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI bool) {
+func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI, groupOrganizerAPI bool) {
 	if s.authenticator == nil {
 		return
 	}
@@ -573,6 +573,21 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 			s.mux.Handle("PUT /api/v1/hubs/{hub_id}/pools/{pool_id}/instances", authnMiddleware(userSession(http.HandlerFunc(pools.SetInstances))))
 			s.mux.Handle("POST /api/v1/hubs/{hub_id}/access/instances/{tenant_id}/admins", authnMiddleware(userSession(http.HandlerFunc(a.AddInstanceAdmin))))
 			s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/instances/{tenant_id}/admins/{user_id}", authnMiddleware(userSession(http.HandlerFunc(a.RemoveInstanceAdmin))))
+			if groupOrganizerAPI {
+				// ADR-0059 Gate 2: group catalog, tenant links and B2B relationships. Authorization is NOT "hub admin"
+				// like pools/access above — each call re-asks has_hub_manage_access(tenant, actor, 'groups', hub) for
+				// every tenant it touches, inside the caller's own RLS session (see internal/hub/grouporganizer).
+				grp := hubadapters.NewGroupOrganizerHandler(dbPool)
+				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog", authnMiddleware(userSession(http.HandlerFunc(grp.ListCatalog))))
+				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog", authnMiddleware(userSession(http.HandlerFunc(grp.UpsertCatalogEntry))))
+				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", authnMiddleware(userSession(http.HandlerFunc(grp.ListLinks))))
+				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", authnMiddleware(userSession(http.HandlerFunc(grp.CreateLink))))
+				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/revoke", authnMiddleware(userSession(http.HandlerFunc(grp.RevokeLink))))
+				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/transfer", authnMiddleware(userSession(http.HandlerFunc(grp.TransferLink))))
+				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/relationships", authnMiddleware(userSession(http.HandlerFunc(grp.ListRelationships))))
+				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/relationships", authnMiddleware(userSession(http.HandlerFunc(grp.CreateRelationship))))
+				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/relationships/{relationship_id}/revoke", authnMiddleware(userSession(http.HandlerFunc(grp.RevokeRelationship))))
+			}
 		}
 	}
 	if adminAPI {
