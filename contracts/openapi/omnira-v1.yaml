@@ -6191,6 +6191,9 @@ components:
               can_manage_access:
                 type: boolean
                 description: Only whether to offer the Access panel (hub admins, when it is mounted); the server decides every request again.
+              can_manage_groups:
+                type: boolean
+                description: At least one tenant where the contract delegates the 'groups' scope specifically (ADR-0059); unlike can_manage_instances, this does NOT light up for a contract that only delegates channels/integrations. The server decides every request again.
     HubAccessPerson:
       type: object
       required: [user_id, email, name]

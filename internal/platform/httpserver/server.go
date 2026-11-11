@@ -523,7 +523,7 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI, 
 	}
 	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
-	h := hubadapters.NewHTTPHandler(dbPool).WithAdminAPI(adminAPI).WithAccessAPI(accessAPI).WithClaimHook(&s.claimHook)
+	h := hubadapters.NewHTTPHandler(dbPool).WithAdminAPI(adminAPI).WithAccessAPI(accessAPI).WithGroupOrganizerAPI(groupOrganizerAPI).WithClaimHook(&s.claimHook)
 	h = h.WithAttachments(s.outboundAttachments) // nil unless outbound media is on: the Hub's composer then offers no files
 	if s.natsConn != nil {
 		// the change signal of the aggregated tab (no content; see hub/adapters/events.go). Authentication only: a stream never sits behind the request transaction.

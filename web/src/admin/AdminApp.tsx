@@ -3,6 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from '../lib/queryClient'
 import HubAccessPage from '../pages/HubAccessPage'
 import HubManagedPage, { HubManagedChannelsRoute } from '../pages/HubManagedPage'
+import HubGroupOrganizerPage from '../pages/HubGroupOrganizerPage'
 import PlatformReleasesPage from '../pages/PlatformReleasesPage'
 import AdminShell from './AdminShell'
 import { useMyHubs } from '../hooks/useMyHubs'
@@ -15,7 +16,9 @@ function ConsoleHome() {
   const platformOperator = usePlatformOperator()
   const canAccess = hubs.some((h) => h.can_manage_access)
   const canManage = hubs.some((h) => h.can_manage_instances)
-  if (!canAccess && !canManage && platformOperator.isOperator) return <Navigate to="/plataforma" replace />
+  const canManageGroups = hubs.some((h) => h.can_manage_groups)
+  if (!canAccess && !canManage && !canManageGroups && platformOperator.isOperator) return <Navigate to="/plataforma" replace />
+  if (!canAccess && !canManage && canManageGroups) return <Navigate to="/grupos" replace />
   return <Navigate to={!canAccess && canManage ? '/instancias' : '/acessos'} replace />
 }
 
@@ -30,6 +33,7 @@ export function AdminRoutes() {
         <Route path="/instancias" element={<HubManagedPage />} />
         <Route path="/instancias/:hubId/:tenantId/canais" element={<HubManagedChannelsRoute />} />
         <Route path="/instancias/:hubId/:tenantId/canais/whatsapp/new" element={<HubManagedChannelsRoute wizard />} />
+        <Route path="/grupos" element={<HubGroupOrganizerPage />} />
         <Route path="/plataforma" element={<PlatformReleasesPage />} />
         <Route path="*" element={<Navigate to="/acessos" replace />} />
       </Route>

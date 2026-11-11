@@ -53,6 +53,8 @@ type HTTPHandler struct {
 	adminEnabled bool
 	// accessEnabled mirrors OMNIRA_HUB_ACCESS_API_ENABLED for the same reason (the Access panel).
 	accessEnabled bool
+	// groupOrganizerEnabled mirrors OMNIRA_GROUP_ORGANIZER_ENABLED for the same reason (ADR-0059's Organizador de grupos).
+	groupOrganizerEnabled bool
 	// events is the change signal of the aggregated tab (events.go); nil until WithEvents.
 	events *eventsConfig
 	// onClaim lets an optional module learn that the agent assumed the conversation (ADR-0049); nil: nobody.
@@ -67,6 +69,12 @@ func (h *HTTPHandler) WithAdminAPI(enabled bool) *HTTPHandler { h.adminEnabled =
 
 // WithAccessAPI marks the Access panel API as mounted (see ListMyHubs).
 func (h *HTTPHandler) WithAccessAPI(enabled bool) *HTTPHandler { h.accessEnabled = enabled; return h }
+
+// WithGroupOrganizerAPI marks the group organizer API (ADR-0059) as mounted (see ListMyHubs).
+func (h *HTTPHandler) WithGroupOrganizerAPI(enabled bool) *HTTPHandler {
+	h.groupOrganizerEnabled = enabled
+	return h
+}
 
 func NewHTTPHandler(pool *pgxpool.Pool) *HTTPHandler {
 	repo := NewPostgresHubRepository(pool)
@@ -486,6 +494,8 @@ type hubDTO struct {
 	CanManageAccess bool `json:"can_manage_access"`
 	// CanManageInstances: at least one instance where the contract delegates management to this person (ADR-0038 phase 3).
 	CanManageInstances bool `json:"can_manage_instances"`
+	// CanManageGroups: at least one tenant where the contract delegates the 'groups' scope to this person (ADR-0059).
+	CanManageGroups bool `json:"can_manage_groups"`
 }
 
 // ListMyHubs returns the active hubs the caller is a member of. Membership grants no tenant access by itself; this
@@ -539,6 +549,18 @@ func (h *HTTPHandler) ListMyHubs(w http.ResponseWriter, r *http.Request) {
 			if err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(),
 				`SELECT EXISTS (SELECT 1 FROM hub_tenant_service_contracts c WHERE c.hub_id = $1 AND has_hub_manage_access(c.tenant_id, $2, NULL, $1))`,
 				out[i].ID, principal.UserID).Scan(&out[i].CanManageInstances); err != nil {
+				httpError(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	if h.groupOrganizerEnabled {
+		for i := range out {
+			// 'groups' explicitly, not NULL (unlike CanManageInstances): this must not light up for a contract that only
+			// delegates channels/integrations/etc, only for one that was specifically given the groups scope.
+			if err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(),
+				`SELECT EXISTS (SELECT 1 FROM hub_tenant_service_contracts c WHERE c.hub_id = $1 AND has_hub_manage_access(c.tenant_id, $2, 'groups', $1))`,
+				out[i].ID, principal.UserID).Scan(&out[i].CanManageGroups); err != nil {
 				httpError(w, "internal server error", http.StatusInternalServerError)
 				return
 			}

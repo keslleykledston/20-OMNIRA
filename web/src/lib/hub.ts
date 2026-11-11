@@ -16,6 +16,9 @@ export interface HubSummary {
   can_manage_access?: boolean
   // At least one instance where the contract delegates channel/integration management to this person (ADR-0038 phase 3).
   can_manage_instances?: boolean
+  // At least one instance where the contract delegates the 'groups' scope to this person specifically (ADR-0059). Unlike
+  // can_manage_instances, this does NOT light up for a contract that only delegates channels/integrations.
+  can_manage_groups?: boolean
 }
 
 export interface HubInboxItem {
@@ -254,9 +257,13 @@ export interface HubCapability {
   gates: string
 }
 
-export type ManagementScope = 'channels' | 'integrations'
+export type ManagementScope = 'channels' | 'integrations' | 'groups'
 
-export const MANAGEMENT_SCOPE_LABEL: Record<ManagementScope, string> = { channels: 'Canais de atendimento', integrations: 'Integrações de retaguarda' }
+export const MANAGEMENT_SCOPE_LABEL: Record<ManagementScope, string> = {
+  channels: 'Canais de atendimento',
+  integrations: 'Integrações de retaguarda',
+  groups: 'Organização de grupos',
+}
 
 export interface HubCompany {
   id: string
@@ -482,6 +489,140 @@ export function describeHubPoolError(err: unknown): string {
       return body || 'Confira os dados.'
     default:
       return 'Não foi possível salvar.'
+  }
+}
+
+// ---- Group organizer (ADR-0059, Gate 2): catalog, tenant links and B2B relationships. Metadata only — never messages,
+// never members, never WhatsApp content. Behind OMNIRA_GROUP_ORGANIZER_ENABLED; a contract needs the 'groups' scope
+// specifically (see can_manage_groups above). Mirrors contracts/omnira-v1.yaml.
+
+export type GroupLinkRole = 'consumer' | 'supplier' | 'operator' | 'partner' | 'observer'
+
+export const GROUP_LINK_ROLE_LABEL: Record<GroupLinkRole, string> = {
+  consumer: 'Consumidor',
+  supplier: 'Fornecedor',
+  operator: 'Operador',
+  partner: 'Parceiro',
+  observer: 'Observador',
+}
+
+export interface GroupCatalogEntry {
+  id: string
+  hub_id: string
+  source_tenant_id: string
+  source_channel_connection_id: string
+  provider_group_id: string
+  display_name: string
+  source_state: 'available' | 'stale' | 'unavailable' | 'archived'
+  version: number
+  created_at: string
+  updated_at: string
+  last_seen_at: string
+}
+
+export interface GroupLink {
+  id: string
+  hub_id: string
+  hub_group_id: string
+  tenant_id: string
+  role: GroupLinkRole
+  status: 'active' | 'revoked'
+  assigned_by?: string
+  assigned_at: string
+  revoked_by?: string
+  revoked_at?: string
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface GroupRelationship {
+  id: string
+  hub_id: string
+  consumer_tenant_id: string
+  supplier_tenant_id: string
+  service_kind: string
+  service_reference: string
+  status: 'active' | 'suspended' | 'revoked'
+  valid_from: string
+  valid_until?: string
+  created_at: string
+  updated_at: string
+}
+
+export const groupOrganizerAPI = {
+  catalog: (hubId: string): Promise<GroupCatalogEntry[]> =>
+    axios.get<{ items: GroupCatalogEntry[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/catalog`, { headers: authHeaders(), params: { limit: 200 } }).then((r) => r.data.items),
+  upsertCatalogEntry: (
+    hubId: string,
+    body: { source_tenant_id: string; source_channel_connection_id: string; provider_group_id: string; display_name: string },
+  ): Promise<GroupCatalogEntry> => axios.post<GroupCatalogEntry>(`${API_BASE}/hubs/${enc(hubId)}/groups/catalog`, body, { headers: authHeaders() }).then((r) => r.data),
+  links: (hubId: string, groupId: string): Promise<GroupLink[]> =>
+    axios.get<{ items: GroupLink[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/catalog/${enc(groupId)}/links`, { headers: authHeaders() }).then((r) => r.data.items),
+  createLink: (hubId: string, groupId: string, tenantId: string, role: GroupLinkRole, idempotencyKey: string): Promise<GroupLink> =>
+    axios
+      .post<GroupLink>(
+        `${API_BASE}/hubs/${enc(hubId)}/groups/catalog/${enc(groupId)}/links`,
+        { tenant_id: tenantId, role },
+        { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey } },
+      )
+      .then((r) => r.data),
+  revokeLink: (hubId: string, groupId: string, tenantId: string, expectedVersion: number): Promise<void> =>
+    axios
+      .post(`${API_BASE}/hubs/${enc(hubId)}/groups/catalog/${enc(groupId)}/links/${enc(tenantId)}/revoke`, { expected_version: expectedVersion }, { headers: authHeaders() })
+      .then(() => undefined),
+  transferLink: (
+    hubId: string,
+    groupId: string,
+    fromTenantId: string,
+    toTenantId: string,
+    role: GroupLinkRole,
+    expectedVersion: number,
+    idempotencyKey: string,
+  ): Promise<GroupLink> =>
+    axios
+      .post<GroupLink>(
+        `${API_BASE}/hubs/${enc(hubId)}/groups/catalog/${enc(groupId)}/links/${enc(fromTenantId)}/transfer`,
+        { to_tenant_id: toTenantId, role, expected_version: expectedVersion },
+        { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey } },
+      )
+      .then((r) => r.data),
+  relationships: (hubId: string): Promise<GroupRelationship[]> =>
+    axios.get<{ items: GroupRelationship[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/relationships`, { headers: authHeaders() }).then((r) => r.data.items),
+  createRelationship: (
+    hubId: string,
+    consumerTenantId: string,
+    supplierTenantId: string,
+    serviceKind: string,
+    serviceReference: string,
+    idempotencyKey: string,
+  ): Promise<GroupRelationship> =>
+    axios
+      .post<GroupRelationship>(
+        `${API_BASE}/hubs/${enc(hubId)}/groups/relationships`,
+        { consumer_tenant_id: consumerTenantId, supplier_tenant_id: supplierTenantId, service_kind: serviceKind, service_reference: serviceReference },
+        { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey } },
+      )
+      .then((r) => r.data),
+  revokeRelationship: (hubId: string, relationshipId: string): Promise<void> =>
+    axios.post(`${API_BASE}/hubs/${enc(hubId)}/groups/relationships/${enc(relationshipId)}/revoke`, {}, { headers: authHeaders() }).then(() => undefined),
+}
+
+export function describeGroupOrganizerError(err: unknown): string {
+  const e = err as { response?: { status?: number; data?: unknown } }
+  const status = e?.response?.status
+  const body = typeof e?.response?.data === 'string' ? e.response.data.trim() : ''
+  switch (status) {
+    case 404:
+      return 'Você não tem a gestão de grupos deste Hub para este Tenant (ou o registro não existe).'
+    case 409:
+      return 'Este registro mudou desde que a tela foi carregada. Atualize e tente de novo.'
+    case 422:
+      return body || 'Os dados informados não foram aceitos.'
+    case 400:
+      return 'Pedido inválido. Recarregue a tela e tente de novo.'
+    default:
+      return 'Não foi possível concluir a ação.'
   }
 }
 

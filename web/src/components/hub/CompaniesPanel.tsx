@@ -116,13 +116,13 @@ function CompanyCard({ company: c, caps, busy, extra, hubId, onToggleCap, onTogg
         <legend className="text-sm font-medium text-text-primary">Gestão delegada ao Hub</legend>
         <p className="text-xs text-text-tertiary">O que o contrato permite ao Hub configurar nesta instância. Nada é delegado por padrão.</p>
         <div className="mt-2 flex flex-wrap gap-4">
-          {(['channels', 'integrations'] as ManagementScope[]).map((scope) => (
+          {(['channels', 'integrations', 'groups'] as ManagementScope[]).map((scope) => (
             <label key={scope} className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={(c.management_scopes ?? []).includes(scope)} onChange={(e) => onToggleScope(scope, e.target.checked)} aria-label={`${MANAGEMENT_SCOPE_LABEL[scope]} — ${c.display_name}`} />
               <span>{MANAGEMENT_SCOPE_LABEL[scope]}</span>
             </label>
           ))}
-          {(c.management_scopes ?? []).length > 0 && !suspended && (
+          {(c.management_scopes ?? []).some((s) => s === 'channels' || s === 'integrations') && !suspended && (
             <Link to={`/instancias/${hubId}/${c.id}/canais`} className="ml-auto text-sm font-medium text-accent-primary underline-offset-2 hover:underline">Abrir canais e integrações</Link>
           )}
         </div>

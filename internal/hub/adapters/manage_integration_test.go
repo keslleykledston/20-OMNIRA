@@ -102,7 +102,7 @@ func newManageAPI(t *testing.T, w *world) *manageAPI {
 	mux.Handle("GET "+base, wrap(h.List))
 	mux.Handle("GET "+base+"/{connection_id}", wrap(h.Get))
 	mux.Handle("POST "+base+"/{connection_id}/session/start", wrap(h.StartSession))
-	hh := adapters.NewHTTPHandler(w.app).WithAdminAPI(true)
+	hh := adapters.NewHTTPHandler(w.app).WithAdminAPI(true).WithGroupOrganizerAPI(true)
 	session := tenancyadapters.UserSessionMiddleware(w.app)
 	mux.Handle("GET /api/v1/hubs", shim(session(http.HandlerFunc(hh.ListMyHubs))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/managed", shim(session(http.HandlerFunc(hh.ListManaged))))
@@ -672,6 +672,37 @@ func TestManagedInstancesListAndFlagAreAskedOfTheDatabase(t *testing.T) {
 		w.must(json.Unmarshal([]byte(mine), &out))
 		if len(out.Items) != 1 || out.Items[0].Can != want.is {
 			t.Errorf("%s: can_manage_instances = %v, want %v (%s)", who, out.Items, want.is, mine)
+		}
+	}
+}
+
+// can_manage_groups (ADR-0059) must light up ONLY for the 'groups' scope specifically — unlike can_manage_instances,
+// which lights up for ANY delegated scope. A contract that only delegates channels/integrations must not advertise
+// the group organizer screen.
+func TestCanManageGroupsIsScopeSpecificNotAnyScope(t *testing.T) {
+	w := newWorld(t)
+	api := newManageAPI(t, w)
+	admin := w.hubAdmin("admin")
+	groupsManager := w.hubAgent("groups-manager")
+	w.canManage(w.grant(groupsManager, "A"))
+	channelsOnlyManager := w.hubAgent("channels-only-manager")
+	w.canManage(w.grant(channelsOnlyManager, "B"))
+	w.scopes("A", "groups")
+	w.scopes("B", "channels", "integrations")
+
+	for who, want := range map[string]struct {
+		u  uuid.UUID
+		is bool
+	}{"admin (hub_admin, lights up for every scoped tenant)": {admin, true}, "groups-manager (has the 'groups' scope)": {groupsManager, true}, "channels-only-manager (no 'groups' scope on their contract)": {channelsOnlyManager, false}} {
+		_, body := api.raw("GET", "/api/v1/hubs", want.u)
+		var out struct {
+			Items []struct {
+				Can bool `json:"can_manage_groups"`
+			} `json:"items"`
+		}
+		w.must(json.Unmarshal([]byte(body), &out))
+		if len(out.Items) != 1 || out.Items[0].Can != want.is {
+			t.Errorf("%s: can_manage_groups = %v, want %v (%s)", who, out.Items, want.is, body)
 		}
 	}
 }

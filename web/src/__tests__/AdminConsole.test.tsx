@@ -151,6 +151,23 @@ describe('console shell', () => {
     expect(screen.getByText('Versões e atualizações')).toBeInTheDocument()
   })
 
+  it('ADR-0059: someone delegated ONLY the groups scope sees the console (Organizador de grupos only), never Acessos/Canais', async () => {
+    setSession()
+    hubs = [{ id: 'hub-1', name: 'K3G', role: 'hub_agent', can_manage_groups: true }]
+    inConsole('/grupos')
+    expect(await screen.findByRole('link', { name: 'Organizador de grupos' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Acessos' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Canais das instâncias' })).toBeNull()
+    expect(screen.queryByText('Sem acesso ao console')).toBeNull()
+  })
+
+  it('ADR-0059: the front door sends a groups-only person straight to the organizer', async () => {
+    setSession()
+    hubs = [{ id: 'hub-1', name: 'K3G', role: 'hub_agent', can_manage_groups: true }]
+    inConsole('/')
+    expect(await screen.findByRole('link', { name: 'Organizador de grupos' })).toBeInTheDocument()
+  })
+
   it('while attending an instance through the Hub the console is not offered: back to the conversations', async () => {
     setSession()
     setActing('hub-1', 'Beta')

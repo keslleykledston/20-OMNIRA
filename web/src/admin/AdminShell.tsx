@@ -76,7 +76,8 @@ export default function AdminShell() {
   const list = hubs.data ?? []
   const canAccess = list.some((h) => h.can_manage_access)
   const canManage = list.some((h) => h.can_manage_instances)
-  const entitled = canAccess || canManage || platformOperator.isOperator
+  const canManageGroups = list.some((h) => h.can_manage_groups)
+  const entitled = canAccess || canManage || canManageGroups || platformOperator.isOperator
   // Achado Codex [P2] (13a rodada): um 404 do probe de operador é uma negação CONFIRMADA (a
   // mesma resposta uniforme de "não encontrado" que updatemgr/http.go dá a quem não é
   // operador); qualquer OUTRO erro (500, rede, timeout) é só "não deu para saber" — tratar os
@@ -103,6 +104,11 @@ export default function AdminShell() {
           {canManage && (
             <NavLink to="/instancias" className={tab}>
               Canais das instâncias
+            </NavLink>
+          )}
+          {canManageGroups && (
+            <NavLink to="/grupos" className={tab}>
+              Organizador de grupos
             </NavLink>
           )}
           {platformOperator.isOperator && (
