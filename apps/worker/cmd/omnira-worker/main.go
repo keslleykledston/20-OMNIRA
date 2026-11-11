@@ -59,6 +59,7 @@ import (
 	flowsworker "github.com/omnira/omnira/internal/worker/flows"
 	"github.com/omnira/omnira/internal/worker/groupalert"
 	"github.com/omnira/omnira/internal/worker/hubdistributor"
+	"github.com/omnira/omnira/internal/worker/hubgroupdiscovery"
 	"github.com/omnira/omnira/internal/worker/hubprojector"
 	intelligenceworker "github.com/omnira/omnira/internal/worker/intelligence"
 	"github.com/omnira/omnira/internal/worker/jobsstream"
@@ -256,6 +257,35 @@ func main() {
 		every := time.Duration(cfg.HubDistributorIntervalSeconds) * time.Second
 		go hubdistributor.New(dbPool).Run(workerCtx, every)
 		log.Printf("Hub work-pool distributor started (every %s)\n", every)
+	}
+	// ADR-0059 addendum: register a tenant's live WhatsApp groups into the Hub's group organizer catalog by
+	// itself, for every (hub, tenant, connection) a live contract delegates 'groups' management to — without
+	// anyone clicking "Ativar" first. Needs migrations 183/185/187 and OMNIRA_WAHA_ENABLED (the directory this
+	// reads groups from only exists when WAHA is on, same rule as the API's own groupDirectory). It NEVER sets
+	// wa_groups.enabled: see internal/worker/hubgroupdiscovery's own doc comment for why.
+	if cfg.HubGroupAutodiscoveryEnabled {
+		if !cfg.WahaEnabled {
+			log.Printf("Hub group autodiscovery disabled: needs OMNIRA_WAHA_ENABLED=true")
+		} else {
+			discoveryCipher, err := channelcrypto.NewAESGCM(cfg.CredentialsKey)
+			if err != nil {
+				log.Fatalf("hub group autodiscovery: channel credential cipher error: %v", err)
+			}
+			discoveryCredentialStore := channeladapters.NewPostgresCredentialStore(dbPool, discoveryCipher)
+			discoveryConnections := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
+			discoveryClient, err := waha.NewClient(cfg.WahaBaseURL, cfg.WahaAPIKey, nil)
+			if err != nil {
+				log.Fatalf("hub group autodiscovery: WAHA client config error: %v", err)
+			}
+			discoveryProvider, err := waha.NewProvider(discoveryClient, discoveryCredentialStore)
+			if err != nil {
+				log.Fatalf("hub group autodiscovery: WAHA provider config error: %v", err)
+			}
+			groupDirectory := groupsadapters.NewWahaDirectory(discoveryConnections, discoveryProvider)
+			interval := time.Duration(cfg.HubGroupAutodiscoveryIntervalSeconds) * time.Second
+			go hubgroupdiscovery.New(dbPool, hubGroupDiscoveryDirectory{groupDirectory}).Run(workerCtx, interval)
+			log.Printf("Hub group autodiscovery started (every %s)\n", interval)
+		}
 	}
 	livenessRepo := routingadapters.NewPostgresLivenessRepository(dbPool).WithEngineRouting(cfg.RoutingEngineEnabled).WithEngineSince(cfg.RoutingEngineSince)
 	go routingworker.NewSweep(livenessRepo).Run(workerCtx)
@@ -655,6 +685,24 @@ func main() {
 	default:
 		log.Println("Worker shutdown complete")
 	}
+}
+
+// hubGroupDiscoveryDirectory adapts groups/adapters.Directory (which picks a connection among the
+// tenant's active ones when given a hint, or uuid.Nil to let it decide) to hubgroupdiscovery.Directory
+// (always called with the EXACT connection id the eligible-triple query already resolved) — so the Hub
+// worker package only ever imports its own small Directory interface, never groups/adapters internals.
+type hubGroupDiscoveryDirectory struct{ dir groupsadapters.Directory }
+
+func (a hubGroupDiscoveryDirectory) List(ctx context.Context, tenantID, connectionID uuid.UUID) ([]hubgroupdiscovery.Group, error) {
+	_, groups, err := a.dir.List(ctx, tenantID, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]hubgroupdiscovery.Group, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, hubgroupdiscovery.Group{ProviderGroupID: g.JID, Name: g.Name})
+	}
+	return out, nil
 }
 
 // routingNotifier adapts the system sender to the routing engine's Notifier: the message goes out like any system text (outbox, window rules

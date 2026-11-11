@@ -71,6 +71,11 @@ x-omnira-runtime: &omnira-runtime
   # ADR-0038 phase 4: the worker hands new conversations to the members of round-robin work pools (needs migration 104; harmless with no pool).
   OMNIRA_HUB_DISTRIBUTOR_ENABLED: ${OMNIRA_HUB_DISTRIBUTOR_ENABLED-}
   OMNIRA_HUB_DISTRIBUTOR_INTERVAL_SECONDS: ${OMNIRA_HUB_DISTRIBUTOR_INTERVAL_SECONDS-}
+  # ADR-0059 addendum: the worker registers a tenant's live WhatsApp groups into the Hub's group organizer catalog by
+  # itself, for every (hub, tenant, connection) a live contract delegates 'groups' to (needs migrations 183/185/187
+  # and OMNIRA_WAHA_ENABLED). Never enables reading a group (ADR-0015 untouched).
+  OMNIRA_HUB_GROUP_AUTODISCOVERY_ENABLED: ${OMNIRA_HUB_GROUP_AUTODISCOVERY_ENABLED-}
+  OMNIRA_HUB_GROUP_AUTODISCOVERY_INTERVAL_SECONDS: ${OMNIRA_HUB_GROUP_AUTODISCOVERY_INTERVAL_SECONDS-}
   OMNIRA_TICKET_OPEN_NOTICE_ENABLED: ${OMNIRA_TICKET_OPEN_NOTICE_ENABLED-}
   # ADR-0016 M2: local speech-to-text (systemd unit omnira-whisper on the host, GPU). Reached through the docker0
   # gateway; the host firewall only lets the OMNIRA compose network in. Empty disables transcription.
