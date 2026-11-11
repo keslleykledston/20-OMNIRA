@@ -78,6 +78,27 @@ type upsertCatalogRequest struct {
 	DisplayName               string    `json:"display_name"`
 }
 
+// GET /api/v1/hubs/{hub_id}/groups/discover-connections?source_tenant_id=<uuid>
+//
+// Same deliberate exception as DiscoverGroups below for the source_tenant_id field name — see its comment.
+func (h *GroupOrganizerHandler) DiscoverConnections(w http.ResponseWriter, r *http.Request) {
+	actor, hub, ok := requestScope(w, r)
+	if !ok {
+		return
+	}
+	sourceTenant, err := uuid.Parse(r.URL.Query().Get("source_tenant_id"))
+	if err != nil {
+		httpError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	items, err := h.svc.DiscoverConnections(r.Context(), actor, hub, sourceTenant)
+	if err != nil {
+		writeGroupOrganizerError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
+
 // GET /api/v1/hubs/{hub_id}/groups/discover?source_tenant_id=<uuid>&source_channel_connection_id=<uuid>
 //
 // Named source_tenant_id/source_channel_connection_id (not tenant_id/channel_connection_id) on purpose:

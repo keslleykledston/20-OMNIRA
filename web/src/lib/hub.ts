@@ -555,7 +555,23 @@ export interface DiscoveredGroup {
   name: string
 }
 
+export interface DiscoveredConnection {
+  id: string
+  channel: string
+  provider: string
+  external_number_id: string
+  status: 'pending' | 'active' | 'degraded' | 'disconnected' | 'revoked'
+}
+
 export const groupOrganizerAPI = {
+  // The tenant's WhatsApp channel connections — never secret_ref, never anything from channel_credentials.
+  discoverConnections: (hubId: string, sourceTenantId: string): Promise<DiscoveredConnection[]> =>
+    axios
+      .get<{ items: DiscoveredConnection[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/discover-connections`, {
+        headers: authHeaders(),
+        params: { source_tenant_id: sourceTenantId },
+      })
+      .then((r) => r.data.items),
   // Groups wa_groups already knows about for one tenant's connection — never enabled, never a message.
   // A group the tenant's own team has never opened once in their own Groups page will not appear yet.
   discover: (hubId: string, sourceTenantId: string, sourceChannelConnectionId: string): Promise<DiscoveredGroup[]> =>

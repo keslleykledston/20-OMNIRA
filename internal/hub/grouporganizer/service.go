@@ -230,6 +230,47 @@ func (s *Service) UpsertCatalogEntry(ctx context.Context, actor, hub, sourceTena
 	return out, err
 }
 
+// DiscoveredConnection is one WhatsApp channel connection already configured for the tenant — never its
+// secret_ref, never anything from channel_credentials.
+type DiscoveredConnection struct {
+	ID               uuid.UUID `json:"id"`
+	Channel          string    `json:"channel"`
+	Provider         string    `json:"provider"`
+	ExternalNumberID string    `json:"external_number_id"`
+	Status           string    `json:"status"`
+}
+
+// DiscoverConnections lists the tenant's WhatsApp channel connections, so the "add to catalog" UI can
+// offer a connection picker before the group picker instead of a blank UUID field the operator has no
+// way to fill in (found broken live in production, same shape as DiscoverGroups below: the group picker
+// only ever fires once a valid connection UUID is already typed in by hand).
+func (s *Service) DiscoverConnections(ctx context.Context, actor, hub, sourceTenant uuid.UUID) ([]DiscoveredConnection, error) {
+	if sourceTenant == uuid.Nil {
+		return nil, invalid("source_tenant_id is required")
+	}
+	out := []DiscoveredConnection{}
+	err := s.tx(ctx, actor, func(c context.Context, q platformdb.Querier) error {
+		if err := authorize(c, q, sourceTenant, actor, hub); err != nil {
+			return err
+		}
+		rows, err := q.Query(c, `SELECT id, channel, provider, external_number_id, status FROM hub_discover_tenant_connections($1, $2, $3)`,
+			hub, sourceTenant, actor)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var conn DiscoveredConnection
+			if err := rows.Scan(&conn.ID, &conn.Channel, &conn.Provider, &conn.ExternalNumberID, &conn.Status); err != nil {
+				return err
+			}
+			out = append(out, conn)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // DiscoveredGroup is one WhatsApp group already known to the tenant's own wa_groups table — never
 // its enabled status, never a message, never a participant.
 type DiscoveredGroup struct {

@@ -38,6 +38,7 @@ func newGroupOrganizerAPI(t *testing.T, w *world) *groupOrganizerAPI {
 	}
 	session := tenancyadapters.UserSessionMiddleware(w.app)
 	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/discover-connections", shim(session(http.HandlerFunc(h.DiscoverConnections))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/discover", shim(session(http.HandlerFunc(h.DiscoverGroups))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog", shim(session(http.HandlerFunc(h.ListCatalog))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog", shim(session(http.HandlerFunc(h.UpsertCatalogEntry))))
@@ -125,6 +126,53 @@ func TestGroupOrganizerAPI_UpsertCatalogIsIdempotentByNaturalKeyAndRequiresOrigi
 	}
 	if n := w.count(`SELECT count(*) FROM hub_group_catalog WHERE hub_id = $1 AND source_tenant_id = $2`, w.hub, w.tenant["A"]); n != 1 {
 		t.Fatalf("two upserts of the same identity created %d row(s), want 1 (no duplicate)", n)
+	}
+}
+
+// TestGroupOrganizerAPI_DiscoverConnections proves the migration-000186 bridge found missing live in
+// production right after 000185 shipped: the group picker only ever fired once a valid connection UUID
+// was already typed in by hand, and nothing in the product showed the operator one to copy.
+func TestGroupOrganizerAPI_DiscoverConnections(t *testing.T) {
+	w := newWorld(t)
+	api := newGroupOrganizerAPI(t, w)
+	connA := w.channelConnection("A")
+	_ = w.channelConnection("B")
+
+	alice := w.hubAgent("alice")
+	w.canManage(w.grant(alice, "A"))
+	w.groupsScope("A") // alice gets 'groups' on A only, never on B
+
+	discoverA := "/groups/discover-connections?source_tenant_id=" + w.tenant["A"].String()
+	discoverB := "/groups/discover-connections?source_tenant_id=" + w.tenant["B"].String()
+
+	code, resp := api.call("GET", discoverA, alice, "", nil)
+	if code != 200 {
+		t.Fatalf("alice discovering A's connections (has 'groups' there): got %d, want 200", code)
+	}
+	items, _ := resp["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1 (A's one whatsapp connection)", len(items))
+	}
+	it, _ := items[0].(map[string]any)
+	if it["id"].(string) != connA.String() {
+		t.Fatalf("got connection %v, want %v", it["id"], connA)
+	}
+	for _, forbidden := range []string{"secret_ref", "risk_acknowledged_at", "risk_acknowledged_by"} {
+		if _, ok := it[forbidden]; ok {
+			t.Fatalf("response must never include %q (credential boundary): %v", forbidden, it)
+		}
+	}
+	if len(it) != 5 { // exactly id, channel, provider, external_number_id, status
+		t.Fatalf("expected exactly 5 fields, got %v", it)
+	}
+
+	if code, resp := api.call("GET", discoverB, alice, "", nil); code != 404 {
+		t.Fatalf("alice discovering B (no 'groups' there, even though B has a real connection): got %d, want 404, body=%v", code, resp)
+	}
+
+	stranger := w.hubAgent("stranger")
+	if code, _ := api.call("GET", discoverA, stranger, "", nil); code != 404 {
+		t.Fatalf("stranger (no grant at all): got %d, want 404", code)
 	}
 }
 

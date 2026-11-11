@@ -2599,6 +2599,28 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: Another pool already answers for that instance or queue }
+  /hubs/{hub_id}/groups/discover-connections:
+    get:
+      operationId: discoverHubTenantConnections
+      tags: [Hub]
+      summary: WhatsApp channel connections already configured for one tenant (requires `groups` management on that tenant)
+      description: >
+        Feeds the "add to catalog" UI's connection picker, one step before groups/discover. Read-only;
+        never returns secret_ref or anything from channel_credentials. Filtered to channel = whatsapp —
+        the group organizer has no use for a tenant's other channels. Query parameter is named
+        source_tenant_id, not tenant_id, same deliberate exception as groups/discover below.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: source_tenant_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The tenant's WhatsApp channel connections
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/HubConnectionDiscoveredItem' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /hubs/{hub_id}/groups/discover:
     get:
       operationId: discoverHubTenantGroups
@@ -6311,6 +6333,15 @@ components:
       properties:
         provider_group_id: { type: string }
         name: { type: string }
+    HubConnectionDiscoveredItem:
+      type: object
+      required: [id, channel, provider, external_number_id, status]
+      properties:
+        id: { type: string, format: uuid }
+        channel: { type: string }
+        provider: { type: string }
+        external_number_id: { type: string }
+        status: { type: string, enum: [pending, active, degraded, disconnected, revoked] }
     HubGroupCatalogEntry:
       type: object
       required: [id, hub_id, source_tenant_id, source_channel_connection_id, provider_group_id, display_name, source_state, version, created_at, updated_at, last_seen_at]

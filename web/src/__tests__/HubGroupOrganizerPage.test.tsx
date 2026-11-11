@@ -24,6 +24,7 @@ let catalog: object[];
 let relationships: object[];
 let linksByGroup: Record<string, object[]>;
 let discovered: object[];
+let discoveredConnections: object[];
 
 function entry(id: string, name: string) {
   return { id, hub_id: HUB, source_tenant_id: 'A', source_channel_connection_id: 'conn-1', provider_group_id: '120300000000@g.us', display_name: name, source_state: 'available', version: 1, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', last_seen_at: '2026-01-01T00:00:00Z' };
@@ -40,6 +41,7 @@ function serve() {
     if (u.endsWith('/managed')) return { data: { items: managed } };
     if (u.endsWith('/groups/catalog')) return { data: { items: catalog } };
     if (u.endsWith('/groups/relationships')) return { data: { items: relationships } };
+    if (u.endsWith('/groups/discover-connections')) return { data: { items: discoveredConnections } };
     if (u.endsWith('/groups/discover')) return { data: { items: discovered } };
     const linksMatch = /\/groups\/catalog\/([^/]+)\/links$/.exec(u);
     if (linksMatch) return { data: { items: linksByGroup[linksMatch[1]] ?? [] } };
@@ -63,6 +65,7 @@ beforeEach(() => {
     [GROUP_SHARED]: [link('l2', GROUP_SHARED, 'A'), link('l3', GROUP_SHARED, 'B', 'supplier')],
   };
   discovered = [];
+  discoveredConnections = [];
   serve();
 });
 
@@ -119,14 +122,17 @@ describe('HubGroupOrganizerPage', () => {
     expect((config as { headers: Record<string, string> }).headers['Idempotency-Key']).toBeTruthy();
   });
 
-  it('adicionar ao catálogo: escolhendo tenant+conexão, oferece os grupos já conhecidos em vez de um campo em branco', async () => {
+  it('adicionar ao catálogo: escolhendo tenant, oferece as conexões e depois os grupos já conhecidos em vez de campos em branco', async () => {
+    discoveredConnections = [{ id: '11111111-1111-1111-1111-111111111111', channel: 'whatsapp', provider: 'waha', external_number_id: '5511999990000', status: 'active' }];
     discovered = [{ provider_group_id: '551199990000001@g.us', name: 'Alpha Suporte' }, { provider_group_id: '551199990000002@g.us', name: 'Alpha Vendas' }];
     renderAt(<HubGroupOrganizerPage />);
     await userEvent.click(await screen.findByRole('button', { name: 'Adicionar grupo ao catálogo' }));
     const dialog = screen.getByRole('dialog', { name: 'Adicionar grupo ao catálogo' });
-    expect(within(dialog).queryByLabelText('Grupo')).not.toBeInTheDocument(); // sem tenant+conexão ainda, nada a descobrir
+    expect(within(dialog).queryByLabelText('Conexão (canal) na origem')).not.toBeInTheDocument(); // sem tenant ainda, nada a descobrir
+    expect(within(dialog).queryByLabelText('Grupo')).not.toBeInTheDocument();
     await userEvent.selectOptions(within(dialog).getByLabelText('Tenant de origem'), 'A');
-    await userEvent.type(within(dialog).getByLabelText('ID da conexão (canal) na origem'), '11111111-1111-1111-1111-111111111111');
+    const connPicker = await within(dialog).findByLabelText('Conexão (canal) na origem');
+    await userEvent.selectOptions(connPicker, '11111111-1111-1111-1111-111111111111');
     const picker = await within(dialog).findByLabelText('Grupo');
     await userEvent.selectOptions(picker, '551199990000002@g.us');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Adicionar' }));
@@ -141,12 +147,26 @@ describe('HubGroupOrganizerPage', () => {
     });
   });
 
-  it('adicionar ao catálogo: lista vazia de descoberta cai pro campo manual em vez de travar', async () => {
+  it('adicionar ao catálogo: lista vazia de conexões cai pro campo manual em vez de travar', async () => {
+    discoveredConnections = [];
+    renderAt(<HubGroupOrganizerPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Adicionar grupo ao catálogo' }));
+    const dialog = screen.getByRole('dialog', { name: 'Adicionar grupo ao catálogo' });
+    await userEvent.selectOptions(within(dialog).getByLabelText('Tenant de origem'), 'A');
+    await screen.findByText(/Nenhuma conexão de WhatsApp disponível/);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Digitar manualmente' }));
+    expect(within(dialog).getByLabelText('ID da conexão (canal) na origem')).toBeInTheDocument();
+  });
+
+  it('adicionar ao catálogo: lista vazia de grupos cai pro campo manual em vez de travar', async () => {
+    discoveredConnections = [];
     discovered = [];
     renderAt(<HubGroupOrganizerPage />);
     await userEvent.click(await screen.findByRole('button', { name: 'Adicionar grupo ao catálogo' }));
     const dialog = screen.getByRole('dialog', { name: 'Adicionar grupo ao catálogo' });
     await userEvent.selectOptions(within(dialog).getByLabelText('Tenant de origem'), 'A');
+    await screen.findByText(/Nenhuma conexão de WhatsApp disponível/);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Digitar manualmente' }));
     await userEvent.type(within(dialog).getByLabelText('ID da conexão (canal) na origem'), '11111111-1111-1111-1111-111111111111');
     await screen.findByText(/Nenhum grupo disponível/);
     await userEvent.click(within(dialog).getByRole('button', { name: 'Digitar manualmente' }));

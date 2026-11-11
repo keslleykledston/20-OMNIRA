@@ -366,13 +366,27 @@ const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 function AddCatalogEntryModal({ hubId, tenants, open, onClose, onDone }: { hubId: string; tenants: Tenant[]; open: boolean; onClose: () => void; onDone: () => void }) {
   const [tenantId, setTenantId] = useState('');
   const [connectionId, setConnectionId] = useState('');
+  const [connManual, setConnManual] = useState(false);
   const [providerGroupId, setProviderGroupId] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [manual, setManual] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (open) { setTenantId(''); setConnectionId(''); setProviderGroupId(''); setDisplayName(''); setManual(false); setError(null); }
+    if (open) { setTenantId(''); setConnectionId(''); setConnManual(false); setProviderGroupId(''); setDisplayName(''); setManual(false); setError(null); }
   }, [open]);
+  // Real WhatsApp connections already configured for the chosen tenant, so the operator picks one instead
+  // of typing a connection UUID by hand with nowhere in the product to copy it from (found broken live in
+  // production, same gap as the group picker below — fixed one step earlier).
+  const canDiscoverConnections = open && !!tenantId;
+  const connections = useQuery({
+    queryKey: ['hub-connection-discover', hubId, tenantId],
+    queryFn: () => groupOrganizerAPI.discoverConnections(hubId, tenantId),
+    enabled: canDiscoverConnections,
+    retry: false,
+  });
+  useEffect(() => { setConnectionId(''); setConnManual(false); }, [tenantId]);
+  const connDiscovered = connections.data ?? [];
+  const showConnectionPicker = canDiscoverConnections && !connManual && !connections.isError;
   const canDiscover = open && !!tenantId && uuidRe.test(connectionId);
   // Real groups already known to the tenant's own wa_groups, so the operator picks one instead of typing
   // a JID by hand with nowhere in the product to copy it from (found broken live in production). A group
@@ -401,10 +415,42 @@ function AddCatalogEntryModal({ hubId, tenants, open, onClose, onDone }: { hubId
       </>}>
       <div className="space-y-3">
         <TenantSelect id="catalog-tenant" label="Tenant de origem" tenants={tenants} value={tenantId} onChange={setTenantId} />
-        <label className="block space-y-1 text-sm" htmlFor="catalog-connection">
-          <span className="font-medium text-text-primary">ID da conexão (canal) na origem</span>
-          <input id="catalog-connection" value={connectionId} onChange={(e) => setConnectionId(e.target.value)} placeholder="UUID da conexão" className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm" />
-        </label>
+        {showConnectionPicker ? (
+          <label className="block space-y-1 text-sm" htmlFor="catalog-connection-picker">
+            <span className="font-medium text-text-primary">Conexão (canal) na origem</span>
+            {connections.isLoading ? (
+              <p className="text-sm text-text-secondary">Buscando conexões de WhatsApp desse Tenant…</p>
+            ) : connDiscovered.length === 0 ? (
+              <p className="text-sm text-text-secondary">
+                Nenhuma conexão de WhatsApp disponível para esse Tenant ainda.{' '}
+                <button type="button" className="text-accent-primary underline" onClick={() => setConnManual(true)}>Digitar manualmente</button>
+              </p>
+            ) : (
+              <>
+                <select
+                  id="catalog-connection-picker"
+                  value={connectionId}
+                  onChange={(e) => setConnectionId(e.target.value)}
+                  className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary"
+                >
+                  <option value="">Selecione uma conexão</option>
+                  {connDiscovered.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      WhatsApp · {c.external_number_id} {c.status !== 'active' ? `(${c.status})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="text-xs text-accent-primary underline" onClick={() => setConnManual(true)}>Não encontrou? Digitar manualmente</button>
+              </>
+            )}
+          </label>
+        ) : (
+          <label className="block space-y-1 text-sm" htmlFor="catalog-connection">
+            <span className="font-medium text-text-primary">ID da conexão (canal) na origem</span>
+            <input id="catalog-connection" value={connectionId} onChange={(e) => setConnectionId(e.target.value)} placeholder="UUID da conexão" className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm" />
+            {canDiscoverConnections && <button type="button" className="block text-xs text-accent-primary underline" onClick={() => setConnManual(false)}>Voltar para a lista de conexões</button>}
+          </label>
+        )}
         {showPicker ? (
           <label className="block space-y-1 text-sm" htmlFor="catalog-group-picker">
             <span className="font-medium text-text-primary">Grupo</span>
