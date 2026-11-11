@@ -119,6 +119,9 @@ x-omnira-runtime: &omnira-runtime
   # Group AI observer (ADR-0055): suggest-only, per-group opt-in, own queue — separate from the topic switches
   # above on purpose (see ADR-0055 "Alternativas").
   OMNIRA_GROUP_AI_OBSERVER_ENABLED: ${OMNIRA_GROUP_AI_OBSERVER_ENABLED-}
+  # Hub group organizer (ADR-0059): off unless a Hub contract is also explicitly granted the 'groups'
+  # management scope — this flag alone grants nothing to any existing contract.
+  OMNIRA_GROUP_ORGANIZER_ENABLED: ${OMNIRA_GROUP_ORGANIZER_ENABLED-}
 
 services:
   postgres:
