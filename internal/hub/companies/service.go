@@ -78,8 +78,9 @@ type UpdateInput struct {
 }
 
 // ManageableScopes are the scopes a contract can delegate today. 'team', 'queues' and 'settings' are reserved by the schema and
-// not offered: nothing would read them.
-var ManageableScopes = []string{"channels", "integrations"}
+// not offered: nothing would read them. 'groups' (ADR-0059) only unlocks the Hub group organizer's own tables
+// (hub_group_catalog/hub_group_tenant_links/hub_tenant_relationships) — it grants nothing over wa_groups/wa_group_messages.
+var ManageableScopes = []string{"channels", "integrations", "groups"}
 
 type Service struct {
 	pool *pgxpool.Pool
@@ -356,7 +357,7 @@ func (s *Service) Update(ctx context.Context, operator, hub, tenant uuid.UUID, i
 		seen := map[string]bool{}
 		for _, sc := range *in.ManagementScopes {
 			if !slices.Contains(ManageableScopes, sc) {
-				return Company{}, invalid("management scope %q is not available (use channels or integrations)", sc)
+				return Company{}, invalid("management scope %q is not available (use one of: %s)", sc, strings.Join(ManageableScopes, ", "))
 			}
 			if !seen[sc] {
 				seen[sc] = true

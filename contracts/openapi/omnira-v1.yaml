@@ -1907,7 +1907,7 @@ paths:
               properties:
                 status: { type: string, enum: [active, suspended] }
                 capabilities: { type: object, additionalProperties: { type: boolean } }
-                management_scopes: { type: array, items: { type: string, enum: [channels, integrations] }, description: 'Replaces the delegated management scopes; [] withdraws them all; absent = unchanged' }
+                management_scopes: { type: array, items: { type: string, enum: [channels, integrations, groups] }, description: 'Replaces the delegated management scopes; [] withdraws them all; absent = unchanged' }
       responses:
         '200':
           description: The company after the change
@@ -2262,7 +2262,7 @@ paths:
                       properties:
                         tenant_id: { type: string, format: uuid }
                         name: { type: string }
-                        scopes: { type: array, items: { type: string, enum: [channels, integrations] } }
+                        scopes: { type: array, items: { type: string, enum: [channels, integrations, groups] } }
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
   /hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}/management:
@@ -6257,7 +6257,7 @@ components:
               admins: { type: array, items: { $ref: '#/components/schemas/HubAccessPerson' } }
               direct_agents: { type: integer, description: Active members of the company who are not administrators }
               hub_agents: { type: integer, description: People with a live grant through this hub }
-              management_scopes: { type: array, items: { type: string, enum: [channels, integrations] }, description: What the contract delegates the hub to MANAGE here (empty = nothing) }
+              management_scopes: { type: array, items: { type: string, enum: [channels, integrations, groups] }, description: What the contract delegates the hub to MANAGE here (empty = nothing) }
         agents:
           type: array
           items:
@@ -6534,7 +6534,7 @@ components:
         integrations: { type: integer }
         open_conversations: { type: integer }
         agents: { type: integer }
-        management_scopes: { type: array, items: { type: string, enum: [channels, integrations] }, description: What the contract delegates the hub to MANAGE here (empty = nothing) }
+        management_scopes: { type: array, items: { type: string, enum: [channels, integrations, groups] }, description: What the contract delegates the hub to MANAGE here (empty = nothing) }
         created_at: { type: string, format: date-time }
     HubInboxItem:
       type: object

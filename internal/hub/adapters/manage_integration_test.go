@@ -564,6 +564,17 @@ func TestOperatorDelegatesScopes_OnlyKnownOnesAndOnlyAnOperator(t *testing.T) {
 			t.Errorf("scope %q must be refused (reserved or unknown)", bad)
 		}
 	}
+	// ADR-0059: 'groups' must be accepted here too — it was added to the DB CHECK constraint
+	// (migration 000183) but regressed by companies.ManageableScopes still listing only the
+	// original two values, which silently refused every attempt to grant it (found live in
+	// production via the Instâncias screen).
+	if err := set(op, "groups"); err != nil {
+		t.Fatalf("scope 'groups' (ADR-0059) must be accepted: %v", err)
+	}
+	w.must(w.owner.QueryRow(w.ctx, `SELECT management_scopes FROM hub_tenant_service_contracts WHERE id = $1`, w.contract["A"]).Scan(&got))
+	if len(got) != 1 || got[0] != "groups" {
+		t.Fatalf("expected only 'groups' stored: %v", got)
+	}
 	if err := set(adminOnly, "channels"); err == nil {
 		t.Error("a hub admin who is not a platform operator must not delegate management")
 	}
