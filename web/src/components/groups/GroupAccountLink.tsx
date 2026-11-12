@@ -14,6 +14,12 @@ interface Props {
 
 type Option = { key: string; label: string; detail?: string; ref: GroupAccountRef }
 
+// Which search panel is open, if any: 'primary' edits the group's ONE main client (account_id); 'additional'
+// adds one more client to the set below it (ADR-0059 addendum 8 — e.g. a "swap"/peering group between two
+// of the tenant's own clients, where the tenant operates on behalf of both). Both share the same merged
+// search (CRM directory + local accounts) and panel UI; only the mutation they call differs.
+type Mode = 'closed' | 'primary' | 'additional'
+
 // "Cliente final" of a group (product proposal: prestadora = tenant, cliente final = customer_accounts,
 // ADR-0018). Reuses the account registry already built for contacts/tickets, AND the tenant's own CRM
 // directory (ADR-0059 addendum 3): a groups-only tenant (e.g. K3G_Grupos, run alongside K3G_Solutions while
@@ -23,24 +29,34 @@ type Option = { key: string; label: string; detail?: string; ref: GroupAccountRe
 export function GroupAccountLink({ group, canManage }: Props) {
   const tenantId = getTenantId()
   const queryClient = useQueryClient()
-  const [editing, setEditing] = useState(false)
+  const [mode, setMode] = useState<Mode>('closed')
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const debouncedQuery = useDebounced(query, 300)
+  const open = mode !== 'closed'
 
   const search = useQuery({
     queryKey: ['group-account-search', tenantId, debouncedQuery],
     queryFn: () => accountsAPI.list({ q: debouncedQuery }),
-    enabled: editing,
+    enabled: open,
   })
   // The CRM directory has no server-side query: it is a short, complete list of active companies, fetched
   // once and filtered by the same text locally (same approach as ContactKindControl's CompanyPicker).
   const directory = useQuery({
     queryKey: ['group-account-directory', tenantId],
     queryFn: () => accountDirectoryAPI.directory(),
-    enabled: editing,
+    enabled: open,
     retry: false,
   })
+
+  // Already-linked accounts (primary + additional) never need to be offered again — adding the primary as
+  // additional is refused server-side anyway (422), and re-adding an existing additional is a no-op, but
+  // hiding both keeps the list meaningfully short.
+  const alreadyLinked = useMemo(() => {
+    const ids = new Set(group.additional_accounts.map((a) => a.id))
+    if (group.account_id) ids.add(group.account_id)
+    return ids
+  }, [group.account_id, group.additional_accounts])
 
   const options = useMemo<Option[]>(() => {
     const dirItems = directory.data?.items ?? []
@@ -54,19 +70,22 @@ export function GroupAccountLink({ group, canManage }: Props) {
     const local = (search.data ?? [])
       .filter((a) => !seen.has(a.name.trim().toLowerCase()))
       .map((a): Option => ({ key: `a:${a.id}`, label: a.name, detail: 'Conta local', ref: { accountId: a.id } }))
-    return [...dir, ...local]
-  }, [directory.data, search.data, query])
+    return [...dir, ...local].filter((o) => !('accountId' in o.ref && alreadyLinked.has(o.ref.accountId)))
+  }, [directory.data, search.data, query, alreadyLinked])
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['groups-list', tenantId] })
     void queryClient.invalidateQueries({ queryKey: ['group-account-search', tenantId] })
   }
+  const close = () => {
+    setMode('closed')
+    setQuery('')
+  }
   const link = useMutation({
-    mutationFn: (ref: GroupAccountRef) => groupsAPI.linkAccount(group.id, ref),
+    mutationFn: (ref: GroupAccountRef) => (mode === 'additional' ? groupsAPI.addAdditionalAccount(group.id, ref) : groupsAPI.linkAccount(group.id, ref)),
     onSuccess: () => {
       invalidate()
-      setEditing(false)
-      setQuery('')
+      close()
     },
     onError: (err) => setError(groupErrorMessage(err)),
   })
@@ -75,25 +94,58 @@ export function GroupAccountLink({ group, canManage }: Props) {
     onSuccess: invalidate,
     onError: (err) => setError(groupErrorMessage(err)),
   })
+  const removeAdditional = useMutation({
+    mutationFn: (accountId: string) => groupsAPI.removeAdditionalAccount(group.id, accountId),
+    onSuccess: invalidate,
+    onError: (err) => setError(groupErrorMessage(err)),
+  })
 
-  if (!editing) {
+  if (!open) {
     return (
-      <div className="flex items-center gap-1.5">
-        {group.account_name ? (
-          <Badge variant="info" size="sm">
-            {group.account_name}
-          </Badge>
-        ) : (
-          <span className="text-xs text-text-tertiary">Sem cliente vinculado</span>
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-1.5">
+          {group.account_name ? (
+            <Badge variant="info" size="sm">
+              {group.account_name}
+            </Badge>
+          ) : (
+            <span className="text-xs text-text-tertiary">Sem cliente vinculado</span>
+          )}
+          {canManage && (
+            <button type="button" onClick={() => setMode('primary')} className="text-xs font-medium text-accent-primary hover:underline">
+              {group.account_name ? 'Alterar' : 'Vincular'}
+            </button>
+          )}
+          {canManage && group.account_name && (
+            <button type="button" disabled={unlink.isPending} onClick={() => unlink.mutate()} className="text-xs text-text-tertiary hover:underline">
+              Remover
+            </button>
+          )}
+        </div>
+        {group.additional_accounts.length > 0 && (
+          <ul className="flex flex-wrap items-center gap-1.5">
+            {group.additional_accounts.map((a) => (
+              <li key={a.id} className="flex items-center gap-1">
+                <Badge variant="default" size="sm">
+                  {a.name}
+                </Badge>
+                {canManage && (
+                  <button
+                    type="button"
+                    disabled={removeAdditional.isPending}
+                    onClick={() => removeAdditional.mutate(a.id)}
+                    className="text-[11px] text-text-tertiary hover:underline"
+                  >
+                    Remover
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
         {canManage && (
-          <button type="button" onClick={() => setEditing(true)} className="text-xs font-medium text-accent-primary hover:underline">
-            {group.account_name ? 'Alterar' : 'Vincular'}
-          </button>
-        )}
-        {canManage && group.account_name && (
-          <button type="button" disabled={unlink.isPending} onClick={() => unlink.mutate()} className="text-xs text-text-tertiary hover:underline">
-            Remover
+          <button type="button" onClick={() => setMode('additional')} className="self-start text-[11px] font-medium text-accent-primary hover:underline">
+            + Adicionar outro cliente
           </button>
         )}
         {error && <span className="text-xs text-status-danger">{error}</span>}
@@ -113,14 +165,7 @@ export function GroupAccountLink({ group, canManage }: Props) {
           aria-label="Buscar cliente final"
           className="min-w-0 flex-1 rounded-control border border-border-subtle bg-surface px-2 py-1 text-xs text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
         />
-        <Button
-          size="sm"
-          variant="tertiary"
-          onClick={() => {
-            setEditing(false)
-            setQuery('')
-          }}
-        >
+        <Button size="sm" variant="tertiary" onClick={close}>
           Cancelar
         </Button>
       </div>

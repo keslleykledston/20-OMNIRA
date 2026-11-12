@@ -1132,6 +1132,8 @@ func (s *Server) RegisterGroupHandlers(dbPool *pgxpool.Pool, h *groupsadapters.H
 	s.mux.Handle("DELETE "+base+"/{group_id}/messages", wrap(h.DeleteHistory))
 	s.mux.Handle("PUT "+base+"/{group_id}/account", wrap(h.LinkAccount))
 	s.mux.Handle("DELETE "+base+"/{group_id}/account", wrap(h.UnlinkAccount))
+	s.mux.Handle("POST "+base+"/{group_id}/accounts", wrap(h.AddAdditionalAccount))
+	s.mux.Handle("DELETE "+base+"/{group_id}/accounts/{account_id}", wrap(h.RemoveAdditionalAccount))
 }
 
 // RegisterSLAAlertFeatureFlagHandlers mounts the ADR-0058 operator kill switch's admin endpoint:

@@ -19,6 +19,7 @@ const group = (over: Partial<Group> = {}): Group => ({
   purpose: 'other',
   account_id: null,
   account_name: null,
+  additional_accounts: [],
   connection_id: 'c-1',
   connection_account: '559200000000',
   ai_observer_enabled: false,

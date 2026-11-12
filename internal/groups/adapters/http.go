@@ -126,6 +126,13 @@ type lastMessage struct {
 	Preview     string `json:"preview"`
 }
 
+// accountRef names one customer_account for display — used both for the group's additional (non-primary)
+// clients below and anywhere else a bare id+name pair of an account is enough.
+type accountRef struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
 type groupItem struct {
 	ID                uuid.UUID    `json:"id"`
 	Name              string       `json:"name"`
@@ -133,12 +140,16 @@ type groupItem struct {
 	Purpose           string       `json:"purpose"`
 	AccountID         *uuid.UUID   `json:"account_id"`
 	AccountName       *string      `json:"account_name"`
-	ConnectionID      uuid.UUID    `json:"connection_id"`
-	ConnectionAccount string       `json:"connection_account"`
-	AIObserverEnabled bool         `json:"ai_observer_enabled"`
-	IsAlertChannel    bool         `json:"is_alert_channel"`
-	LastMessageAt     *time.Time   `json:"last_message_at"`
-	LastMessage       *lastMessage `json:"last_message"`
+	// AdditionalAccounts: every OTHER client this group also concerns (ADR-0059 addendum 8, e.g. a
+	// "swap"/peering group between two of the tenant's own clients) — never the primary above, always a
+	// slice (empty, never null) so the frontend never special-cases absence.
+	AdditionalAccounts []accountRef `json:"additional_accounts"`
+	ConnectionID       uuid.UUID    `json:"connection_id"`
+	ConnectionAccount  string       `json:"connection_account"`
+	AIObserverEnabled  bool         `json:"ai_observer_enabled"`
+	IsAlertChannel     bool         `json:"is_alert_channel"`
+	LastMessageAt      *time.Time   `json:"last_message_at"`
+	LastMessage        *lastMessage `json:"last_message"`
 }
 
 // suggestionItem is the AI observer's suggestion for one message (ADR-0055) — never anything acted on, just
@@ -315,10 +326,58 @@ func scanGroup(row pgx.Row) (groupItem, error) {
 		&it.AIObserverEnabled, &it.IsAlertChannel, &it.LastMessageAt, &author, &fromMe, &mtype, &preview); err != nil {
 		return it, err
 	}
+	it.AdditionalAccounts = []accountRef{}
 	if author != nil && fromMe != nil && mtype != nil && preview != nil {
 		it.LastMessage = &lastMessage{AuthorName: *author, FromMe: *fromMe, MessageType: *mtype, Preview: *preview}
 	}
 	return it, nil
+}
+
+// additionalAccountsFor loads one group's additional (non-primary) clients (ADR-0059 addendum 8).
+func additionalAccountsFor(ctx context.Context, q platformdb.Querier, tenantID, groupID uuid.UUID) ([]accountRef, error) {
+	rows, err := q.Query(ctx, `
+		SELECT a.account_id, ca.name FROM wa_group_additional_accounts a
+		JOIN customer_accounts ca ON ca.tenant_id = a.tenant_id AND ca.id = a.account_id
+		WHERE a.tenant_id = $1 AND a.group_id = $2 ORDER BY ca.name`, tenantID, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []accountRef{}
+	for rows.Next() {
+		var ref accountRef
+		if err := rows.Scan(&ref.ID, &ref.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
+}
+
+// additionalAccountsForMany batches the same lookup across a whole page of groups (List) — one query, not
+// one per row, same N+1 lesson learned elsewhere this session (ListLinksForHub/RelationshipContextForHub).
+func additionalAccountsForMany(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID, groupIDs []uuid.UUID) (map[uuid.UUID][]accountRef, error) {
+	out := map[uuid.UUID][]accountRef{}
+	if len(groupIDs) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `
+		SELECT a.group_id, a.account_id, ca.name FROM wa_group_additional_accounts a
+		JOIN customer_accounts ca ON ca.tenant_id = a.tenant_id AND ca.id = a.account_id
+		WHERE a.tenant_id = $1 AND a.group_id = ANY($2) ORDER BY ca.name`, tenantID, groupIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var gid uuid.UUID
+		var ref accountRef
+		if err := rows.Scan(&gid, &ref.ID, &ref.Name); err != nil {
+			return nil, err
+		}
+		out[gid] = append(out[gid], ref)
+	}
+	return out, rows.Err()
 }
 
 // ---- handlers
@@ -354,26 +413,41 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		args = append(args, id)
 		where += fmt.Sprintf(" AND g.channel_connection_id = $%d", len(args))
 	}
-	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(),
+	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+	rows, err := q.Query(r.Context(),
 		groupSelect+` WHERE `+where+`
 		ORDER BY g.last_message_at DESC NULLS LAST, lower(g.name), g.id LIMIT `+strconv.Itoa(enabledListCap), args...)
 	if err != nil {
 		http.Error(w, "failed to list groups", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 	items := []groupItem{}
+	ids := []uuid.UUID{}
 	for rows.Next() {
 		it, err := scanGroup(rows)
 		if err != nil {
+			rows.Close()
 			http.Error(w, "failed to read groups", http.StatusInternalServerError)
 			return
 		}
 		items = append(items, it)
+		ids = append(ids, it.ID)
 	}
-	if rows.Err() != nil {
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
 		http.Error(w, "failed to read groups", http.StatusInternalServerError)
 		return
+	}
+	additional, err := additionalAccountsForMany(r.Context(), q, tc.TenantID, ids)
+	if err != nil {
+		http.Error(w, "failed to read groups", http.StatusInternalServerError)
+		return
+	}
+	for i := range items {
+		if a, ok := additional[items[i].ID]; ok {
+			items[i].AdditionalAccounts = a
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
 }
@@ -524,6 +598,10 @@ func (h *Handler) Enable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read group", http.StatusInternalServerError)
 		return
 	}
+	if it.AdditionalAccounts, err = additionalAccountsFor(r.Context(), q, tc.TenantID, id); err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
@@ -659,6 +737,10 @@ func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 	}
 	it, err := scanGroup(q.QueryRow(r.Context(), groupSelect+` WHERE g.tenant_id = $1 AND g.id = $2`, tc.TenantID, id))
 	if err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	if it.AdditionalAccounts, err = additionalAccountsFor(r.Context(), q, tc.TenantID, id); err != nil {
 		http.Error(w, "failed to read group", http.StatusInternalServerError)
 		return
 	}
@@ -933,6 +1015,10 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read group", http.StatusInternalServerError)
 		return
 	}
+	if it.AdditionalAccounts, err = additionalAccountsFor(r.Context(), q, tc.TenantID, id); err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, it)
 }
 
@@ -967,6 +1053,166 @@ func (h *Handler) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	it, err := scanGroup(q.QueryRow(r.Context(), groupSelect+` WHERE g.tenant_id = $1 AND g.id = $2`, tc.TenantID, id))
 	if err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	if it.AdditionalAccounts, err = additionalAccountsFor(r.Context(), q, tc.TenantID, id); err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// AddAdditionalAccount links a SECOND (or further) client to a group that concerns more than one at once
+// (ADR-0059 addendum 8 — e.g. a "swap"/peering group between two of the tenant's own clients, where the
+// tenant operates on behalf of both). Unlike LinkAccount (the group's ONE primary client, wa_groups.account_id,
+// never touched here), a group may have any number of additional accounts. Same account_id/directory_company_id
+// XOR shape as LinkAccount; idempotent (adding one already there changes nothing and is not re-audited); 422
+// if the account named is already the group's primary (that would be redundant and ambiguous about which
+// column is authoritative).
+func (h *Handler) AddAdditionalAccount(w http.ResponseWriter, r *http.Request) {
+	tc, ok := h.session(w, r, permManage)
+	if !ok {
+		return
+	}
+	id, ok := groupID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		AccountID          *string `json:"account_id"`
+		DirectoryCompanyID *string `json:"directory_company_id"`
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	dirID := ""
+	if req.DirectoryCompanyID != nil {
+		dirID = strings.TrimSpace(*req.DirectoryCompanyID)
+	}
+	if (req.AccountID != nil) == (dirID != "") {
+		http.Error(w, "account_id must be a valid id", http.StatusBadRequest)
+		return
+	}
+
+	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+	var primary *uuid.UUID
+	if err := q.QueryRow(r.Context(), `SELECT account_id FROM wa_groups WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, id).Scan(&primary); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "group not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+
+	var accountID uuid.UUID
+	viaDirectory := dirID != ""
+	if viaDirectory {
+		resolved, status, msg := h.resolveDirectoryAccount(r.Context(), tc.TenantID, dirID)
+		if msg != "" {
+			http.Error(w, msg, status)
+			return
+		}
+		accountID = resolved
+	} else {
+		var err error
+		accountID, err = uuid.Parse(*req.AccountID)
+		if err != nil {
+			http.Error(w, "account_id must be a valid id", http.StatusBadRequest)
+			return
+		}
+		var accountExists bool
+		if err := q.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM customer_accounts WHERE tenant_id = $1 AND id = $2)`, tc.TenantID, accountID).Scan(&accountExists); err != nil {
+			http.Error(w, "failed to read account", http.StatusInternalServerError)
+			return
+		}
+		if !accountExists {
+			http.Error(w, "account not found", http.StatusNotFound)
+			return
+		}
+	}
+	if primary != nil && *primary == accountID {
+		http.Error(w, "this account is already the group's primary client", http.StatusUnprocessableEntity)
+		return
+	}
+
+	var inserted bool
+	execErr := attempt(r.Context(), q, func() error {
+		tag, err := q.Exec(r.Context(), `
+			INSERT INTO wa_group_additional_accounts (tenant_id, group_id, account_id, created_by)
+			VALUES ($1, $2, $3, $4) ON CONFLICT (group_id, account_id) DO NOTHING`, tc.TenantID, id, accountID, tc.ActorID)
+		if err == nil {
+			inserted = tag.RowsAffected() > 0
+		}
+		return err
+	})
+	if execErr != nil {
+		http.Error(w, "failed to save group", http.StatusInternalServerError)
+		return
+	}
+	if inserted {
+		meta := map[string]any{"account_id": accountID}
+		if viaDirectory {
+			meta["via"] = "crm_directory"
+		}
+		h.record(r, tc, id, auditdomain.ActionGroupAdditionalAccountLinked, meta)
+	}
+	it, err := scanGroup(q.QueryRow(r.Context(), groupSelect+` WHERE g.tenant_id = $1 AND g.id = $2`, tc.TenantID, id))
+	if err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	if it.AdditionalAccounts, err = additionalAccountsFor(r.Context(), q, tc.TenantID, id); err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// RemoveAdditionalAccount removes one additional (non-primary) client from a group. Idempotent; removing one
+// not currently there changes nothing and is not re-audited. Never touches wa_groups.account_id.
+func (h *Handler) RemoveAdditionalAccount(w http.ResponseWriter, r *http.Request) {
+	tc, ok := h.session(w, r, permManage)
+	if !ok {
+		return
+	}
+	id, ok := groupID(w, r)
+	if !ok {
+		return
+	}
+	accountID, err := uuid.Parse(r.PathValue("account_id"))
+	if err != nil {
+		http.Error(w, "invalid account_id", http.StatusBadRequest)
+		return
+	}
+	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+	var exists bool
+	if err := q.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM wa_groups WHERE tenant_id = $1 AND id = $2)`, tc.TenantID, id).Scan(&exists); err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	if !exists {
+		http.Error(w, "group not found", http.StatusNotFound)
+		return
+	}
+	tag, err := q.Exec(r.Context(), `DELETE FROM wa_group_additional_accounts WHERE tenant_id = $1 AND group_id = $2 AND account_id = $3`, tc.TenantID, id, accountID)
+	if err != nil {
+		http.Error(w, "failed to save group", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() > 0 {
+		h.record(r, tc, id, auditdomain.ActionGroupAdditionalAccountUnlinked, map[string]any{"account_id": accountID})
+	}
+	it, err := scanGroup(q.QueryRow(r.Context(), groupSelect+` WHERE g.tenant_id = $1 AND g.id = $2`, tc.TenantID, id))
+	if err != nil {
+		http.Error(w, "failed to read group", http.StatusInternalServerError)
+		return
+	}
+	if it.AdditionalAccounts, err = additionalAccountsFor(r.Context(), q, tc.TenantID, id); err != nil {
 		http.Error(w, "failed to read group", http.StatusInternalServerError)
 		return
 	}

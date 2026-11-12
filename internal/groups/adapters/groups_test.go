@@ -871,6 +871,112 @@ func TestGroupAccountLinkIsValidatedAuditedAndTenantScoped(t *testing.T) {
 	}
 }
 
+// TestGroupAdditionalAccountsAllowMoreThanOneClientPerGroup proves ADR-0059 addendum 8: some groups (a
+// "swap"/peering group between two of the tenant's own clients, where the tenant operates on behalf of
+// both) genuinely concern more than one CRM client at once. The additional-accounts table is a pure N:N
+// side table — it must never touch wa_groups.account_id (the group's ONE primary client), must refuse to
+// duplicate the primary into the additional set, must be idempotent, audited, and tenant-scoped exactly
+// like the primary link.
+func TestGroupAdditionalAccountsAllowMoreThanOneClientPerGroup(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, connB := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	agent := e.member(tenantA, "tenant_agent", "active")
+	adminB := e.member(tenantB, "tenant_admin", "active")
+	primary := e.account(tenantA, "InfoRR Consultoria")
+	other := e.account(tenantA, "IP Fibra")
+	accountB := e.account(tenantB, "Cliente B")
+	g := e.group(tenantA, connA, jid1, "Swap - InfoRR x IP Fibra", true)
+	e.group(tenantB, connB, jid3, "Grupo de B", true)
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	link := func(tenant, user, gid uuid.UUID, body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodPut, "/", body, map[string]string{"group_id": gid.String()}, h.LinkAccount)
+	}
+	add := func(tenant, user, gid uuid.UUID, body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodPost, "/", body, map[string]string{"group_id": gid.String()}, h.AddAdditionalAccount)
+	}
+	remove := func(tenant, user, gid, aid uuid.UUID) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodDelete, "/", "", map[string]string{"group_id": gid.String(), "account_id": aid.String()}, h.RemoveAdditionalAccount)
+	}
+	audits := func(action string) int {
+		return e.count(`SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND action=$2`, tenantA, action)
+	}
+
+	// The group has no primary client yet: adding an additional one still works (independent axis).
+	if rec := add(tenantA, agent, g, `{"account_id":"`+other.String()+`"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("agent adding: %d, want 403", rec.Code)
+	}
+	var it groupItem
+	rec := add(tenantA, admin, g, `{"account_id":"`+other.String()+`"}`)
+	if json.Unmarshal(rec.Body.Bytes(), &it); rec.Code != http.StatusOK || len(it.AdditionalAccounts) != 1 || it.AdditionalAccounts[0].ID != other || it.AdditionalAccounts[0].Name != "IP Fibra" {
+		t.Fatalf("add = %d %s", rec.Code, rec.Body.String())
+	}
+	if it.AccountID != nil {
+		t.Fatalf("adding an additional account must never set the primary: got %v", it.AccountID)
+	}
+	if audits("group.additional_account_linked") != 1 {
+		t.Fatalf("group.additional_account_linked audits = %d", audits("group.additional_account_linked"))
+	}
+	// Idempotent: adding the same one again changes nothing, no new audit.
+	if rec := add(tenantA, admin, g, `{"account_id":"`+other.String()+`"}`); rec.Code != http.StatusOK || audits("group.additional_account_linked") != 1 {
+		t.Fatalf("repeat add: %d, audits=%d", rec.Code, audits("group.additional_account_linked"))
+	}
+
+	// Now set the primary (InfoRR) — both the primary link and the additional one coexist.
+	if rec := link(tenantA, admin, g, `{"account_id":"`+primary.String()+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("link primary: %d %s", rec.Code, rec.Body.String())
+	}
+	// Adding the PRIMARY as an additional account is refused (redundant/ambiguous).
+	if rec := add(tenantA, admin, g, `{"account_id":"`+primary.String()+`"}`); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("adding the primary as additional: %d, want 422", rec.Code)
+	}
+	rec = call(t, e.app, tenantA, admin, http.MethodGet, "/?account_id="+primary.String(), "", nil, h.List)
+	var list struct {
+		Items []groupItem `json:"items"`
+	}
+	if json.Unmarshal(rec.Body.Bytes(), &list); rec.Code != 200 || len(list.Items) != 1 || len(list.Items[0].AdditionalAccounts) != 1 || list.Items[0].AdditionalAccounts[0].ID != other {
+		t.Fatalf("list reflects both primary and additional: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Unknown account / a real account from tenant B: 404, never silently cross tenants.
+	if rec := add(tenantA, admin, g, `{"account_id":"`+uuid.NewString()+`"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown account: %d, want 404", rec.Code)
+	}
+	if rec := add(tenantA, admin, g, `{"account_id":"`+accountB.String()+`"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("tenant B's account from tenant A: %d, want 404", rec.Code)
+	}
+	// Tenant B cannot add to, or remove from, A's group — behaves exactly like an unknown group.
+	if rec := add(tenantB, adminB, g, `{"account_id":"`+accountB.String()+`"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("B adding to A's group: %d, want 404", rec.Code)
+	}
+	if rec := remove(tenantB, adminB, g, other); rec.Code != http.StatusNotFound {
+		t.Fatalf("B removing from A's group: %d, want 404", rec.Code)
+	}
+	if e.count(`SELECT count(*) FROM wa_group_additional_accounts WHERE group_id=$1`, g) != 1 {
+		t.Fatal("tenant B must not have changed tenant A's additional accounts")
+	}
+
+	// Remove: 200, audited, idempotent; the primary link is untouched.
+	if rec := remove(tenantA, agent, g, other); rec.Code != http.StatusForbidden {
+		t.Fatalf("agent removing: %d, want 403", rec.Code)
+	}
+	rec = remove(tenantA, admin, g, other)
+	if json.Unmarshal(rec.Body.Bytes(), &it); rec.Code != http.StatusOK || len(it.AdditionalAccounts) != 0 {
+		t.Fatalf("remove = %d %s", rec.Code, rec.Body.String())
+	}
+	if it.AccountID == nil || *it.AccountID != primary {
+		t.Fatalf("removing an additional account must never touch the primary: got %v", it.AccountID)
+	}
+	if audits("group.additional_account_unlinked") != 1 {
+		t.Fatalf("group.additional_account_unlinked audits = %d", audits("group.additional_account_unlinked"))
+	}
+	if rec := remove(tenantA, admin, g, other); rec.Code != http.StatusOK || audits("group.additional_account_unlinked") != 1 {
+		t.Fatalf("repeat remove: %d, audits=%d, want no new audit", rec.Code, audits("group.additional_account_unlinked"))
+	}
+}
+
 // A tenant running more than one WhatsApp instance at once (e.g. a second number connected to train on
 // one group before mixing it with the main line) must never have its groups merged into one pool: Available
 // and Enable stay ambiguous (409) without a connection_id hint, resolve correctly with one, and List's

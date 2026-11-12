@@ -848,6 +848,61 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/groups/{group_id}/accounts:
+    post:
+      operationId: addGroupAdditionalAccount
+      tags: [Groups]
+      summary: Link a SECOND (or further) "cliente final" to a group that concerns more than one at once
+      description: |
+        Requires `group.manage` (ADR-0059 addendum 8). Some groups genuinely concern more than one client at
+        once — e.g. a "swap"/peering group between two of the tenant's own clients, where the tenant operates
+        on behalf of both and a ticket (when one is needed) may be registered against either. Unlike
+        `PUT .../account` (the group's ONE primary client), a group may have any number of additional
+        accounts; this never touches `account_id`. Same `account_id`/`directory_company_id` XOR shape as the
+        primary link. Idempotent; audited as `group.additional_account_linked` only when it actually adds a
+        row. `422` when the account named is already the group's primary (redundant/ambiguous about which
+        column is authoritative).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              description: 'Exactly one of account_id or directory_company_id.'
+              properties:
+                account_id: { type: string, format: uuid }
+                directory_company_id: { type: string }
+      responses:
+        '200': { description: The group, with the new account among additional_accounts, content: { application/json: { schema: { $ref: '#/components/schemas/GroupItem' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'This account is already the group''s primary client, or directory_company_id unknown/inactive', content: { text/plain: { schema: { type: string } } } }
+        '502': { description: Company directory failed, content: { text/plain: { schema: { type: string } } } }
+        '503': { description: Company directory not configured or unavailable, content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/groups/{group_id}/accounts/{account_id}:
+    delete:
+      operationId: removeGroupAdditionalAccount
+      tags: [Groups]
+      summary: Remove one additional (non-primary) "cliente final" from a group
+      description: |
+        Requires `group.manage`. Idempotent; audited as `group.additional_account_unlinked` only when there
+        was a row to remove. Never touches the group's primary account_id.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { name: account_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The group, content: { application/json: { schema: { $ref: '#/components/schemas/GroupItem' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/settings/inbox:
     get:
       operationId: getInboxSettings
@@ -7205,7 +7260,7 @@ components:
         preview: { type: string, description: First 160 characters of the body }
     GroupItem:
       type: object
-      required: [id, name, enabled, purpose, account_id, account_name, connection_id, connection_account, ai_observer_enabled, is_alert_channel, last_message_at, last_message]
+      required: [id, name, enabled, purpose, account_id, account_name, additional_accounts, connection_id, connection_account, ai_observer_enabled, is_alert_channel, last_message_at, last_message]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -7213,6 +7268,15 @@ components:
         purpose: { $ref: '#/components/schemas/GroupPurpose' }
         account_id: { type: string, format: uuid, nullable: true, description: 'The "cliente final" this group belongs to (customer_accounts, ADR-0018); null until an administrator links it.' }
         account_name: { type: string, nullable: true, description: 'The linked account''s own name, for display; null when account_id is null.' }
+        additional_accounts:
+          type: array
+          description: 'Every OTHER client this group also concerns (ADR-0059 addendum 8, e.g. a "swap"/peering group between two of the tenant''s own clients) — never the primary above, always present (empty when there are none).'
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
         connection_id: { type: string, format: uuid, description: 'Which WhatsApp instance (channel connection) this group belongs to; a tenant may run more than one.' }
         connection_account: { type: string, description: 'That connection''s own account/number, for display (may be empty).' }
         ai_observer_enabled: { type: boolean, description: 'Per-group opt-in for the AI observer (ADR-0055, migration 000178): suggests a classification per message for a human to review, never acts, never sends anything. Can only be true while `enabled` is also true.' }

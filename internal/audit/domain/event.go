@@ -40,6 +40,12 @@ const (
 	ActionGroupPurposeSet           AuditAction = "group.purpose_set"
 	ActionGroupAccountLinked        AuditAction = "group.account_linked"
 	ActionGroupAccountUnlinked      AuditAction = "group.account_unlinked"
+	// ActionGroupAdditionalAccountLinked/Unlinked: a SECOND (or further) client linked to a group that
+	// represents more than one at once (ADR-0059 addendum 8 — e.g. a "swap"/peering group between two of the
+	// tenant's own clients). Distinct from ActionGroupAccountLinked/Unlinked, which is the group's ONE
+	// primary client (wa_groups.account_id) — this never touches that column.
+	ActionGroupAdditionalAccountLinked   AuditAction = "group.additional_account_linked"
+	ActionGroupAdditionalAccountUnlinked AuditAction = "group.additional_account_unlinked"
 	ActionGroupAIObserverEnabled    AuditAction = "group.ai_observer_enabled"
 	ActionGroupAIObserverDisabled   AuditAction = "group.ai_observer_disabled"
 	ActionGroupAlertChannelEnabled  AuditAction = "group.alert_channel_enabled"

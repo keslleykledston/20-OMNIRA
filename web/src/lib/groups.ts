@@ -26,6 +26,12 @@ export interface GroupLastMessage {
   preview: string
 }
 
+// A customer_account named just for display — used for a group's additional (non-primary) clients.
+export interface AccountRef {
+  id: string
+  name: string
+}
+
 export interface Group {
   id: string
   name: string
@@ -33,6 +39,9 @@ export interface Group {
   purpose: GroupPurpose
   account_id: string | null
   account_name: string | null
+  // Every OTHER client this group also concerns (ADR-0059 addendum 8 — e.g. a "swap"/peering group between
+  // two of the tenant's own clients). Never the primary above; always present, empty when there are none.
+  additional_accounts: AccountRef[]
   connection_id: string
   connection_account: string
   ai_observer_enabled: boolean
@@ -131,6 +140,14 @@ export const groupsAPI = {
       }),
     ),
   unlinkAccount: (id: string) => call<Group>(() => axios.delete(`${base()}/${id}/account`, { headers: authHeaders() })),
+  // ADR-0059 addendum 8: a group may ALSO concern other clients besides its one primary (account_id) —
+  // e.g. a "swap"/peering group between two of the tenant's own clients. These never touch account_id.
+  addAdditionalAccount: (id: string, ref: GroupAccountRef) =>
+    call<Group>(() =>
+      axios.post(`${base()}/${id}/accounts`, 'accountId' in ref ? { account_id: ref.accountId } : { directory_company_id: ref.directoryCompanyId }, { headers: authHeaders() }),
+    ),
+  removeAdditionalAccount: (id: string, accountId: string) =>
+    call<Group>(() => axios.delete(`${base()}/${id}/accounts/${accountId}`, { headers: authHeaders() })),
   // Explicit-tenant variants (Hub Organizer): same endpoints as above, called with the catalog entry's
   // OWN tenant instead of the browser's currently-selected one (getTenantId()) — the Hub Organizer shows
   // groups across whichever tenants delegated 'groups', never just the session's own. Deliberately plain

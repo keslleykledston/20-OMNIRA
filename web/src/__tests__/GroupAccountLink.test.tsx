@@ -20,6 +20,7 @@ const group = (over: Partial<Group> = {}): Group => ({
   purpose: 'other',
   account_id: null,
   account_name: null,
+  additional_accounts: [],
   connection_id: 'c-1',
   connection_account: '559200000000',
   ai_observer_enabled: false,
@@ -53,6 +54,7 @@ beforeEach(() => {
   directoryFails = false
   serveGet()
   vi.mocked(axios.put).mockResolvedValue({ data: group({ account_id: 'a-1', account_name: 'Conta Vinculada' }) })
+  vi.mocked(axios.post).mockResolvedValue({ data: group({ additional_accounts: [{ id: 'a-2', name: 'IP Fibra' }] }) })
   vi.mocked(axios.delete).mockResolvedValue({ data: group() })
 })
 
@@ -202,5 +204,58 @@ describe('GroupAccountLink — linking from local accounts and the CRM directory
     await user.click(screen.getByRole('button', { name: 'Vincular' }))
     await user.click(await screen.findByRole('button', { name: /ACME Telecom/ }))
     expect(await screen.findByText(/diretório de empresas do CRM não está disponível/)).toBeInTheDocument()
+  })
+})
+
+// ADR-0059 addendum 8: some groups genuinely concern more than one CRM client at once (e.g. a
+// "swap"/peering group between two of the tenant's own clients). additional_accounts is a separate list
+// from the one primary account_id above — never confused with it in the UI or the API call it makes.
+describe('GroupAccountLink — additional (non-primary) accounts', () => {
+  it('shows every additional account as its own badge, alongside (not instead of) the primary', () => {
+    setup({ account_id: 'a-1', account_name: 'InfoRR Consultoria', additional_accounts: [{ id: 'a-2', name: 'IP Fibra' }] })
+    expect(screen.getByText('InfoRR Consultoria')).toBeInTheDocument()
+    expect(screen.getByText('IP Fibra')).toBeInTheDocument()
+  })
+
+  it('hides "+ Adicionar outro cliente" and every Remover for someone without group.manage', () => {
+    setup({ additional_accounts: [{ id: 'a-2', name: 'IP Fibra' }] }, false)
+    expect(screen.queryByText('+ Adicionar outro cliente')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remover' })).not.toBeInTheDocument()
+  })
+
+  it('"+ Adicionar outro cliente" calls the additional-account endpoint, never the primary one', async () => {
+    directoryCompanies = [{ id: '42', name: 'IP Fibra' }]
+    const user = userEvent.setup()
+    setup({ account_id: 'a-1', account_name: 'InfoRR Consultoria' })
+    await user.click(screen.getByText('+ Adicionar outro cliente'))
+    await user.click(await screen.findByRole('button', { name: /IP Fibra/ }))
+    await waitFor(() => expect(axios.post).toHaveBeenCalled())
+    expect(vi.mocked(axios.post).mock.calls[0][0]).toMatch(/\/groups\/g-1\/accounts$/)
+    expect(vi.mocked(axios.post).mock.calls[0][1]).toEqual({ directory_company_id: '42' })
+    expect(axios.put).not.toHaveBeenCalled()
+  })
+
+  it('an account already linked (primary or additional) is never offered again in "Adicionar outro cliente"', async () => {
+    localAccounts = [
+      { id: 'a-1', name: 'InfoRR Consultoria', account_type: 'customer', status: 'active' },
+      { id: 'a-2', name: 'IP Fibra', account_type: 'customer', status: 'active' },
+      { id: 'a-3', name: 'SIDI', account_type: 'customer', status: 'active' },
+    ]
+    const user = userEvent.setup()
+    setup({ account_id: 'a-1', account_name: 'InfoRR Consultoria', additional_accounts: [{ id: 'a-2', name: 'IP Fibra' }] })
+    await user.click(screen.getByText('+ Adicionar outro cliente'))
+    const list = await screen.findByRole('listbox', { name: 'Empresas' })
+    expect(within(list).queryByRole('button', { name: /InfoRR Consultoria/ })).not.toBeInTheDocument()
+    expect(within(list).queryByRole('button', { name: /IP Fibra/ })).not.toBeInTheDocument()
+    expect(within(list).getByRole('button', { name: /SIDI/ })).toBeInTheDocument()
+  })
+
+  it('Remover on an additional account calls DELETE .../accounts/{id}, never touching the primary', async () => {
+    const user = userEvent.setup()
+    setup({ account_id: 'a-1', account_name: 'InfoRR Consultoria', additional_accounts: [{ id: 'a-2', name: 'IP Fibra' }] })
+    const row = screen.getByText('IP Fibra').closest('li')!
+    await user.click(within(row).getByRole('button', { name: 'Remover' }))
+    await waitFor(() => expect(axios.delete).toHaveBeenCalled())
+    expect(vi.mocked(axios.delete).mock.calls[0][0]).toMatch(/\/groups\/g-1\/accounts\/a-2$/)
   })
 })
