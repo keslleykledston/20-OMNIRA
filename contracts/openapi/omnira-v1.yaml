@@ -2729,6 +2729,29 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
+  /hubs/{hub_id}/groups/classification:
+    get:
+      operationId: listHubGroupClassification
+      tags: [Hub]
+      summary: Every group's tenant-side classification (purpose + linked CRM account), read only, in one call
+      description: >
+        wa_groups.purpose (migration 000176/000188) plus the linked customer_accounts row, if any
+        (migration 000177) — set on the tenant's own Groups page, never here (ADR-0059 addendum 5/6).
+        Bridges wa_groups'/customer_accounts' own RLS the same way listHubGroupDiscoveredGroups does
+        (SECURITY DEFINER, re-checking groups management access per catalog entry's own origin tenant).
+        A catalog entry whose wa_groups row cannot be matched yet (never opened once in the tenant's own
+        Groups page) is simply absent from the result, never an error.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Every classification this caller may see, across every catalog group of this hub
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/HubGroupRelationshipContext' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /hubs/{hub_id}/groups/catalog/{group_id}/links:
     get:
       operationId: listHubGroupLinks
@@ -6406,6 +6429,14 @@ components:
         version: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    HubGroupRelationshipContext:
+      type: object
+      required: [hub_group_id, purpose]
+      properties:
+        hub_group_id: { type: string, format: uuid }
+        purpose: { $ref: '#/components/schemas/GroupPurpose' }
+        account_id: { type: string, format: uuid, description: Absent when the group has no linked customer_accounts row }
+        account_display_name: { type: string, description: Absent under the same condition as account_id }
     HubGroupContextResolution:
       type: object
       required: [status]

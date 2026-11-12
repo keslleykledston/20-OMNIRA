@@ -70,12 +70,15 @@ function activeLinks(data: OrganizerData, entryId: string): GroupLink[] {
 interface Folder {
   key: string;
   name: string;
+  kind: 'classification' | 'account' | 'shared';
   shared?: { relationship: GroupRelationship };
   entries: GroupCatalogEntry[];
 }
 
+type GroupBy = 'classification' | 'account';
+
 // Pastas/Kanban agrupam por CLASSIFICAÇÃO (wa_groups.purpose, lida read-only do tenant — ver
-// EntryClassificationBadge) desde que o Tenant deixou de ser um eixo útil de agrupamento (achado do
+// EntryClassificationBadge) ou por CONTA DO CRM (wa_groups.account_id), nunca por Tenant (achado do
 // dono, 2026-11-12): quando todo grupo de um Hub já pertence ao mesmo único Tenant, uma pasta "por
 // Tenant" é sempre a mesma pasta vazia. O vínculo a Tenant (onLink/"Vincular a um Tenant") continua
 // existindo por grupo — só deixou de decidir em qual pasta o cartão aparece. 'other' (Outros) é sempre
@@ -84,13 +87,34 @@ interface Folder {
 // EntryClassificationBadge, "Sem classificação no CRM" — mesmo caso, badge separado).
 function buildClassificationFolders(data: OrganizerData): Folder[] {
   const byPurpose = new Map<GroupPurpose, Folder>(
-    GROUP_PURPOSE_OPTIONS.map((o) => [o.value, { key: o.value, name: o.label, entries: [] }]),
+    GROUP_PURPOSE_OPTIONS.map((o) => [o.value, { key: o.value, name: o.label, kind: 'classification' as const, entries: [] }]),
   );
   for (const entry of data.catalog) {
     const purpose = data.classificationByGroup[entry.id]?.purpose ?? 'other';
     byPurpose.get(purpose)!.entries.push(entry);
   }
   return [...byPurpose.values()];
+}
+
+const UNLINKED_ACCOUNT_KEY = '__unlinked__';
+
+// Uma pasta por Cliente do CRM (customer_accounts), nunca por nome sozinho: dois Tenants diferentes
+// poderiam coincidentemente ter uma conta com o mesmo nome, então a chave da pasta combina tenant +
+// account_id. Só leitura aqui — "colocar o grupo dentro" continua sendo vincular a conta na tela de
+// Grupos do próprio tenant (mesma decisão do Organizador não ganhar uma ponte de escrita nova).
+function buildAccountFolders(data: OrganizerData): Folder[] {
+  const byAccount = new Map<string, Folder>();
+  for (const entry of data.catalog) {
+    const c = data.classificationByGroup[entry.id];
+    const key = c?.account_id ? `${entry.source_tenant_id}::${c.account_id}` : UNLINKED_ACCOUNT_KEY;
+    const name = c?.account_id ? (c.account_display_name ?? '(conta sem nome)') : 'Sem conta vinculada no CRM';
+    if (!byAccount.has(key)) byAccount.set(key, { key, name, kind: 'account', entries: [] });
+    byAccount.get(key)!.entries.push(entry);
+  }
+  // A pasta "sem conta" sempre por último; as demais em ordem alfabética do nome do cliente.
+  return [...byAccount.values()].sort((a, b) =>
+    a.key === UNLINKED_ACCOUNT_KEY ? 1 : b.key === UNLINKED_ACCOUNT_KEY ? -1 : a.name.localeCompare(b.name),
+  );
 }
 
 function buildSharedFolders(data: OrganizerData): Folder[] {
@@ -104,7 +128,7 @@ function buildSharedFolders(data: OrganizerData): Folder[] {
         const tenantIds = new Set(activeLinks(data, entry.id).map((l) => l.tenant_id));
         return tenantIds.has(r.consumer_tenant_id) && tenantIds.has(r.supplier_tenant_id);
       });
-      return { key: r.id, name, shared: { relationship: r }, entries };
+      return { key: r.id, name, kind: 'shared' as const, shared: { relationship: r }, entries };
     });
 }
 
@@ -140,6 +164,7 @@ function HubGroupOrganizer({ hub, showHeading }: { hub: HubSummary; showHeading:
     if (isUnauthorized(data.error)) handleUnauthorized();
   }, [data.error]);
   const [view, setView] = useState<View>('list');
+  const [groupBy, setGroupBy] = useState<GroupBy>('classification');
   const [addOpen, setAddOpen] = useState(false);
   const [relOpen, setRelOpen] = useState(false);
   const [linkFor, setLinkFor] = useState<GroupCatalogEntry | null>(null);
@@ -155,7 +180,7 @@ function HubGroupOrganizer({ hub, showHeading }: { hub: HubSummary; showHeading:
   }
   const d = data.data;
   if (!d) return null;
-  const classificationFolders = buildClassificationFolders(d);
+  const groupFolders = groupBy === 'classification' ? buildClassificationFolders(d) : buildAccountFolders(d);
   const sharedFolders = buildSharedFolders(d);
   const tenantName = (id: string) => d.tenants.find((t) => t.id === id)?.name ?? id;
 
@@ -182,18 +207,21 @@ function HubGroupOrganizer({ hub, showHeading }: { hub: HubSummary; showHeading:
         onChange={setView}
         items={[
           { id: 'list', label: 'Lista', count: d.catalog.length },
-          { id: 'folders', label: 'Pastas', count: classificationFolders.filter((f) => f.entries.length > 0).length + sharedFolders.length },
+          { id: 'folders', label: 'Pastas', count: groupFolders.filter((f) => f.entries.length > 0).length + sharedFolders.length },
           { id: 'kanban', label: 'Kanban' },
         ]}
       />
+      {(view === 'folders' || view === 'kanban') && d.catalog.length > 0 && (
+        <GroupByToggle value={groupBy} onChange={setGroupBy} />
+      )}
       {d.catalog.length === 0 ? (
         <EmptyState title="Nenhum grupo no catálogo ainda" description="Adicione um grupo (dados de origem conhecidos) para começar a organizá-lo." />
       ) : view === 'list' ? (
         <ListView data={d} tenantName={tenantName} onLink={setLinkFor} linkActions={linkActions} />
       ) : view === 'folders' ? (
-        <FoldersView classificationFolders={classificationFolders} sharedFolders={sharedFolders} onLink={setLinkFor} linkActions={linkActions} data={d} onRevokeRelationship={setRevokeRel} />
+        <FoldersView groupFolders={groupFolders} sharedFolders={sharedFolders} onLink={setLinkFor} linkActions={linkActions} data={d} onRevokeRelationship={setRevokeRel} />
       ) : (
-        <KanbanView classificationFolders={classificationFolders} sharedFolders={sharedFolders} onLink={setLinkFor} linkActions={linkActions} data={d} />
+        <KanbanView groupFolders={groupFolders} sharedFolders={sharedFolders} onLink={setLinkFor} linkActions={linkActions} data={d} />
       )}
 
       <AddCatalogEntryModal hubId={hub.id} tenants={d.tenants} open={addOpen} onClose={() => setAddOpen(false)} onDone={() => { setAddOpen(false); invalidate(); }} />
@@ -314,23 +342,55 @@ function EntryCard({ entry, data, tenantName, linkActions, onLink }: {
   );
 }
 
-function FoldersView({ classificationFolders, sharedFolders, data, onLink, linkActions, onRevokeRelationship }: {
-  classificationFolders: Folder[]; sharedFolders: Folder[]; data: OrganizerData;
+// Alterna o eixo de agrupamento de Pastas/Kanban: Classificação (wa_groups.purpose) ou Cliente do CRM
+// (wa_groups.account_id) — nunca Tenant (sempre o mesmo, inútil como pasta quando um Hub só atende um).
+// Puramente client-side: troca qual builder (buildClassificationFolders/buildAccountFolders) decide as
+// pastas, nenhuma chamada nova ao servidor.
+function GroupByToggle({ value, onChange }: { value: GroupBy; onChange: (v: GroupBy) => void }) {
+  const options: { id: GroupBy; label: string }[] = [
+    { id: 'classification', label: 'Classificação' },
+    { id: 'account', label: 'Cliente do CRM' },
+  ];
+  return (
+    <div role="radiogroup" aria-label="Agrupar por" className="flex items-center gap-2 text-sm">
+      <span className="text-text-secondary">Agrupar por:</span>
+      <div className="flex gap-1 rounded-control border border-border-subtle p-0.5">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            role="radio"
+            aria-checked={value === o.id}
+            onClick={() => onChange(o.id)}
+            className={`rounded-control px-3 py-1 text-xs font-medium transition-colors ${
+              value === o.id ? 'bg-accent-primary-soft text-accent-primary' : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FolderHeading({ folder }: { folder: Folder }) {
+  if (folder.kind === 'classification') return <Badge variant={GROUP_PURPOSE_BADGE_VARIANT[folder.key as GroupPurpose]}>{folder.name}</Badge>;
+  return <h2 className="text-sm font-semibold text-text-primary">{folder.name}</h2>;
+}
+
+function FoldersView({ groupFolders, sharedFolders, data, onLink, linkActions, onRevokeRelationship }: {
+  groupFolders: Folder[]; sharedFolders: Folder[]; data: OrganizerData;
   onLink: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[]; onRevokeRelationship: (r: GroupRelationship) => void;
 }) {
   const tenantName = (id: string) => data.tenants.find((t) => t.id === id)?.name ?? id;
-  const folders = [
-    ...classificationFolders.filter((f) => f.entries.length > 0).map((f) => ({ ...f, isClassification: true })),
-    ...sharedFolders.map((f) => ({ ...f, isClassification: false })),
-  ];
+  const folders = [...groupFolders.filter((f) => f.entries.length > 0), ...sharedFolders];
   return (
     <div className="space-y-6">
       {folders.map((folder) => (
         <section key={folder.key} aria-label={`Pasta ${folder.name}`} className="space-y-2">
           <div className="flex items-center gap-2">
-            {folder.isClassification
-              ? <Badge variant={GROUP_PURPOSE_BADGE_VARIANT[folder.key as GroupPurpose]}>{folder.name}</Badge>
-              : <h2 className="text-sm font-semibold text-text-primary">{folder.name}</h2>}
+            <FolderHeading folder={folder} />
             <span className="text-xs text-text-tertiary">{folder.entries.length} grupo(s)</span>
             {folder.shared && (
               <Button variant="tertiary" size="sm" className="ml-auto" onClick={() => onRevokeRelationship(folder.shared!.relationship)}>Revogar relação comercial</Button>
@@ -347,18 +407,18 @@ function FoldersView({ classificationFolders, sharedFolders, data, onLink, linkA
 
 // Kanban SEM arrastar-e-soltar (D-12): colunas são só uma projeção de leitura das mesmas pastas; mover um cartão é
 // sempre pelo menu "Vincular…"/"Transferir…" de cada cartão, que chama a mesma rota HTTP da visão de Lista/Pastas.
-function KanbanView({ classificationFolders, sharedFolders, data, onLink, linkActions }: {
-  classificationFolders: Folder[]; sharedFolders: Folder[]; data: OrganizerData;
+function KanbanView({ groupFolders, sharedFolders, data, onLink, linkActions }: {
+  groupFolders: Folder[]; sharedFolders: Folder[]; data: OrganizerData;
   onLink: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[];
 }) {
   const tenantName = (id: string) => data.tenants.find((t) => t.id === id)?.name ?? id;
-  const columns: Folder[] = [...classificationFolders, ...sharedFolders];
+  const columns: Folder[] = [...groupFolders, ...sharedFolders];
   return (
     <div className="flex gap-4 overflow-x-auto pb-4" role="list" aria-label="Quadro de grupos por pasta">
       {columns.map((col) => (
         <div key={col.key} role="listitem" aria-label={`Coluna ${col.name}`} className="w-72 flex-shrink-0 space-y-2 rounded-card border border-border-subtle bg-surface-muted p-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-text-primary">{col.name}</h2>
+            <FolderHeading folder={col} />
             <span className="text-xs text-text-tertiary">{col.entries.length}</span>
           </div>
           <div className="space-y-2">

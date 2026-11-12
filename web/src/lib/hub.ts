@@ -526,6 +526,7 @@ export interface GroupCatalogEntry {
 export interface GroupRelationshipContext {
   hub_group_id: string
   purpose: GroupPurpose
+  account_id?: string
   account_display_name?: string
 }
 

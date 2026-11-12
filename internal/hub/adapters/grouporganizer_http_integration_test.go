@@ -201,8 +201,8 @@ func TestGroupOrganizerAPI_Classification_ReadsTenantPurposeAcrossOriginsAndFail
 	if !ok {
 		t.Fatalf("owner must see groupA's classification: %v", items)
 	}
-	if a["purpose"] != "client_support" || a["account_display_name"] != "InfoRR Consultoria" {
-		t.Fatalf("groupA classification: got %v, want purpose=client_support account=InfoRR Consultoria", a)
+	if a["purpose"] != "client_support" || a["account_display_name"] != "InfoRR Consultoria" || a["account_id"] != accountA.String() {
+		t.Fatalf("groupA classification: got %v, want purpose=client_support account=InfoRR Consultoria account_id=%s", a, accountA)
 	}
 	b, ok := byGroup[groupB.String()]
 	if !ok {
@@ -213,6 +213,9 @@ func TestGroupOrganizerAPI_Classification_ReadsTenantPurposeAcrossOriginsAndFail
 	}
 	if _, has := b["account_display_name"]; has && b["account_display_name"] != nil {
 		t.Fatalf("groupB has no linked account: got account_display_name=%v, want absent/null", b["account_display_name"])
+	}
+	if _, has := b["account_id"]; has && b["account_id"] != nil {
+		t.Fatalf("groupB has no linked account: got account_id=%v, want absent/null", b["account_id"])
 	}
 	if _, present := byGroup[groupCNoWaRow.String()]; present {
 		t.Fatalf("groupC has no matching wa_groups row yet: must be absent, not present: %v", items)

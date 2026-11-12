@@ -120,6 +120,18 @@ describe('HubGroupOrganizerPage', () => {
     expect(screen.queryByLabelText('Pasta ISP Roraima')).toBeNull();
   });
 
+  it('pastas: alternando "Agrupar por" para Cliente do CRM, agrupa por conta vinculada (wa_groups.account_id), nunca por nome sozinho', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, purpose: 'client_support', account_id: 'acc-1', account_display_name: 'InfoRR Consultoria' }];
+    renderAt(<HubGroupOrganizerPage />);
+    await userEvent.click(await screen.findByRole('tab', { name: /^Pastas/ }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Cliente do CRM' }));
+    const accountFolder = await screen.findByLabelText('Pasta InfoRR Consultoria');
+    expect(within(accountFolder).getByText('Clientes Alpha')).toBeInTheDocument();
+    const unlinkedFolder = screen.getByLabelText('Pasta Sem conta vinculada no CRM');
+    expect(within(unlinkedFolder).getByText('Suporte geral')).toBeInTheDocument();
+    expect(within(unlinkedFolder).getByText('Trânsito compartilhado')).toBeInTheDocument();
+  });
+
   it('pastas: deriva a pasta compartilhada SÓ da relação comercial + vínculos ativos dos dois lados, nunca manual', async () => {
     renderAt(<HubGroupOrganizerPage />);
     await userEvent.click(await screen.findByRole('tab', { name: /^Pastas/ }));
