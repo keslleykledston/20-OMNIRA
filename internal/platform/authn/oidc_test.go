@@ -162,15 +162,29 @@ func TestOIDCAuthorizationCodePKCEAndCookie(t *testing.T) {
 }
 
 func TestOIDCCallbackRejectsStateMismatchBeforeTokenExchange(t *testing.T) {
-	h := &OIDCHandler{secureCookie: true}
+	h := &OIDCHandler{secureCookie: true, postLoginURL: "/login?oidc=complete"}
 	req := httptest.NewRequest(http.MethodGet, "https://app.example/callback?code=x&state=attacker", strings.NewReader(""))
 	req.AddCookie(h.cookie(oidcStateCookie, "expected", 600))
 	req.AddCookie(h.cookie(oidcVerifierCookie, "verifier", 600))
 	req.AddCookie(h.cookie(oidcNonceCookie, "nonce", 600))
 	rec := httptest.NewRecorder()
 	h.Callback(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	// A friendly bounce to the login page (which shows the generic error, see Login.tsx), not a
+	// dead-end text page: a mismatch here is most often an expired flow (see oidc.go's
+	// failCallback), and the person needs a way back, not a wall of text.
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login?oidc=complete" {
+		t.Fatalf("status=%d location=%q body=%q", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
+	for _, name := range []string{oidcStateCookie, oidcVerifierCookie, oidcNonceCookie} {
+		found := false
+		for _, cookie := range rec.Result().Cookies() {
+			if cookie.Name == name && cookie.MaxAge < 0 {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected %s to be cleared on callback failure", name)
+		}
 	}
 }
 

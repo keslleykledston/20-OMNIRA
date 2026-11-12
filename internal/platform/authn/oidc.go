@@ -359,11 +359,16 @@ func (h *OIDCHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	challenge := sha256.Sum256([]byte(verifier))
-	for _, cookie := range []*http.Cookie{h.cookie(oidcStateCookie, state, 600), h.cookie(oidcVerifierCookie, verifier, 600), h.cookie(oidcNonceCookie, nonce, 600)} {
+	// 1800s (30min), não 600s: um login com MFA ou um usuário buscando a senha pode
+	// facilmente passar de 10 minutos na tela do IdP; visto em produção (2026-11-12)
+	// um callback chegar ~29min depois do /start com os três cookies já expirados,
+	// rejeitado com "invalid oidc callback" mesmo sendo um login legítimo.
+	const oidcFlowCookieTTL = 1800
+	for _, cookie := range []*http.Cookie{h.cookie(oidcStateCookie, state, oidcFlowCookieTTL), h.cookie(oidcVerifierCookie, verifier, oidcFlowCookieTTL), h.cookie(oidcNonceCookie, nonce, oidcFlowCookieTTL)} {
 		http.SetCookie(w, cookie)
 	}
 	if returnTo := sanitizeOIDCReturnTo(r.URL.Query().Get("return_to")); returnTo != "" {
-		http.SetCookie(w, h.cookie(oidcReturnToCookie, returnTo, 600))
+		http.SetCookie(w, h.cookie(oidcReturnToCookie, returnTo, oidcFlowCookieTTL))
 	}
 	params := url.Values{
 		"response_type": {"code"}, "client_id": {h.clientID}, "redirect_uri": {h.redirectURL},
@@ -373,6 +378,22 @@ func (h *OIDCHandler) Start(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, h.discovery.AuthorizationEndpoint+"?"+params.Encode(), http.StatusFound)
 }
 
+// failCallback loga a causa técnica (nunca exposta ao navegador) e manda o usuário de volta a
+// h.postLoginURL — o mesmo destino do login bem-sucedido (ex.: "/login?oidc=complete"), que o
+// frontend já trata: sem sessão válida nesse endereço, ele mostra a mensagem de erro genérica em
+// vez de insistir sozinho (ver Login.tsx, branch `returning=true`). Isso substitui um
+// http.Error cru, que deixava a pessoa numa página de texto sem qualquer saída — era o que
+// acontecia quando os cookies de state/verifier/nonce expiravam (visto em produção, 2026-11-12).
+func (h *OIDCHandler) failCallback(w http.ResponseWriter, r *http.Request, logMsg string) {
+	if logMsg != "" {
+		log.Printf("oidc callback: %s", logMsg)
+	}
+	for _, name := range []string{oidcStateCookie, oidcVerifierCookie, oidcNonceCookie, oidcReturnToCookie} {
+		http.SetCookie(w, h.cookie(name, "", -1))
+	}
+	http.Redirect(w, r, h.postLoginURL, http.StatusFound)
+}
+
 func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	stateCookie, stateErr := r.Cookie(oidcStateCookie)
 	verifierCookie, verifierErr := r.Cookie(oidcVerifierCookie)
@@ -380,20 +401,20 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	code := r.URL.Query().Get("code")
 	if stateErr != nil || verifierErr != nil || nonceErr != nil || code == "" || subtle.ConstantTimeCompare([]byte(state), []byte(stateCookie.Value)) != 1 {
-		http.Error(w, "invalid oidc callback", http.StatusBadRequest)
+		h.failCallback(w, r, "missing or mismatched state/verifier/nonce cookie (expired flow or replayed callback url)")
 		return
 	}
 	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {h.redirectURL},
 		"client_id": {h.clientID}, "client_secret": {h.clientSecret}, "code_verifier": {verifierCookie.Value}}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.discovery.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		http.Error(w, "authentication unavailable", http.StatusServiceUnavailable)
+		h.failCallback(w, r, fmt.Sprintf("building token request: %v", err))
 		return
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := h.auth.client.Do(req)
 	if err != nil {
-		http.Error(w, "identity provider unavailable", http.StatusBadGateway)
+		h.failCallback(w, r, fmt.Sprintf("token endpoint request failed: %v", err))
 		return
 	}
 	defer resp.Body.Close()
@@ -401,17 +422,17 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		IDToken string `json:"id_token"`
 	}
 	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokens) != nil || tokens.IDToken == "" {
-		http.Error(w, "identity provider rejected the callback", http.StatusBadGateway)
+		h.failCallback(w, r, fmt.Sprintf("token endpoint returned status %d or a malformed body", resp.StatusCode))
 		return
 	}
 	claims, expiry, err := h.auth.VerifyIDTokenWithClaims(r.Context(), tokens.IDToken, nonceCookie.Value)
 	if err != nil {
-		http.Error(w, "invalid identity token", http.StatusUnauthorized)
+		h.failCallback(w, r, fmt.Sprintf("id token verification failed: %v", err))
 		return
 	}
 	maxAge := int(time.Until(expiry).Seconds())
 	if maxAge <= 0 {
-		http.Error(w, "expired identity token", http.StatusUnauthorized)
+		h.failCallback(w, r, "id token already expired on arrival")
 		return
 	}
 	displayName := claims.Name
@@ -424,16 +445,14 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	userID, err := h.resolver.ProvisionIdentity(r.Context(), h.issuer, claims.Subject, claims.Email, displayName, claims.emailVerified())
 	if err != nil {
 		// the cause (constraint names, schema, infrastructure) goes to the log, never to the browser
-		log.Printf("oidc callback: identity provisioning failed: %v", err)
-		http.Error(w, "identity provisioning error", http.StatusInternalServerError)
+		h.failCallback(w, r, fmt.Sprintf("identity provisioning failed: %v", err))
 		return
 	}
 
 	// Create server-side session (opaque session ID, not ID Token)
 	sessionID, err := h.sessionStore.CreateSession(r.Context(), userID, "oidc", h.sessionTTL)
 	if err != nil {
-		log.Printf("oidc callback: session creation failed: %v", err)
-		http.Error(w, "session creation error", http.StatusInternalServerError)
+		h.failCallback(w, r, fmt.Sprintf("session creation failed: %v", err))
 		return
 	}
 
