@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -18,12 +19,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	auditports "github.com/omnira/omnira/internal/audit/ports"
 	channeldomain "github.com/omnira/omnira/internal/channels/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	ticketsports "github.com/omnira/omnira/internal/tickets/ports"
 )
 
 // Directory lists the groups of ONE of the tenant's WhatsApp connections, so an administrator can choose
@@ -70,9 +73,28 @@ type Handler struct {
 	audit auditports.AuditEventRepository
 	dir   Directory
 
+	// accounts is the SAME accountsadapters.PostgresRepository contacts/adapters.ClassificationHandler already uses
+	// (REUSE, not a second accounts client): find-or-create of the local account behind a CRM directory pick runs
+	// through its EnsureFromDirectoryPick.
+	accounts *accountsadapters.PostgresRepository
+	// resolver is the tenant-scoped ticketsports.TicketingRuntimeResolver (ADR-0059 addendum 3): lets an operator of
+	// a groups-only tenant (no contacts/tickets, so customer_accounts starts empty) search the tenant's own CRM
+	// directly from LinkAccount instead of only picking among already-registered local accounts. nil until
+	// WithCompanyDirectoryResolver is called (main.go wiring); a directory_company_id without it answers 503, same
+	// message as classification_http.go, never a panic.
+	resolver ticketsports.TicketingRuntimeResolver
+
 	mu    sync.Mutex
 	cache map[directoryCacheKey]directoryEntry
 	now   func() time.Time
+}
+
+// WithCompanyDirectoryResolver wires the SAME tenant-scoped runtime resolver ticketing/contact-classification use
+// (no second K3G credential/client). Same name/pattern as
+// internal/contacts/adapters.ClassificationHandler.SetCompanyDirectoryResolver.
+func (h *Handler) WithCompanyDirectoryResolver(r ticketsports.TicketingRuntimeResolver) *Handler {
+	h.resolver = r
+	return h
 }
 
 // directoryCacheKey separates the cache by WHICH connection was asked for: two WhatsApp instances of the
@@ -89,7 +111,7 @@ type directoryEntry struct {
 }
 
 func NewHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository, dir Directory) *Handler {
-	return &Handler{pool: pool, audit: audit, dir: dir, cache: map[directoryCacheKey]directoryEntry{}, now: time.Now}
+	return &Handler{pool: pool, audit: audit, dir: dir, accounts: accountsadapters.NewPostgresRepository(pool), cache: map[directoryCacheKey]directoryEntry{}, now: time.Now}
 }
 
 // ---- shapes
@@ -761,10 +783,55 @@ func (h *Handler) DeleteHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": tag.RowsAffected()})
 }
 
-// LinkAccount sets which "cliente final" (customer_accounts, ADR-0018) a group belongs to, reusing the
-// company registry that already exists instead of letting a group carry its own copy of the name. The
-// account must exist in the SAME tenant; a group may belong to at most one account at a time (linking again
-// replaces the previous one). Idempotent: linking the account already set changes nothing and is not re-audited.
+// resolveDirectoryAccount finds-or-creates the local account for a company picked straight from the tenant's own
+// CRM directory (ADR-0059 addendum 3): a groups-only tenant (customer_accounts starts empty — no contacts/tickets
+// ever created one) can link a group to a REAL CRM company without first registering a local account by hand. The
+// directory id is revalidated against the tenant's own CompanyDirectory here — a name, CNPJ or status sent by the
+// browser is never trusted — exactly like contact classification
+// (internal/contacts/adapters.ClassificationHandler.resolveRef), and the same statuses/messages are used for
+// consistency. A status of 0 means success.
+func (h *Handler) resolveDirectoryAccount(ctx context.Context, tenantID uuid.UUID, dirID string) (accountID uuid.UUID, status int, message string) {
+	if h.resolver == nil {
+		return uuid.Nil, http.StatusServiceUnavailable, "company directory is not configured"
+	}
+	rt, err := h.resolver.Resolve(ctx, tenantID)
+	if err != nil {
+		var resErr *ticketsports.ResolutionError
+		if errors.As(err, &resErr) {
+			return uuid.Nil, http.StatusServiceUnavailable, "company directory is not available"
+		}
+		log.Printf("groups: resolve company directory: %v", err)
+		return uuid.Nil, http.StatusInternalServerError, "internal error"
+	}
+	companies, err := rt.CompanyDirectory.ListCompanies(ctx)
+	if err != nil {
+		log.Printf("groups: list companies: %v", err)
+		return uuid.Nil, http.StatusBadGateway, "company directory failed"
+	}
+	var picked *ticketsports.Company
+	for i := range companies {
+		if companies[i].ExternalID == dirID {
+			picked = &companies[i]
+			break
+		}
+	}
+	if picked == nil || !picked.Active {
+		return uuid.Nil, http.StatusUnprocessableEntity, "company not found or inactive in the directory"
+	}
+	id, err := h.accounts.EnsureFromDirectoryPick(ctx, tenantID, rt.ConnectionID, picked.ExternalID, picked.Name)
+	if err != nil {
+		log.Printf("groups: ensure account from directory pick: %v", err)
+		return uuid.Nil, http.StatusInternalServerError, "failed to save account"
+	}
+	return id, 0, ""
+}
+
+// LinkAccount sets which "cliente final" (customer_accounts, ADR-0018) a group belongs to. The request names the
+// account EITHER by a local `account_id` (must exist in the SAME tenant) OR by a `directory_company_id` straight
+// from the tenant's own CRM directory (ADR-0059 addendum 3, resolveDirectoryAccount above) — mutually exclusive,
+// same shape as contacts/adapters.accountRefDTO. A group may belong to at most one account at a time (linking
+// again replaces the previous one). Idempotent: linking the account already set changes nothing and is not
+// re-audited.
 func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 	tc, ok := h.session(w, r, permManage)
 	if !ok {
@@ -775,20 +842,34 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		AccountID *string `json:"account_id"`
+		AccountID          *string `json:"account_id"`
+		DirectoryCompanyID *string `json:"directory_company_id"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	accountID, err := func() (uuid.UUID, error) {
-		if err := dec.Decode(&req); err != nil || req.AccountID == nil {
-			return uuid.Nil, errors.New("account_id is required")
-		}
-		return uuid.Parse(*req.AccountID)
-	}()
-	if err != nil {
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	dirID := ""
+	if req.DirectoryCompanyID != nil {
+		dirID = strings.TrimSpace(*req.DirectoryCompanyID)
+	}
+	if (req.AccountID != nil) == (dirID != "") {
+		// neither or both: exactly one of account_id/directory_company_id is required.
 		http.Error(w, "account_id must be a valid id", http.StatusBadRequest)
 		return
 	}
+	var localAccountID uuid.UUID
+	if req.AccountID != nil {
+		var err error
+		localAccountID, err = uuid.Parse(*req.AccountID)
+		if err != nil {
+			http.Error(w, "account_id must be a valid id", http.StatusBadRequest)
+			return
+		}
+	}
+
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
 	var prev *uuid.UUID
 	if err := q.QueryRow(r.Context(), `SELECT account_id FROM wa_groups WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, id).Scan(&prev); err != nil {
@@ -799,15 +880,28 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read group", http.StatusInternalServerError)
 		return
 	}
-	var accountExists bool
-	if err := q.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM customer_accounts WHERE tenant_id = $1 AND id = $2)`, tc.TenantID, accountID).Scan(&accountExists); err != nil {
-		http.Error(w, "failed to read account", http.StatusInternalServerError)
-		return
+
+	accountID := localAccountID
+	viaDirectory := dirID != ""
+	if viaDirectory {
+		resolved, status, msg := h.resolveDirectoryAccount(r.Context(), tc.TenantID, dirID)
+		if msg != "" {
+			http.Error(w, msg, status)
+			return
+		}
+		accountID = resolved
+	} else {
+		var accountExists bool
+		if err := q.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM customer_accounts WHERE tenant_id = $1 AND id = $2)`, tc.TenantID, accountID).Scan(&accountExists); err != nil {
+			http.Error(w, "failed to read account", http.StatusInternalServerError)
+			return
+		}
+		if !accountExists {
+			http.Error(w, "account not found", http.StatusNotFound)
+			return
+		}
 	}
-	if !accountExists {
-		http.Error(w, "account not found", http.StatusNotFound)
-		return
-	}
+
 	if prev == nil || *prev != accountID {
 		linkErr := attempt(r.Context(), q, func() error {
 			_, err := q.Exec(r.Context(), `
@@ -825,7 +919,11 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to save group", http.StatusInternalServerError)
 			return
 		}
-		h.record(r, tc, id, auditdomain.ActionGroupAccountLinked, map[string]any{"account_id": accountID})
+		meta := map[string]any{"account_id": accountID}
+		if viaDirectory {
+			meta["via"] = "crm_directory"
+		}
+		h.record(r, tc, id, auditdomain.ActionGroupAccountLinked, meta)
 	}
 	it, err := scanGroup(q.QueryRow(r.Context(), groupSelect+` WHERE g.tenant_id = $1 AND g.id = $2`, tc.TenantID, id))
 	if err != nil {

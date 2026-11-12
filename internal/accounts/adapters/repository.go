@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -210,6 +211,39 @@ func (r *PostgresRepository) SetLinkStatus(ctx context.Context, tenantID, linkID
 		return domain.ErrAccountNotFound
 	}
 	return nil
+}
+
+// EnsureFromDirectoryPick is find-or-create for the LOCAL account of a company already picked from the tenant's own
+// CompanyDirectory and revalidated by the caller (ExternalID/Name known good, Active checked). It is the non-delegated
+// counterpart of MaterializeDelegatedCompanyAccount below: a direct member (not a Hub agent) has ordinary INSERT on
+// customer_accounts/account_external_links, so this runs the same find-or-create + upsert-link sequence directly,
+// inside the caller's own transaction/savepoint. Repeating the same (tenantID, connectionID, externalCompanyID) always
+// returns the SAME account id (idempotent, never a duplicate). Shared by contact classification (ADR-0018,
+// internal/contacts/adapters.ClassificationHandler.resolveRef) and group-account linking from the CRM directory
+// (ADR-0059 addendum 3) — REUSE, not two copies of find-or-create.
+func (r *PostgresRepository) EnsureFromDirectoryPick(ctx context.Context, tenantID, connectionID uuid.UUID, externalCompanyID, name string) (uuid.UUID, error) {
+	existing, err := r.FindByExternal(ctx, tenantID, domain.ProviderK3G, connectionID, externalCompanyID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	accountID := uuid.Nil
+	if existing != nil {
+		accountID = existing.AccountID
+	} else {
+		acc, err := r.CreateAccount(ctx, tenantID, name, domain.TypeCustomer)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		accountID = acc.ID
+	}
+	now := time.Now().UTC()
+	if _, err := r.UpsertExternalLink(ctx, domain.ExternalLink{
+		TenantID: tenantID, AccountID: accountID, Provider: domain.ProviderK3G, ConnectionID: connectionID,
+		ExternalCompanyID: externalCompanyID, ExternalNameSnapshot: &name, Source: domain.SourceDirectorySelection, VerifiedAt: &now,
+	}); err != nil {
+		return uuid.Nil, err
+	}
+	return accountID, nil
 }
 
 // MaterializeDelegatedCompanyAccount is find-or-create-and-activate for the account of a provider company, for a Hub agent attending the instance

@@ -288,26 +288,11 @@ func (h *ClassificationHandler) resolveRef(ctx context.Context, tc *tenancydomai
 		in.AccountID = id
 		return in, nil
 	}
-	existing, err := h.accounts.FindByExternal(ctx, tc.TenantID, directoryProvider, rt.ConnectionID, picked.ExternalID)
+	// find-or-create the local account for this directory pick, and keep its external link in sync — shared with
+	// group-account linking (internal/groups/adapters.Handler.LinkAccount, ADR-0059 addendum 3) via
+	// accountsadapters.PostgresRepository.EnsureFromDirectoryPick, so a repeated pick never creates a second account.
+	accountID, err := h.accounts.EnsureFromDirectoryPick(ctx, tc.TenantID, rt.ConnectionID, picked.ExternalID, picked.Name)
 	if err != nil {
-		return in, err
-	}
-	now := time.Now().UTC()
-	accountID := uuid.Nil
-	if existing != nil {
-		accountID = existing.AccountID
-	} else {
-		acc, err := h.accounts.CreateAccount(ctx, tc.TenantID, picked.Name, accountsdomain.TypeCustomer)
-		if err != nil {
-			return in, err
-		}
-		accountID = acc.ID
-	}
-	name := picked.Name
-	if _, err := h.accounts.UpsertExternalLink(ctx, accountsdomain.ExternalLink{
-		TenantID: tc.TenantID, AccountID: accountID, Provider: directoryProvider, ConnectionID: rt.ConnectionID,
-		ExternalCompanyID: picked.ExternalID, ExternalNameSnapshot: &name, Source: accountsdomain.SourceDirectorySelection, VerifiedAt: &now,
-	}); err != nil {
 		return in, err
 	}
 	in.AccountID = accountID

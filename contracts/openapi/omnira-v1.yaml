@@ -799,11 +799,17 @@ paths:
       tags: [Groups]
       summary: Link a group to the "cliente final" it belongs to
       description: |
-        Requires `group.manage`. Reuses the existing company registry (`customer_accounts`, ADR-0018) instead of a
-        second company catalog; the account must exist in the SAME tenant. A group belongs to at most one account at
-        a time — linking again replaces the previous one. Idempotent; audited as `group.account_linked` only when
-        the link actually changes. A group of another tenant and an unknown id are indistinguishable (`404`), and so
-        are an unknown account id and a real account id from another tenant.
+        Requires `group.manage`. The account is named EITHER by a local `account_id` (`customer_accounts`,
+        ADR-0018; must exist in the SAME tenant) OR by a `directory_company_id` — a company read straight from the
+        tenant's own CRM directory (`GET /crm/companies`, ADR-0059 addendum 3), for a groups-only tenant whose
+        `customer_accounts` starts empty (no contacts/tickets ever created one). Exactly one of the two is required
+        (same shape as `AccountRef`). A directory pick is revalidated against the directory here (name, CNPJ and
+        status sent by the browser are never trusted) and materialized as account + provider link
+        (`source=directory_selection`); repeating the same `directory_company_id` reuses the SAME account, never a
+        duplicate. A group belongs to at most one account at a time — linking again replaces the previous one.
+        Idempotent; audited as `group.account_linked` (with `via: crm_directory` when a directory pick resolved the
+        account) only when the link actually changes. A group of another tenant and an unknown id are
+        indistinguishable (`404`), and so are an unknown account id and a real account id from another tenant.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/GroupId' }
@@ -813,16 +819,20 @@ paths:
           application/json:
             schema:
               type: object
-              required: [account_id]
               additionalProperties: false
+              description: 'Exactly one of account_id or directory_company_id.'
               properties:
                 account_id: { type: string, format: uuid }
+                directory_company_id: { type: string }
       responses:
         '200': { description: The group, content: { application/json: { schema: { $ref: '#/components/schemas/GroupItem' } } } }
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'directory_company_id unknown or inactive in the directory', content: { text/plain: { schema: { type: string } } } }
+        '502': { description: Company directory failed, content: { text/plain: { schema: { type: string } } } }
+        '503': { description: Company directory not configured or unavailable, content: { text/plain: { schema: { type: string } } } }
     delete:
       operationId: unlinkGroupAccount
       tags: [Groups]

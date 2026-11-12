@@ -76,6 +76,10 @@ export interface GroupMessagePage {
   next_cursor?: string
 }
 
+// Either a local customer_accounts id, or a company picked straight from the tenant's own CRM directory
+// (ADR-0059 addendum 3) — mutually exclusive, same shape the backend's accountRefDTO-style XOR expects.
+export type GroupAccountRef = { accountId: string } | { directoryCompanyId: string }
+
 const base = () => `${API_BASE}/tenants/${getTenantId()}/groups`
 
 async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
@@ -108,8 +112,15 @@ export const groupsAPI = {
     call<Group>(() => axios.patch(`${base()}/${id}`, { ai_observer_enabled: aiObserverEnabled }, { headers: authHeaders() })),
   setAlertChannel: (id: string, isAlertChannel: boolean) =>
     call<Group>(() => axios.patch(`${base()}/${id}`, { is_alert_channel: isAlertChannel }, { headers: authHeaders() })),
-  linkAccount: (id: string, accountId: string) =>
-    call<Group>(() => axios.put(`${base()}/${id}/account`, { account_id: accountId }, { headers: authHeaders() })),
+  // ADR-0059 addendum 3: the account is named EITHER by a local account id (already registered in this tenant) OR
+  // by a directory_company_id (a company read straight from the tenant's own CRM directory, GET /crm/companies) —
+  // for a groups-only tenant whose customer_accounts starts empty, so there is nothing local to search yet.
+  linkAccount: (id: string, ref: GroupAccountRef) =>
+    call<Group>(() =>
+      axios.put(`${base()}/${id}/account`, 'accountId' in ref ? { account_id: ref.accountId } : { directory_company_id: ref.directoryCompanyId }, {
+        headers: authHeaders(),
+      }),
+    ),
   unlinkAccount: (id: string) => call<Group>(() => axios.delete(`${base()}/${id}/account`, { headers: authHeaders() })),
   messages: (id: string, cursor?: string, limit = 100) =>
     call<GroupMessagePage>(() =>
@@ -134,8 +145,18 @@ export function groupErrorMessage(err: unknown): string {
         return 'Um grupo de cliente não pode ser o canal de alerta (e vice-versa).'
       return 'Não há uma conexão ativa do WhatsApp para listar os grupos.'
     }
-    case 502:
+    case 422: {
+      const body = typeof response.data === 'string' ? response.data : ''
+      if (body.includes('directory')) return 'Essa empresa não foi encontrada ou está inativa no CRM.'
+      return 'Não foi possível concluir: dados inválidos.'
+    }
+    case 502: {
+      const body = typeof response.data === 'string' ? response.data : ''
+      if (body.includes('directory')) return 'O CRM não respondeu. Tente de novo em instantes.'
       return 'O WhatsApp não respondeu. Tente de novo em instantes.'
+    }
+    case 503:
+      return 'O diretório de empresas do CRM não está disponível agora.'
     default:
       return 'Não foi possível concluir. Tente novamente.'
   }

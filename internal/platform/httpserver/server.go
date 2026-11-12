@@ -970,7 +970,10 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	// client. Moved under /tenants/{tenant_id}/ so tenantSession
 	// authorizes the path tenant against the caller's membership before
 	// the handler ever resolves a K3G credential.
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/crm/companies", tenancyadapters.DelegableAny(authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.ListCompanies))), "ticket.create", "contact.classify"))
+	// ADR-0059 addendum 3: "group.manage" added so an operator of a groups-only tenant (no ticket.create nor
+	// contact.classify — e.g. K3G_Grupos) can also read it, to link a group straight to a CRM company. Read-only
+	// (names/CNPJ of this tenant's own active companies; the handler never writes), so this never weakens anything.
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/crm/companies", tenancyadapters.DelegableAny(authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.ListCompanies))), "ticket.create", "contact.classify", "group.manage"))
 
 	// PRODUCT.7C1: AI conversation summary. generator is nil whenever AI is
 	// disabled or incompletely configured (config.Config.AIReady()) — the

@@ -399,7 +399,8 @@ func main() {
 	} else {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}
-	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
+	groupsHandler := groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory)
+	srv.RegisterGroupHandlers(dbPool, groupsHandler)
 	srv.RegisterSLAAlertFeatureFlagHandlers(dbPool, groupsadapters.NewSLAAlertFeatureFlagHandler(dbPool))
 	if cfg.ServiceContextEnabled {
 		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
@@ -480,6 +481,9 @@ func main() {
 		if ch := srv.ContactClassification(); ch != nil {
 			ch.SetCompanyDirectoryResolver(companyResolver)
 		}
+		// ADR-0059 addendum 3: linking a group straight to a CRM company (groups-only tenants, customer_accounts
+		// starts empty) validates against the SAME directory, no second K3G credential/client.
+		groupsHandler.WithCompanyDirectoryResolver(companyResolver)
 		// PRODUCT.7B1B: CreateActivity's authorization ("assignee or
 		// conversation.manage") and canonical crm_contact_id lookup — reusing
 		// the SAME permissions checker already constructed above for
