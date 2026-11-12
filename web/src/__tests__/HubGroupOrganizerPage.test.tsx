@@ -110,6 +110,16 @@ describe('HubGroupOrganizerPage', () => {
     expect(calls.filter((u) => u.endsWith('/groups/classification')).length).toBe(1);
   });
 
+  it('pastas: agrupa por classificação (Cliente/Parceiro/Fornecedor/Interno), nunca por Tenant', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, purpose: 'client_support', account_display_name: 'InfoRR Consultoria' }];
+    renderAt(<HubGroupOrganizerPage />);
+    await userEvent.click(await screen.findByRole('tab', { name: /^Pastas/ }));
+    const folder = screen.getByLabelText('Pasta Cliente · Atendimento');
+    expect(within(folder).getByText('Clientes Alpha')).toBeInTheDocument();
+    expect(within(folder).queryByText('Suporte geral')).toBeNull();
+    expect(screen.queryByLabelText('Pasta ISP Roraima')).toBeNull();
+  });
+
   it('pastas: deriva a pasta compartilhada SÓ da relação comercial + vínculos ativos dos dois lados, nunca manual', async () => {
     renderAt(<HubGroupOrganizerPage />);
     await userEvent.click(await screen.findByRole('tab', { name: /^Pastas/ }));
@@ -120,12 +130,16 @@ describe('HubGroupOrganizerPage', () => {
     expect(within(shared).queryByText('Clientes Alpha')).toBeNull();
   });
 
-  it('kanban sem drag-and-drop: mover é só pelo menu "Vincular…", nunca um gesto de arrastar', async () => {
+  it('kanban agrupa por classificação (Cliente/Parceiro/Fornecedor/Interno), não por Tenant; sem drag-and-drop, mover é só pelo menu "Vincular…"', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, purpose: 'client_support', account_display_name: 'InfoRR Consultoria' }];
     renderAt(<HubGroupOrganizerPage />);
     await userEvent.click(await screen.findByRole('tab', { name: 'Kanban' }));
     const board = await screen.findByRole('list', { name: 'Quadro de grupos por pasta' });
-    expect(within(board).getByLabelText('Coluna Sem classificação')).toBeInTheDocument();
-    expect(within(board).getByLabelText('Coluna ISP Roraima')).toBeInTheDocument();
+    const alphaCol = within(board).getByLabelText('Coluna Cliente · Atendimento');
+    expect(within(alphaCol).getByText('Clientes Alpha')).toBeInTheDocument();
+    const otherCol = within(board).getByLabelText('Coluna Outros');
+    expect(within(otherCol).getByText('Suporte geral')).toBeInTheDocument();
+    expect(within(board).queryByLabelText('Coluna ISP Roraima')).toBeNull();
     // nenhum elemento é arrastável (draggable), em nenhuma visão
     expect(document.querySelectorAll('[draggable="true"]').length).toBe(0);
   });
