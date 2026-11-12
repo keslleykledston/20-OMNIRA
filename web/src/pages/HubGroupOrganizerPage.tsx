@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   GROUP_LINK_ROLE_LABEL,
@@ -13,10 +13,11 @@ import {
   type HubSummary,
 } from '../lib/hub';
 import { GROUP_PURPOSE_BADGE_VARIANT, GROUP_PURPOSE_LABEL, GROUP_PURPOSE_OPTIONS } from '../lib/groupModel';
-import type { GroupPurpose } from '../lib/groups';
+import { groupErrorMessage, groupsAPI, type GroupAccountRef, type GroupPurpose } from '../lib/groups';
 import { handleUnauthorized, isUnauthorized } from '../lib/session';
 import { Badge, Button, ConfirmDialog, DropdownMenu, EmptyState, ErrorState, LoadingState, Modal, PageHeader, StatusBadge, Tabs, TenantBadge, type MenuAction } from '../components/primitives';
 import { useMyHubs } from '../hooks/useMyHubs';
+import { useDebounced } from '../hooks/useDebounced';
 
 // Organizador de grupos (ADR-0059, Gate 3): pastas virtuais por Tenant, Kanban e lista para os metadados de grupo já
 // catalogados pelo Hub (Gate 2). Isto NUNCA lê mensagens, nunca gerencia membros e nunca envia nada a um grupo —
@@ -168,6 +169,7 @@ function HubGroupOrganizer({ hub, showHeading }: { hub: HubSummary; showHeading:
   const [addOpen, setAddOpen] = useState(false);
   const [relOpen, setRelOpen] = useState(false);
   const [linkFor, setLinkFor] = useState<GroupCatalogEntry | null>(null);
+  const [accountFor, setAccountFor] = useState<GroupCatalogEntry | null>(null);
   const [transfer, setTransfer] = useState<{ entry: GroupCatalogEntry; link: GroupLink } | null>(null);
   const [revoke, setRevoke] = useState<{ entry: GroupCatalogEntry; link: GroupLink } | null>(null);
   const [revokeRel, setRevokeRel] = useState<GroupRelationship | null>(null);
@@ -217,11 +219,11 @@ function HubGroupOrganizer({ hub, showHeading }: { hub: HubSummary; showHeading:
       {d.catalog.length === 0 ? (
         <EmptyState title="Nenhum grupo no catálogo ainda" description="Adicione um grupo (dados de origem conhecidos) para começar a organizá-lo." />
       ) : view === 'list' ? (
-        <ListView data={d} tenantName={tenantName} onLink={setLinkFor} linkActions={linkActions} />
+        <ListView data={d} tenantName={tenantName} onLink={setLinkFor} onLinkAccount={setAccountFor} linkActions={linkActions} />
       ) : view === 'folders' ? (
-        <FoldersView groupFolders={groupFolders} sharedFolders={sharedFolders} onLink={setLinkFor} linkActions={linkActions} data={d} onRevokeRelationship={setRevokeRel} />
+        <FoldersView groupFolders={groupFolders} sharedFolders={sharedFolders} onLink={setLinkFor} onLinkAccount={setAccountFor} linkActions={linkActions} data={d} onRevokeRelationship={setRevokeRel} />
       ) : (
-        <KanbanView groupFolders={groupFolders} sharedFolders={sharedFolders} onLink={setLinkFor} linkActions={linkActions} data={d} />
+        <KanbanView groupFolders={groupFolders} sharedFolders={sharedFolders} onLink={setLinkFor} onLinkAccount={setAccountFor} linkActions={linkActions} data={d} />
       )}
 
       <AddCatalogEntryModal hubId={hub.id} tenants={d.tenants} open={addOpen} onClose={() => setAddOpen(false)} onDone={() => { setAddOpen(false); invalidate(); }} />
@@ -234,6 +236,16 @@ function HubGroupOrganizer({ hub, showHeading }: { hub: HubSummary; showHeading:
           open
           onClose={() => setLinkFor(null)}
           onDone={() => { setLinkFor(null); invalidate(); }}
+        />
+      )}
+      {accountFor && (
+        <LinkCRMAccountModal
+          entry={accountFor}
+          waGroupId={d.classificationByGroup[accountFor.id]?.wa_group_id ?? null}
+          currentAccountName={d.classificationByGroup[accountFor.id]?.account_display_name}
+          open
+          onClose={() => setAccountFor(null)}
+          onDone={() => { setAccountFor(null); invalidate(); }}
         />
       )}
       {transfer && (
@@ -288,8 +300,27 @@ function EntryClassificationBadge({ entry, data }: { entry: GroupCatalogEntry; d
   );
 }
 
-function ListView({ data, tenantName, onLink, linkActions }: {
-  data: OrganizerData; tenantName: (id: string) => string; onLink: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[];
+// Abre o LinkCRMAccountModal — a AÇÃO de verdade (chama o PUT .../groups/{id}/account já existente do
+// tenant, ver groups.ts's linkAccountFor). Só fica ativo quando wa_group_id está presente: o catálogo
+// autodescobre o grupo antes de ele ter sido aberto alguma vez na tela de Grupos do tenant, e sem isso não
+// há wa_groups.id para endereçar (ver EntryClassificationBadge, mesma condição).
+function LinkAccountButton({ entry, data, onLinkAccount, size = 'sm' }: {
+  entry: GroupCatalogEntry; data: OrganizerData; onLinkAccount: (e: GroupCatalogEntry) => void; size?: 'sm';
+}) {
+  const c = data.classificationByGroup[entry.id];
+  const label = c?.account_display_name ? 'Alterar cliente' : 'Vincular cliente';
+  if (!c) {
+    return (
+      <Button variant="tertiary" size={size} disabled title="Abra este grupo pelo menos uma vez na tela de Grupos do tenant antes de vincular um cliente aqui.">
+        {label}
+      </Button>
+    );
+  }
+  return <Button variant="tertiary" size={size} onClick={() => onLinkAccount(entry)}>{label}</Button>;
+}
+
+function ListView({ data, tenantName, onLink, onLinkAccount, linkActions }: {
+  data: OrganizerData; tenantName: (id: string) => string; onLink: (e: GroupCatalogEntry) => void; onLinkAccount: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[];
 }) {
   return (
     <table className="w-full border-collapse text-sm">
@@ -315,7 +346,10 @@ function ListView({ data, tenantName, onLink, linkActions }: {
             <td className="py-3 pr-3"><EntryClassificationBadge entry={entry} data={data} /></td>
             <td className="py-3 pr-3"><EntryLinkBadges entry={entry} data={data} tenantName={tenantName} linkActions={linkActions} /></td>
             <td className="py-3 pr-3 text-right">
-              <Button variant="secondary" size="sm" onClick={() => onLink(entry)}>Vincular a um Tenant</Button>
+              <div className="flex justify-end gap-2">
+                <LinkAccountButton entry={entry} data={data} onLinkAccount={onLinkAccount} />
+                <Button variant="secondary" size="sm" onClick={() => onLink(entry)}>Vincular a um Tenant</Button>
+              </div>
             </td>
           </tr>
         ))}
@@ -324,8 +358,8 @@ function ListView({ data, tenantName, onLink, linkActions }: {
   );
 }
 
-function EntryCard({ entry, data, tenantName, linkActions, onLink }: {
-  entry: GroupCatalogEntry; data: OrganizerData; tenantName: (id: string) => string; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[]; onLink: (e: GroupCatalogEntry) => void;
+function EntryCard({ entry, data, tenantName, linkActions, onLink, onLinkAccount }: {
+  entry: GroupCatalogEntry; data: OrganizerData; tenantName: (id: string) => string; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[]; onLink: (e: GroupCatalogEntry) => void; onLinkAccount: (e: GroupCatalogEntry) => void;
 }) {
   return (
     <div className="space-y-2 rounded-card border border-border-subtle bg-surface p-3">
@@ -334,7 +368,10 @@ function EntryCard({ entry, data, tenantName, linkActions, onLink }: {
           <div className="font-medium text-text-primary">{entry.display_name || '(sem nome)'}</div>
           <div className="text-xs text-text-tertiary">{entry.provider_group_id}</div>
         </div>
-        <Button variant="tertiary" size="sm" onClick={() => onLink(entry)}>Vincular…</Button>
+        <div className="flex flex-shrink-0 gap-1">
+          <LinkAccountButton entry={entry} data={data} onLinkAccount={onLinkAccount} />
+          <Button variant="tertiary" size="sm" onClick={() => onLink(entry)}>Vincular…</Button>
+        </div>
       </div>
       <EntryClassificationBadge entry={entry} data={data} />
       <EntryLinkBadges entry={entry} data={data} tenantName={tenantName} linkActions={linkActions} />
@@ -379,9 +416,9 @@ function FolderHeading({ folder }: { folder: Folder }) {
   return <h2 className="text-sm font-semibold text-text-primary">{folder.name}</h2>;
 }
 
-function FoldersView({ groupFolders, sharedFolders, data, onLink, linkActions, onRevokeRelationship }: {
+function FoldersView({ groupFolders, sharedFolders, data, onLink, onLinkAccount, linkActions, onRevokeRelationship }: {
   groupFolders: Folder[]; sharedFolders: Folder[]; data: OrganizerData;
-  onLink: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[]; onRevokeRelationship: (r: GroupRelationship) => void;
+  onLink: (e: GroupCatalogEntry) => void; onLinkAccount: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[]; onRevokeRelationship: (r: GroupRelationship) => void;
 }) {
   const tenantName = (id: string) => data.tenants.find((t) => t.id === id)?.name ?? id;
   const folders = [...groupFolders.filter((f) => f.entries.length > 0), ...sharedFolders];
@@ -397,7 +434,7 @@ function FoldersView({ groupFolders, sharedFolders, data, onLink, linkActions, o
             )}
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {folder.entries.map((entry) => <EntryCard key={entry.id} entry={entry} data={data} tenantName={tenantName} linkActions={linkActions} onLink={onLink} />)}
+            {folder.entries.map((entry) => <EntryCard key={entry.id} entry={entry} data={data} tenantName={tenantName} linkActions={linkActions} onLink={onLink} onLinkAccount={onLinkAccount} />)}
           </div>
         </section>
       ))}
@@ -407,9 +444,9 @@ function FoldersView({ groupFolders, sharedFolders, data, onLink, linkActions, o
 
 // Kanban SEM arrastar-e-soltar (D-12): colunas são só uma projeção de leitura das mesmas pastas; mover um cartão é
 // sempre pelo menu "Vincular…"/"Transferir…" de cada cartão, que chama a mesma rota HTTP da visão de Lista/Pastas.
-function KanbanView({ groupFolders, sharedFolders, data, onLink, linkActions }: {
+function KanbanView({ groupFolders, sharedFolders, data, onLink, onLinkAccount, linkActions }: {
   groupFolders: Folder[]; sharedFolders: Folder[]; data: OrganizerData;
-  onLink: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[];
+  onLink: (e: GroupCatalogEntry) => void; onLinkAccount: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[];
 }) {
   const tenantName = (id: string) => data.tenants.find((t) => t.id === id)?.name ?? id;
   const columns: Folder[] = [...groupFolders, ...sharedFolders];
@@ -422,7 +459,7 @@ function KanbanView({ groupFolders, sharedFolders, data, onLink, linkActions }: 
             <span className="text-xs text-text-tertiary">{col.entries.length}</span>
           </div>
           <div className="space-y-2">
-            {col.entries.map((entry) => <EntryCard key={entry.id} entry={entry} data={data} tenantName={tenantName} linkActions={linkActions} onLink={onLink} />)}
+            {col.entries.map((entry) => <EntryCard key={entry.id} entry={entry} data={data} tenantName={tenantName} linkActions={linkActions} onLink={onLink} onLinkAccount={onLinkAccount} />)}
             {col.entries.length === 0 && <p className="text-xs text-text-tertiary">Nenhum grupo nesta pasta.</p>}
           </div>
         </div>
@@ -613,6 +650,111 @@ function CreateLinkModal({ hubId, entry, tenants, open, onClose, onDone }: { hub
       <div className="space-y-3">
         <TenantSelect id="link-tenant" label="Tenant" tenants={tenants} value={tenantId} onChange={setTenantId} />
         <RoleSelect id="link-role" value={role} onChange={setRole} />
+        {error && <p role="alert" className="text-sm text-status-danger">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+type AccountOption = { key: string; label: string; detail?: string; ref: GroupAccountRef };
+
+// A AÇÃO de verdade por trás da coluna "Classificação (CRM)": chama diretamente o endpoint
+// PUT/DELETE .../tenants/{tenant_id}/groups/{id}/account que a própria tela de Grupos do tenant já usa
+// (groups.ts's linkAccountFor/unlinkAccountFor/crmDirectoryFor/localAccountsFor — variantes com tenantId
+// explícito, nunca lidas de getTenantId()/localStorage). Nenhuma ponte de permissão nova: autoriza um
+// membro real do tenant (group.manage) exatamente como a tela de Grupos já autoriza — só muda de onde o
+// pedido parte. Mesma busca mesclada (diretório do CRM + contas locais) de GroupAccountLink.tsx.
+function LinkCRMAccountModal({ entry, waGroupId, currentAccountName, open, onClose, onDone }: {
+  entry: GroupCatalogEntry; waGroupId: string | null; currentAccountName?: string; open: boolean; onClose: () => void; onDone: () => void;
+}) {
+  const tenantId = entry.source_tenant_id;
+  const [query, setQuery] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const debouncedQuery = useDebounced(query, 300);
+  useEffect(() => { if (open) { setQuery(''); setError(null); } }, [open]);
+
+  const directory = useQuery({
+    queryKey: ['hub-group-account-directory', tenantId],
+    queryFn: () => groupsAPI.crmDirectoryFor(tenantId),
+    enabled: open,
+    retry: false,
+  });
+  const localAccounts = useQuery({
+    queryKey: ['hub-group-account-search', tenantId, debouncedQuery],
+    queryFn: () => groupsAPI.localAccountsFor(tenantId, debouncedQuery),
+    enabled: open,
+  });
+
+  const options = useMemo<AccountOption[]>(() => {
+    const dirItems = directory.data?.items ?? [];
+    const seen = new Set(dirItems.map((c) => c.name.trim().toLowerCase()));
+    const needle = query.trim().toLowerCase();
+    const dir = dirItems
+      .filter((c) => !needle || c.name.toLowerCase().includes(needle) || (c.cnpj ?? '').includes(needle))
+      .map((c): AccountOption => ({ key: `d:${c.id}`, label: c.name, detail: c.cnpj ?? 'CRM', ref: { directoryCompanyId: c.id } }));
+    const local = (localAccounts.data?.items ?? [])
+      .filter((a) => !seen.has(a.name.trim().toLowerCase()))
+      .map((a): AccountOption => ({ key: `a:${a.id}`, label: a.name, detail: 'Conta local', ref: { accountId: a.id } }));
+    return [...dir, ...local];
+  }, [directory.data, localAccounts.data, query]);
+
+  const link = useMutation({
+    mutationFn: (ref: GroupAccountRef) => groupsAPI.linkAccountFor(tenantId, waGroupId as string, ref),
+    onSuccess: onDone,
+    onError: (err) => { if (isUnauthorized(err)) handleUnauthorized(); else setError(groupErrorMessage(err)); },
+  });
+  const unlink = useMutation({
+    mutationFn: () => groupsAPI.unlinkAccountFor(tenantId, waGroupId as string),
+    onSuccess: onDone,
+    onError: (err) => { if (isUnauthorized(err)) handleUnauthorized(); else setError(groupErrorMessage(err)); },
+  });
+  const busy = link.isPending || unlink.isPending || !waGroupId;
+
+  return (
+    <Modal
+      open={open}
+      title="Vincular ao Cliente do CRM"
+      description={`"${entry.display_name || entry.provider_group_id}" passa a representar este cliente — o mesmo contexto usado para atendimento e, futuramente, abertura de chamado.`}
+      onClose={onClose}
+      footer={<>
+        {currentAccountName && (
+          <Button variant="tertiary" size="sm" onClick={() => unlink.mutate()} disabled={busy} isLoading={unlink.isPending}>Remover vínculo</Button>
+        )}
+        <Button variant="secondary" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
+      </>}
+    >
+      <div className="space-y-3">
+        <input
+          autoFocus
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Buscar cliente..."
+          aria-label="Buscar cliente"
+          className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary"
+        />
+        {directory.isError && <p className="text-xs text-status-warning">Diretório de empresas do CRM indisponível: só contas já existentes aparecem.</p>}
+        <ul className="max-h-48 overflow-y-auto rounded-control border border-border-subtle bg-surface" role="listbox" aria-label="Clientes">
+          {localAccounts.isLoading || directory.isLoading ? (
+            <li className="px-2 py-1.5 text-xs text-text-tertiary">Carregando...</li>
+          ) : options.length === 0 ? (
+            <li className="px-2 py-1.5 text-xs text-text-tertiary">Nenhum cliente encontrado.</li>
+          ) : (
+            options.map((o) => (
+              <li key={o.key} role="option">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => link.mutate(o.ref)}
+                  className="flex w-full items-center justify-between gap-2 truncate px-2 py-1.5 text-left text-sm text-text-primary hover:bg-surface-muted"
+                >
+                  <span className="truncate">{o.label}</span>
+                  {o.detail && <span className="shrink-0 text-xs text-text-tertiary">{o.detail}</span>}
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
         {error && <p role="alert" className="text-sm text-status-danger">{error}</p>}
       </div>
     </Modal>

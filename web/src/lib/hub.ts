@@ -525,6 +525,9 @@ export interface GroupCatalogEntry {
 // account it is linked to, if any — read only here; set on the tenant's own Groups page.
 export interface GroupRelationshipContext {
   hub_group_id: string
+  // The real wa_groups.id — lets the page call the tenant's own existing group-account-link endpoint
+  // directly (GroupAccountLinkModal), never a new write path through the Hub.
+  wa_group_id: string
   purpose: GroupPurpose
   account_id?: string
   account_display_name?: string

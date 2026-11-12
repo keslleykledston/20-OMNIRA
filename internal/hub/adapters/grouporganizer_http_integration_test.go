@@ -161,7 +161,7 @@ func TestGroupOrganizerAPI_Classification_ReadsTenantPurposeAcrossOriginsAndFail
 	connA, connB := w.channelConnection("A"), w.channelConnection("B")
 
 	groupA := w.catalogEntry("", "A", connA, "551199990000020@g.us", "Grupo A")
-	w.waGroup("A", connA, "551199990000020@g.us", "InfoRR NOC", true)
+	waGroupA := w.waGroup("A", connA, "551199990000020@g.us", "InfoRR NOC", true)
 	accountA := uuid.New()
 	w.exec(`INSERT INTO customer_accounts (id, tenant_id, name) VALUES ($1, $2, 'InfoRR Consultoria')`, accountA, w.tenant["A"])
 	w.exec(`UPDATE wa_groups SET purpose = 'client_support', account_id = $1 WHERE tenant_id = $2 AND provider_group_id = '551199990000020@g.us'`,
@@ -201,8 +201,8 @@ func TestGroupOrganizerAPI_Classification_ReadsTenantPurposeAcrossOriginsAndFail
 	if !ok {
 		t.Fatalf("owner must see groupA's classification: %v", items)
 	}
-	if a["purpose"] != "client_support" || a["account_display_name"] != "InfoRR Consultoria" || a["account_id"] != accountA.String() {
-		t.Fatalf("groupA classification: got %v, want purpose=client_support account=InfoRR Consultoria account_id=%s", a, accountA)
+	if a["purpose"] != "client_support" || a["account_display_name"] != "InfoRR Consultoria" || a["account_id"] != accountA.String() || a["wa_group_id"] != waGroupA.String() {
+		t.Fatalf("groupA classification: got %v, want purpose=client_support account=InfoRR Consultoria account_id=%s wa_group_id=%s", a, accountA, waGroupA)
 	}
 	b, ok := byGroup[groupB.String()]
 	if !ok {

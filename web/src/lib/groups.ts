@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { API_BASE } from './config'
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './session'
+import type { CustomerAccount, DirectoryCompany } from './contacts'
 
 // Mirrors the group payloads in internal/groups/adapters/http.go (ADR-0015). Groups are a separate
 // area from conversations: read-only, no assignee/queue/SLA, and no phone number is ever served.
@@ -130,6 +131,27 @@ export const groupsAPI = {
       }),
     ),
   unlinkAccount: (id: string) => call<Group>(() => axios.delete(`${base()}/${id}/account`, { headers: authHeaders() })),
+  // Explicit-tenant variants (Hub Organizer): same endpoints as above, called with the catalog entry's
+  // OWN tenant instead of the browser's currently-selected one (getTenantId()) — the Hub Organizer shows
+  // groups across whichever tenants delegated 'groups', never just the session's own. Deliberately plain
+  // tenant-scoped calls (authHeaders() only, no X-Omnira-Acting-As/DelegatedTarget): this endpoint has no
+  // delegated-serving support at all (internal/groups/adapters/http.go's session check is a flat
+  // memberships+group.manage lookup), so it authorizes a real tenant member exactly the same whether the
+  // browser tab is on the tenant's own Groups page or on the Hub Organizer — nothing new is granted.
+  linkAccountFor: (tenantId: string, id: string, ref: GroupAccountRef) =>
+    call<Group>(() =>
+      axios.put(`${API_BASE}/tenants/${tenantId}/groups/${id}/account`, 'accountId' in ref ? { account_id: ref.accountId } : { directory_company_id: ref.directoryCompanyId }, {
+        headers: authHeaders(),
+      }),
+    ),
+  unlinkAccountFor: (tenantId: string, id: string) =>
+    call<Group>(() => axios.delete(`${API_BASE}/tenants/${tenantId}/groups/${id}/account`, { headers: authHeaders() })),
+  crmDirectoryFor: (tenantId: string) =>
+    call<{ items: DirectoryCompany[] }>(() => axios.get(`${API_BASE}/tenants/${tenantId}/crm/companies`, { headers: authHeaders() })),
+  localAccountsFor: (tenantId: string, q?: string) =>
+    call<{ items: CustomerAccount[] }>(() =>
+      axios.get(`${API_BASE}/tenants/${tenantId}/accounts`, { headers: authHeaders(), params: { status: 'active', ...(q ? { q } : {}) } }),
+    ),
   messages: (id: string, cursor?: string, limit = 100) =>
     call<GroupMessagePage>(() =>
       axios.get(`${base()}/${id}/messages`, { headers: authHeaders(), params: { limit, ...(cursor ? { cursor } : {}) } }),

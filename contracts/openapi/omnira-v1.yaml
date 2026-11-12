@@ -6431,9 +6431,10 @@ components:
         updated_at: { type: string, format: date-time }
     HubGroupRelationshipContext:
       type: object
-      required: [hub_group_id, purpose]
+      required: [hub_group_id, wa_group_id, purpose]
       properties:
         hub_group_id: { type: string, format: uuid }
+        wa_group_id: { type: string, format: uuid, description: The real wa_groups.id, to address the tenant's own PUT .../groups/{id}/account directly }
         purpose: { $ref: '#/components/schemas/GroupPurpose' }
         account_id: { type: string, format: uuid, description: Absent when the group has no linked customer_accounts row }
         account_display_name: { type: string, description: Absent under the same condition as account_id }

@@ -132,6 +132,43 @@ describe('HubGroupOrganizerPage', () => {
     expect(within(unlinkedFolder).getByText('Trânsito compartilhado')).toBeInTheDocument();
   });
 
+  it('vincular cliente do CRM: a ação de verdade chama o endpoint JÁ EXISTENTE de grupos do tenant certo, nunca um caminho novo pelo Hub', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, wa_group_id: 'wa-alpha', purpose: 'other' }];
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/hubs')) return { data: { items: hubs } };
+      if (u.endsWith('/managed')) return { data: { items: managed } };
+      if (u.endsWith('/groups/catalog')) return { data: { items: catalog } };
+      if (u.endsWith('/groups/relationships')) return { data: { items: relationships } };
+      if (u.endsWith('/groups/discover-connections')) return { data: { items: discoveredConnections } };
+      if (u.endsWith('/groups/discover')) return { data: { items: discovered } };
+      if (u.endsWith('/groups/links')) return { data: { items: Object.values(linksByGroup).flat() } };
+      if (u.endsWith('/groups/classification')) return { data: { items: classification } };
+      if (u.endsWith('/tenants/A/crm/companies')) return { data: { items: [{ id: 'co-1', name: 'InfoRR Consultoria', cnpj: '123' }] } };
+      if (u.endsWith('/tenants/A/accounts')) return { data: { items: [] } };
+      const linksMatch = /\/groups\/catalog\/([^/]+)\/links$/.exec(u);
+      if (linksMatch) return { data: { items: linksByGroup[linksMatch[1]] ?? [] } };
+      return Promise.reject({ response: { status: 404 } });
+    });
+    vi.mocked(axios.put).mockResolvedValue({ data: {} });
+
+    renderAt(<HubGroupOrganizerPage />);
+    const alphaRow = (await screen.findByText('Clientes Alpha')).closest('tr')!;
+    await userEvent.click(within(alphaRow).getByRole('button', { name: 'Vincular cliente' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Vincular ao Cliente do CRM' });
+    await userEvent.click(await within(dialog).findByRole('button', { name: /InfoRR Consultoria/ }));
+    await waitFor(() =>
+      expect(axios.put).toHaveBeenCalledWith(expect.stringContaining('/tenants/A/groups/wa-alpha/account'), { directory_company_id: 'co-1' }, expect.anything()),
+    );
+  });
+
+  it('vincular cliente do CRM: desabilitado quando o grupo ainda não tem wa_groups (nunca aberto na tela de Grupos do tenant)', async () => {
+    classification = [];
+    renderAt(<HubGroupOrganizerPage />);
+    const row = (await screen.findByText('Clientes Alpha')).closest('tr')!;
+    expect(within(row).getByRole('button', { name: 'Vincular cliente' })).toBeDisabled();
+  });
+
   it('pastas: deriva a pasta compartilhada SÓ da relação comercial + vínculos ativos dos dois lados, nunca manual', async () => {
     renderAt(<HubGroupOrganizerPage />);
     await userEvent.click(await screen.findByRole('tab', { name: /^Pastas/ }));

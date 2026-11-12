@@ -411,11 +411,15 @@ func (s *Service) ListLinksForHub(ctx context.Context, actor, hub uuid.UUID) ([]
 
 // RelationshipContext is the tenant-side classification of a catalog entry's real WhatsApp group
 // (wa_groups.purpose) plus the CRM customer_account it is linked to, if any — read only, never written
-// here (that stays the tenant's own Groups page, see migration 000189/000190). Purpose is always present
-// (wa_groups defaults it to 'other'); AccountID/AccountDisplayName are nil when the group has no
+// here (that stays the tenant's own Groups page, see migration 000189/000190/000191). Purpose is always
+// present (wa_groups defaults it to 'other'); AccountID/AccountDisplayName are nil when the group has no
 // account_id, which is the expected, unremarkable case for an 'internal_management'/'internal_team' group.
+// WaGroupID is always present when a row exists at all (the query inner-joins wa_groups): it lets the Hub
+// Organizer frontend address the real wa_groups row when it calls the tenant's OWN existing
+// PUT .../groups/{id}/account endpoint directly — a real action, not routed through this package.
 type RelationshipContext struct {
 	HubGroupID         uuid.UUID  `json:"hub_group_id"`
+	WaGroupID          uuid.UUID  `json:"wa_group_id"`
 	Purpose            string     `json:"purpose"`
 	AccountID          *uuid.UUID `json:"account_id,omitempty"`
 	AccountDisplayName *string    `json:"account_display_name,omitempty"`
@@ -428,7 +432,7 @@ type RelationshipContext struct {
 func (s *Service) RelationshipContextForHub(ctx context.Context, actor, hub uuid.UUID) ([]RelationshipContext, error) {
 	out := []RelationshipContext{}
 	err := s.tx(ctx, actor, func(c context.Context, q platformdb.Querier) error {
-		rows, err := q.Query(c, `SELECT hub_group_id, purpose, account_id, account_display_name
+		rows, err := q.Query(c, `SELECT hub_group_id, wa_group_id, purpose, account_id, account_display_name
 		                        FROM hub_group_catalog_relationship_context($1, $2)`, hub, actor)
 		if err != nil {
 			return err
@@ -436,7 +440,7 @@ func (s *Service) RelationshipContextForHub(ctx context.Context, actor, hub uuid
 		defer rows.Close()
 		for rows.Next() {
 			var e RelationshipContext
-			if err := rows.Scan(&e.HubGroupID, &e.Purpose, &e.AccountID, &e.AccountDisplayName); err != nil {
+			if err := rows.Scan(&e.HubGroupID, &e.WaGroupID, &e.Purpose, &e.AccountID, &e.AccountDisplayName); err != nil {
 				return err
 			}
 			out = append(out, e)
