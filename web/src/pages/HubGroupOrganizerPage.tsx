@@ -9,10 +9,12 @@ import {
   type GroupLink,
   type GroupLinkRole,
   type GroupRelationship,
+  type GroupRelationshipContext,
   type HubSummary,
 } from '../lib/hub';
+import { GROUP_PURPOSE_BADGE_VARIANT, GROUP_PURPOSE_LABEL } from '../lib/groupModel';
 import { handleUnauthorized, isUnauthorized } from '../lib/session';
-import { Button, ConfirmDialog, DropdownMenu, EmptyState, ErrorState, LoadingState, Modal, PageHeader, StatusBadge, Tabs, TenantBadge, type MenuAction } from '../components/primitives';
+import { Badge, Button, ConfirmDialog, DropdownMenu, EmptyState, ErrorState, LoadingState, Modal, PageHeader, StatusBadge, Tabs, TenantBadge, type MenuAction } from '../components/primitives';
 import { useMyHubs } from '../hooks/useMyHubs';
 
 // Organizador de grupos (ADR-0059, Gate 3): pastas virtuais por Tenant, Kanban e lista para os metadados de grupo já
@@ -38,21 +40,26 @@ interface OrganizerData {
   catalog: GroupCatalogEntry[];
   relationships: GroupRelationship[];
   linksByGroup: Record<string, GroupLink[]>;
+  classificationByGroup: Record<string, GroupRelationshipContext>;
 }
 
 async function loadOrganizerData(hubId: string): Promise<OrganizerData> {
-  // One request for every catalog entry's links, not one request PER entry: that N+1 pattern hung the
-  // page indefinitely once autodiscovery (ADR-0059 addendum) grew a real catalog to dozens of groups.
-  const [managed, catalog, relationships, links] = await Promise.all([
+  // One request for every catalog entry's links/classification, not one request PER entry: that N+1
+  // pattern hung the page indefinitely once autodiscovery (ADR-0059 addendum) grew a real catalog to
+  // dozens of groups.
+  const [managed, catalog, relationships, links, classification] = await Promise.all([
     hubManageAPI.managed(hubId),
     groupOrganizerAPI.catalog(hubId),
     groupOrganizerAPI.relationships(hubId),
     groupOrganizerAPI.linksForHub(hubId),
+    groupOrganizerAPI.classification(hubId),
   ]);
   const tenants = managed.filter((m) => m.scopes.includes('groups')).map((m) => ({ id: m.tenant_id, name: m.name }));
   const linksByGroup: Record<string, GroupLink[]> = {};
   for (const l of links) (linksByGroup[l.hub_group_id] ??= []).push(l);
-  return { tenants, catalog, relationships, linksByGroup };
+  const classificationByGroup: Record<string, GroupRelationshipContext> = {};
+  for (const c of classification) classificationByGroup[c.hub_group_id] = c;
+  return { tenants, catalog, relationships, linksByGroup, classificationByGroup };
 }
 
 function activeLinks(data: OrganizerData, entryId: string): GroupLink[] {
@@ -225,6 +232,21 @@ function EntryLinkBadges({ entry, data, tenantName, linkActions }: { entry: Grou
   );
 }
 
+// Read-only: wa_groups.purpose + the linked CRM account's name, set on the tenant's own Groups page
+// (ADR-0059 addendum 5). "Sem classificação" covers both "not yet tagged" and "not yet matched" (the
+// catalog entry's group was never opened once in the tenant's own Groups page, so wa_groups has no row
+// for it yet) — the two are indistinguishable here on purpose, same convention as hub_discover_tenant_groups.
+function EntryClassificationBadge({ entry, data }: { entry: GroupCatalogEntry; data: OrganizerData }) {
+  const c = data.classificationByGroup[entry.id];
+  if (!c) return <span className="text-xs text-text-tertiary">Sem classificação no CRM</span>;
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <Badge variant={GROUP_PURPOSE_BADGE_VARIANT[c.purpose]} size="sm">{GROUP_PURPOSE_LABEL[c.purpose]}</Badge>
+      {c.account_display_name && <span className="truncate text-xs text-text-tertiary">{c.account_display_name}</span>}
+    </span>
+  );
+}
+
 function ListView({ data, tenantName, onLink, linkActions }: {
   data: OrganizerData; tenantName: (id: string) => string; onLink: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[];
 }) {
@@ -235,6 +257,7 @@ function ListView({ data, tenantName, onLink, linkActions }: {
           <th className="py-2 pr-3">Grupo</th>
           <th className="py-2 pr-3">Origem</th>
           <th className="py-2 pr-3">Estado</th>
+          <th className="py-2 pr-3">Classificação (CRM)</th>
           <th className="py-2 pr-3">Vínculos</th>
           <th className="py-2 pr-3" />
         </tr>
@@ -248,6 +271,7 @@ function ListView({ data, tenantName, onLink, linkActions }: {
             </td>
             <td className="py-3 pr-3"><TenantBadge name={tenantName(entry.source_tenant_id)} /></td>
             <td className="py-3 pr-3"><StatusBadge status={SOURCE_STATE[entry.source_state].status}>{SOURCE_STATE[entry.source_state].label}</StatusBadge></td>
+            <td className="py-3 pr-3"><EntryClassificationBadge entry={entry} data={data} /></td>
             <td className="py-3 pr-3"><EntryLinkBadges entry={entry} data={data} tenantName={tenantName} linkActions={linkActions} /></td>
             <td className="py-3 pr-3 text-right">
               <Button variant="secondary" size="sm" onClick={() => onLink(entry)}>Vincular a um Tenant</Button>
@@ -271,6 +295,7 @@ function EntryCard({ entry, data, tenantName, linkActions, onLink }: {
         </div>
         <Button variant="tertiary" size="sm" onClick={() => onLink(entry)}>Vincular…</Button>
       </div>
+      <EntryClassificationBadge entry={entry} data={data} />
       <EntryLinkBadges entry={entry} data={data} tenantName={tenantName} linkActions={linkActions} />
     </div>
   );

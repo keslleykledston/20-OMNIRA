@@ -409,6 +409,42 @@ func (s *Service) ListLinksForHub(ctx context.Context, actor, hub uuid.UUID) ([]
 	return out, err
 }
 
+// RelationshipContext is the tenant-side classification of a catalog entry's real WhatsApp group
+// (wa_groups.purpose) plus the display name of the CRM customer_account it is linked to, if any — read
+// only, never written here (that stays the tenant's own Groups page, see migration 000189). Purpose is
+// always present (wa_groups defaults it to 'other'); AccountDisplayName is nil when the group has no
+// account_id, which is the expected, unremarkable case for an 'internal_management'/'internal_team' group.
+type RelationshipContext struct {
+	HubGroupID         uuid.UUID `json:"hub_group_id"`
+	Purpose            string    `json:"purpose"`
+	AccountDisplayName *string   `json:"account_display_name,omitempty"`
+}
+
+// RelationshipContextForHub reads every catalog entry's tenant-side classification in one call (same N+1
+// lesson as ListLinksForHub above). A catalog entry whose underlying wa_groups row cannot be matched (or
+// whose origin tenant this actor no longer has 'groups' access to) is simply absent from the result —
+// the Hub Organizer page treats a missing entry as "no classification available", never an error.
+func (s *Service) RelationshipContextForHub(ctx context.Context, actor, hub uuid.UUID) ([]RelationshipContext, error) {
+	out := []RelationshipContext{}
+	err := s.tx(ctx, actor, func(c context.Context, q platformdb.Querier) error {
+		rows, err := q.Query(c, `SELECT hub_group_id, purpose, account_display_name
+		                        FROM hub_group_catalog_relationship_context($1, $2)`, hub, actor)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e RelationshipContext
+			if err := rows.Scan(&e.HubGroupID, &e.Purpose, &e.AccountDisplayName); err != nil {
+				return err
+			}
+			out = append(out, e)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // originTenant reads the catalog group's source_tenant_id UNDER THE CALLER'S OWN RLS SESSION. If the
 // actor has no 'groups' access on the origin tenant, the row is invisible and this returns ErrNotFound —
 // which is also the correct authorization answer: nobody may create or move a link for a group whose

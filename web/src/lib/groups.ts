@@ -6,9 +6,17 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './
 // area from conversations: read-only, no assignee/queue/SLA, and no phone number is ever served.
 export type GroupMessageType = 'text' | 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'location' | 'other'
 
-// Manual, closed-list work-purpose tag an administrator picks per group (migration 000176). Never
-// guessed from participants — that is a different, automatic classification the backend keeps to itself.
-export type GroupPurpose = 'client_management' | 'client_support' | 'internal_management' | 'internal_team' | 'other'
+// Manual, closed-list work-purpose tag an administrator picks per group (migration 000176;
+// 'partner'/'supplier' added by migration 000188). Never guessed from participants — that is a
+// different, automatic classification the backend keeps to itself.
+export type GroupPurpose =
+  | 'client_management'
+  | 'client_support'
+  | 'internal_management'
+  | 'internal_team'
+  | 'partner'
+  | 'supplier'
+  | 'other'
 
 export interface GroupLastMessage {
   author_name: string

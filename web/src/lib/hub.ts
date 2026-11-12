@@ -2,6 +2,7 @@ import axios from 'axios'
 import { API_BASE } from './config'
 import { authHeaders } from './session'
 import { MAX_ATTACHMENT_BYTES, type UploadedAttachment } from './attachments'
+import type { GroupPurpose } from './groups'
 
 // Mirrors the Hub schemas in contracts/openapi/omnira-v1.yaml (GET /hubs, /hubs/{id}/inbox, /hubs/{id}/inbox/{item}, POST .../claim and .../messages).
 // The Hub API is feature-flagged on the server: when it is off the routes do not exist and /hubs answers 404.
@@ -520,6 +521,14 @@ export interface GroupCatalogEntry {
   last_seen_at: string
 }
 
+// Tenant-side classification of a catalog entry's real WhatsApp group (wa_groups.purpose) plus the CRM
+// account it is linked to, if any — read only here; set on the tenant's own Groups page.
+export interface GroupRelationshipContext {
+  hub_group_id: string
+  purpose: GroupPurpose
+  account_display_name?: string
+}
+
 export interface GroupLink {
   id: string
   hub_id: string
@@ -595,6 +604,9 @@ export const groupOrganizerAPI = {
   // own, and that many concurrent requests queued the environment's DB pool and hung the page indefinitely.
   linksForHub: (hubId: string): Promise<GroupLink[]> =>
     axios.get<{ items: GroupLink[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/links`, { headers: authHeaders() }).then((r) => r.data.items),
+  // Read-only tenant-side classification (purpose + linked CRM account name) of every catalog entry, in one call.
+  classification: (hubId: string): Promise<GroupRelationshipContext[]> =>
+    axios.get<{ items: GroupRelationshipContext[] }>(`${API_BASE}/hubs/${enc(hubId)}/groups/classification`, { headers: authHeaders() }).then((r) => r.data.items),
   createLink: (hubId: string, groupId: string, tenantId: string, role: GroupLinkRole, idempotencyKey: string): Promise<GroupLink> =>
     axios
       .post<GroupLink>(

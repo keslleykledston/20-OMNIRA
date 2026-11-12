@@ -583,6 +583,7 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI, 
 				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog", authnMiddleware(userSession(http.HandlerFunc(grp.ListCatalog))))
 				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog", authnMiddleware(userSession(http.HandlerFunc(grp.UpsertCatalogEntry))))
 				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/links", authnMiddleware(userSession(http.HandlerFunc(grp.ListLinksForHub))))
+				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/classification", authnMiddleware(userSession(http.HandlerFunc(grp.ListRelationshipContext))))
 				s.mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", authnMiddleware(userSession(http.HandlerFunc(grp.ListLinks))))
 				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", authnMiddleware(userSession(http.HandlerFunc(grp.CreateLink))))
 				s.mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/revoke", authnMiddleware(userSession(http.HandlerFunc(grp.RevokeLink))))

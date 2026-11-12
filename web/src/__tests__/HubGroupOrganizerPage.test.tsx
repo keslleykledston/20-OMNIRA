@@ -25,6 +25,7 @@ let relationships: object[];
 let linksByGroup: Record<string, object[]>;
 let discovered: object[];
 let discoveredConnections: object[];
+let classification: object[];
 
 function entry(id: string, name: string) {
   return { id, hub_id: HUB, source_tenant_id: 'A', source_channel_connection_id: 'conn-1', provider_group_id: '120300000000@g.us', display_name: name, source_state: 'available', version: 1, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', last_seen_at: '2026-01-01T00:00:00Z' };
@@ -44,6 +45,7 @@ function serve() {
     if (u.endsWith('/groups/discover-connections')) return { data: { items: discoveredConnections } };
     if (u.endsWith('/groups/discover')) return { data: { items: discovered } };
     if (u.endsWith('/groups/links')) return { data: { items: Object.values(linksByGroup).flat() } };
+    if (u.endsWith('/groups/classification')) return { data: { items: classification } };
     const linksMatch = /\/groups\/catalog\/([^/]+)\/links$/.exec(u);
     if (linksMatch) return { data: { items: linksByGroup[linksMatch[1]] ?? [] } };
     return Promise.reject({ response: { status: 404 } });
@@ -67,6 +69,7 @@ beforeEach(() => {
   };
   discovered = [];
   discoveredConnections = [];
+  classification = [];
   serve();
 });
 
@@ -93,6 +96,18 @@ describe('HubGroupOrganizerPage', () => {
     const calls = vi.mocked(axios.get).mock.calls.map((c) => String(c[0]))
     expect(calls.filter((u) => u.endsWith('/groups/links')).length).toBe(1)
     expect(calls.some((u) => /\/groups\/catalog\/[^/]+\/links$/.test(u))).toBe(false)
+  });
+
+  it('mostra a classificação do CRM (purpose + conta) lida do tenant, só leitura, e "Sem classificação no CRM" quando o grupo ainda não tem uma', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, purpose: 'client_support', account_display_name: 'InfoRR Consultoria' }];
+    renderAt(<HubGroupOrganizerPage />);
+    const alphaRow = (await screen.findByText('Clientes Alpha')).closest('tr')!;
+    expect(within(alphaRow).getByText('Cliente · Atendimento')).toBeInTheDocument();
+    expect(within(alphaRow).getByText('InfoRR Consultoria')).toBeInTheDocument();
+    const unclassifiedRow = screen.getByText('Suporte geral').closest('tr')!;
+    expect(within(unclassifiedRow).getByText('Sem classificação no CRM')).toBeInTheDocument();
+    const calls = vi.mocked(axios.get).mock.calls.map((c) => String(c[0]));
+    expect(calls.filter((u) => u.endsWith('/groups/classification')).length).toBe(1);
   });
 
   it('pastas: deriva a pasta compartilhada SÓ da relação comercial + vínculos ativos dos dois lados, nunca manual', async () => {

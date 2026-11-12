@@ -56,13 +56,16 @@ const (
 	enabledListCap   = 500
 )
 
-// groupPurposes is the closed list an administrator picks from (migration 000176). Never guessed from
-// participants — that is conversation_kind's job; purpose is always an explicit choice.
+// groupPurposes is the closed list an administrator picks from (migration 000176, 'partner'/'supplier'
+// added by migration 000188). Never guessed from participants — that is conversation_kind's job;
+// purpose is always an explicit choice.
 var groupPurposes = map[string]bool{
 	"client_management":   true,
 	"client_support":      true,
 	"internal_management": true,
 	"internal_team":       true,
+	"partner":             true,
+	"supplier":            true,
 	"other":               true,
 }
 

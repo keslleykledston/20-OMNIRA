@@ -168,6 +168,26 @@ func (h *GroupOrganizerHandler) ListLinksForHub(w http.ResponseWriter, r *http.R
 	writeJSON(w, map[string]any{"items": items})
 }
 
+// GET /api/v1/hubs/{hub_id}/groups/classification
+//
+// The tenant-side classification (wa_groups.purpose + linked CRM account name, read only) of every
+// catalog entry of this hub, in one call — see Service.RelationshipContextForHub. Named differently
+// from the pre-existing GET .../groups/relationships (hub_tenant_relationships, the B2B Tenant<->Tenant
+// pairing), which this is not — a catalog entry's relationship to a Tenant's own CRM book, not to another
+// Tenant.
+func (h *GroupOrganizerHandler) ListRelationshipContext(w http.ResponseWriter, r *http.Request) {
+	actor, hub, ok := requestScope(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.svc.RelationshipContextForHub(r.Context(), actor, hub)
+	if err != nil {
+		writeGroupOrganizerError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
+
 // GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links
 func (h *GroupOrganizerHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 	actor, hub, ok := requestScope(w, r)

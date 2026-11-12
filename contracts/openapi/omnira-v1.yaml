@@ -7190,10 +7190,10 @@ components:
     GroupPurpose:
       type: string
       description: |
-        Manual, closed-list work-purpose tag an administrator picks per group (migration 000176). Distinct from the
-        automatic, participant-derived classification: never guessed, always an explicit choice. Defaults to `other`
-        until someone tags the group.
-      enum: [client_management, client_support, internal_management, internal_team, other]
+        Manual, closed-list work-purpose tag an administrator picks per group (migration 000176; `partner`/`supplier`
+        added by migration 000188). Distinct from the automatic, participant-derived classification: never guessed,
+        always an explicit choice. Defaults to `other` until someone tags the group.
+      enum: [client_management, client_support, internal_management, internal_team, partner, supplier, other]
     GroupList:
       type: object
       required: [items, count]

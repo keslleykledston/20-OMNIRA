@@ -5,6 +5,8 @@ export const GROUP_PURPOSE_LABEL: Record<GroupPurpose, string> = {
   client_support: 'Cliente · Atendimento',
   internal_management: 'Interno · Gestão',
   internal_team: 'Interno · Equipe',
+  partner: 'Parceiro',
+  supplier: 'Fornecedor',
   other: 'Outros',
 }
 
@@ -13,11 +15,13 @@ export const GROUP_PURPOSE_BADGE_VARIANT: Record<GroupPurpose, 'default' | 'succ
   client_support: 'success',
   internal_management: 'warning',
   internal_team: 'default',
+  partner: 'info',
+  supplier: 'warning',
   other: 'default',
 }
 
 export const GROUP_PURPOSE_OPTIONS: { value: GroupPurpose; label: string }[] = (
-  ['client_management', 'client_support', 'internal_management', 'internal_team', 'other'] as GroupPurpose[]
+  ['client_management', 'client_support', 'internal_management', 'internal_team', 'partner', 'supplier', 'other'] as GroupPurpose[]
 ).map((value) => ({ value, label: GROUP_PURPOSE_LABEL[value] }))
 
 // Suggestion left by the AI observer (ADR-0055) — a hint for a human to review, never acted on.

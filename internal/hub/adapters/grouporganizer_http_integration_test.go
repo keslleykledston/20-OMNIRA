@@ -43,6 +43,7 @@ func newGroupOrganizerAPI(t *testing.T, w *world) *groupOrganizerAPI {
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog", shim(session(http.HandlerFunc(h.ListCatalog))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog", shim(session(http.HandlerFunc(h.UpsertCatalogEntry))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/links", shim(session(http.HandlerFunc(h.ListLinksForHub))))
+	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/classification", shim(session(http.HandlerFunc(h.ListRelationshipContext))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", shim(session(http.HandlerFunc(h.ListLinks))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links", shim(session(http.HandlerFunc(h.CreateLink))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/groups/catalog/{group_id}/links/{tenant_id}/revoke", shim(session(http.HandlerFunc(h.RevokeLink))))
@@ -141,6 +142,101 @@ func TestGroupOrganizerAPI_ListLinksForHub_OneCallReturnsEveryGroupAndRespectsRL
 	items = resp["items"].([]any)
 	if len(items) != 1 || items[0].(map[string]any)["id"].(string) != linkA.String() {
 		t.Fatalf("onlyA (authorized only on A): must see ONLY group A's link, got %v", items)
+	}
+}
+
+// TestGroupOrganizerAPI_Classification_ReadsTenantPurposeAcrossOriginsAndFailsClosedOnRevoke proves the
+// read-only bridge added by migration 000189 (ADR-0059 addendum 5): the Hub Organizer shows each catalog
+// entry's TENANT-side classification (wa_groups.purpose + the linked customer_accounts.name), which is
+// set from the tenant's own Groups page, never here. The SECURITY DEFINER function behind it bypasses
+// wa_groups'/customer_accounts' own RLS on purpose (a Hub actor's session has no has_active_membership on
+// the origin tenant), so this is exactly the kind of cross-tenant read that needs a real-Postgres,
+// adversarial Tenant A/B proof: an actor must see ONLY the classification of tenants they currently have
+// 'groups' access to, that access must be re-checked live (revoking it mid-test removes the row, not just
+// hides a field), and a catalog entry whose wa_groups row does not exist yet (never opened once in the
+// tenant's own Groups page) must be silently absent, never an error.
+func TestGroupOrganizerAPI_Classification_ReadsTenantPurposeAcrossOriginsAndFailsClosedOnRevoke(t *testing.T) {
+	w := newWorld(t)
+	api := newGroupOrganizerAPI(t, w)
+	connA, connB := w.channelConnection("A"), w.channelConnection("B")
+
+	groupA := w.catalogEntry("", "A", connA, "551199990000020@g.us", "Grupo A")
+	w.waGroup("A", connA, "551199990000020@g.us", "InfoRR NOC", true)
+	accountA := uuid.New()
+	w.exec(`INSERT INTO customer_accounts (id, tenant_id, name) VALUES ($1, $2, 'InfoRR Consultoria')`, accountA, w.tenant["A"])
+	w.exec(`UPDATE wa_groups SET purpose = 'client_support', account_id = $1 WHERE tenant_id = $2 AND provider_group_id = '551199990000020@g.us'`,
+		accountA, w.tenant["A"])
+
+	groupB := w.catalogEntry("", "B", connB, "551199990000021@g.us", "Grupo B")
+	w.waGroup("B", connB, "551199990000021@g.us", "Fornecedor de Trânsito", true)
+	w.exec(`UPDATE wa_groups SET purpose = 'supplier' WHERE tenant_id = $1 AND provider_group_id = '551199990000021@g.us'`, w.tenant["B"])
+
+	// Catalogued but never opened once in the tenant's own Groups page: no wa_groups row exists for it at
+	// all yet. Must be absent from every actor's result, never an error.
+	groupCNoWaRow := w.catalogEntry("", "A", connA, "551199990000022@g.us", "Grupo C (ainda não aberto)")
+
+	w.groupsScope("A")
+	w.groupsScope("B")
+	owner := w.hubAgent("owner")
+	w.canManage(w.grant(owner, "A"))
+	w.canManage(w.grant(owner, "B"))
+	onlyAUser := w.hubAgent("onlyA")
+	onlyAGrant := w.grant(onlyAUser, "A")
+	w.canManage(onlyAGrant)
+
+	code, resp := api.call("GET", "/groups/classification", owner, "", nil)
+	if code != 200 {
+		t.Fatalf("owner (authorized on both A and B): got %d, want 200", code)
+	}
+	items, _ := resp["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("owner: got %d items, want 2 (groupA and groupB; groupC has no wa_groups row): %v", len(items), items)
+	}
+	byGroup := map[string]map[string]any{}
+	for _, it := range items {
+		m := it.(map[string]any)
+		byGroup[m["hub_group_id"].(string)] = m
+	}
+	a, ok := byGroup[groupA.String()]
+	if !ok {
+		t.Fatalf("owner must see groupA's classification: %v", items)
+	}
+	if a["purpose"] != "client_support" || a["account_display_name"] != "InfoRR Consultoria" {
+		t.Fatalf("groupA classification: got %v, want purpose=client_support account=InfoRR Consultoria", a)
+	}
+	b, ok := byGroup[groupB.String()]
+	if !ok {
+		t.Fatalf("owner must see groupB's classification: %v", items)
+	}
+	if b["purpose"] != "supplier" {
+		t.Fatalf("groupB classification: got %v, want purpose=supplier", b)
+	}
+	if _, has := b["account_display_name"]; has && b["account_display_name"] != nil {
+		t.Fatalf("groupB has no linked account: got account_display_name=%v, want absent/null", b["account_display_name"])
+	}
+	if _, present := byGroup[groupCNoWaRow.String()]; present {
+		t.Fatalf("groupC has no matching wa_groups row yet: must be absent, not present: %v", items)
+	}
+
+	code, resp = api.call("GET", "/groups/classification", onlyAUser, "", nil)
+	if code != 200 {
+		t.Fatalf("onlyA: got %d, want 200", code)
+	}
+	items, _ = resp["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["hub_group_id"].(string) != groupA.String() {
+		t.Fatalf("onlyA (authorized only on A): must see ONLY groupA's classification, got %v", items)
+	}
+
+	// Revoke onlyA's can_manage on A mid-test: the function re-checks has_hub_manage_access LIVE, so the
+	// same call made a moment ago must now return nothing, not a cached/stale view.
+	w.exec(`UPDATE effective_access_grants SET can_manage = false WHERE id = $1`, onlyAGrant)
+	code, resp = api.call("GET", "/groups/classification", onlyAUser, "", nil)
+	if code != 200 {
+		t.Fatalf("onlyA after revoke: got %d, want 200 (empty, never an error)", code)
+	}
+	items, _ = resp["items"].([]any)
+	if len(items) != 0 {
+		t.Fatalf("onlyA after can_manage revoked on A: must see nothing, got %v", items)
 	}
 }
 
