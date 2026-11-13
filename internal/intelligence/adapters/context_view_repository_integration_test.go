@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/omnira/omnira/internal/intelligence/contextwindow"
 	"github.com/omnira/omnira/internal/intelligence/ports"
 )
 
@@ -106,6 +107,63 @@ func TestLatestForConversationKeepsEvidenceForEveryFactWhenAnAnalysisHasMultiple
 		default:
 			t.Fatalf("unexpected fact text %q", f.Text)
 		}
+	}
+}
+
+// Regression for a Codex finding (round 2, CONTEXT.2D): staleness used to compare the newest inbound message's
+// timestamp against AnalyzedLastMessageAt, which misses a message sharing the exact same created_at as the
+// analyzed one. IsConversationFullyAnalyzed checks real window membership instead — immune to that ambiguity by
+// construction, proven here with an UNANALYZED message whose created_at is set to the EXACT same instant as the
+// already-analyzed message.
+func TestIsConversationFullyAnalyzedUsesWindowMembershipNeverMessageTimestamps(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	repo := NewPostgresContextAnalysisRepository(e.app)
+	store := NewPostgresContextWindowStore(e.app)
+	policy := contextwindow.DefaultPolicy()
+
+	m1 := e.message(a.id, a.conversation, "primeira mensagem")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Force(e.ctx, a.id, a.conversation, contextwindow.TriggerManual); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.Claim(e.ctx, 1, time.Minute)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: n=%d err=%v", len(claimed), err)
+	}
+	w1 := claimed[0]
+	if _, err := sys(e, a.id, func(ctx context.Context) (uuid.UUID, error) {
+		return repo.Save(ctx, ports.AnalysisRecord{TenantID: a.id, ConversationID: a.conversation, WindowID: w1.ID, Status: "ok",
+			SummaryText: "s", AnalyzedMessageIDs: []uuid.UUID{m1}})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	agent := e.member(a.id, "tenant_agent")
+	var ok bool
+	e.session(a.id, agent, func(ctx context.Context) { ok, err = repo.IsConversationFullyAnalyzed(ctx, a.id, a.conversation) })
+	if err != nil || !ok {
+		t.Fatalf("fully analyzed once the only message's window is analyzed: ok=%v err=%v", ok, err)
+	}
+
+	// A 2nd message, created_at set to the EXACT same instant as m1 (a pure timestamp compare would read this as
+	// "not newer", hence not stale — wrong: it belongs to a brand-new, unanalyzed window).
+	var m1At time.Time
+	if err := e.seed.QueryRow(e.ctx, `SELECT created_at FROM messages WHERE id=$1`, m1).Scan(&m1At); err != nil {
+		t.Fatal(err)
+	}
+	m2 := uuid.New()
+	e.exec(`INSERT INTO messages(id,tenant_id,conversation_id,direction,message_type,body,status,created_at) VALUES($1,$2,$3,'inbound','text','segunda mensagem','received',$4)`,
+		m2, a.id, a.conversation, m1At)
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m2, m1At); err != nil {
+		t.Fatal(err)
+	}
+
+	e.session(a.id, agent, func(ctx context.Context) { ok, err = repo.IsConversationFullyAnalyzed(ctx, a.id, a.conversation) })
+	if err != nil || ok {
+		t.Fatalf("a same-timestamp, unanalyzed message must make this false: ok=%v err=%v", ok, err)
 	}
 }
 

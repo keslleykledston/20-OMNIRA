@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	aiports "github.com/omnira/omnira/internal/ai/ports"
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	"github.com/omnira/omnira/internal/intelligence/application"
 	"github.com/omnira/omnira/internal/intelligence/contextwindow"
@@ -158,6 +159,59 @@ func TestWindowAnalyzerPersistsNothingOnAProviderOrParseFailure(t *testing.T) {
 				t.Fatalf("ledger rows for %s = %d, want 1 (the call itself is always accounted)", name, n)
 			}
 		})
+	}
+}
+
+// countingGen wraps tokenGen to prove the model is called AT MOST ONCE per window, even across a simulated crash
+// recovery (Codex review round 2): a worker that dies after Save commits but before the runner's separate
+// Complete call gets the window reclaimed and re-handed to Analyze, which must recognize the existing receipt
+// instead of calling the model again (and then failing Save's UNIQUE(tenant_id, window_id)).
+type countingGen struct {
+	tokenGen
+	calls *int
+}
+
+func (g countingGen) Generate(ctx context.Context, req aiports.GenerateRequest) (aiports.GenerateResponse, error) {
+	*g.calls++
+	return g.tokenGen.Generate(ctx, req)
+}
+
+func TestWindowAnalyzerRecognizesAnAlreadyPersistedReceiptInsteadOfAnalyzingAgain(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "minha entrega não chegou")
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	calls := 0
+	gen := countingGen{tokenGen: tokenGen{out: `{"summary":"Cliente sem entrega","facts":[{"topic_alias":"NEW","kind":"need","text":"Receber a entrega","evidence":["M1"]}]}`, in: 100, outTok: 20}, calls: &calls}
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: gen, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models)
+
+	// 1st run: persists the receipt (this is the runner's Analyze call that committed, right before a simulated
+	// crash — Complete is never called here, exactly like a crash in that gap).
+	if _, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) }); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("model calls after 1st run = %d, want 1", calls)
+	}
+	if n := e.count(`SELECT count(*) FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID); n != 1 {
+		t.Fatalf("analyses = %d, want exactly 1", n)
+	}
+
+	// 2nd run: the window was reclaimed (lease expired) and handed to Analyze again, as the runner would after a
+	// crash. It must succeed WITHOUT calling the model again or erroring on the unique constraint.
+	if _, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) }); err != nil {
+		t.Fatalf("re-analyzing a window with an existing receipt must succeed (idempotent), got: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("model calls after 2nd run = %d, want still 1 (no redundant model call)", calls)
+	}
+	if n := e.count(`SELECT count(*) FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID); n != 1 {
+		t.Fatalf("analyses after 2nd run = %d, want still exactly 1 (no duplicate receipt)", n)
 	}
 }
 

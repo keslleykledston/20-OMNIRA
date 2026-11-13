@@ -69,18 +69,26 @@ func NewContextViewService(analysis ports.ContextAnalysisRepository) *ContextVie
 }
 
 func (s *ContextViewService) Get(ctx context.Context, tenantID, conversationID uuid.UUID) (ContextView, error) {
-	total, lastInboundAt, err := s.analysis.ConversationCoverage(ctx, tenantID, conversationID)
+	total, _, err := s.analysis.ConversationCoverage(ctx, tenantID, conversationID)
 	if err != nil {
 		return ContextView{}, err
 	}
 	view := ContextView{AnalysisState: "none", Coverage: ContextViewCoverage{TotalInboundMessageCount: total}}
+
+	// Message/window membership, never a timestamp compare: two messages can share a created_at, and an older
+	// message can land in a later window (out-of-order persistence) — both defeat a pure "After" check while
+	// this exact membership never does (Codex review round 2).
+	fullyAnalyzed, err := s.analysis.IsConversationFullyAnalyzed(ctx, tenantID, conversationID)
+	if err != nil {
+		return ContextView{}, err
+	}
+	view.Stale = !fullyAnalyzed
 
 	row, err := s.analysis.LatestForConversation(ctx, tenantID, conversationID)
 	if err != nil {
 		return ContextView{}, err
 	}
 	if row == nil {
-		view.Stale = total > 0 // something happened in the conversation that nothing has looked at yet
 		return view, nil
 	}
 
@@ -90,14 +98,6 @@ func (s *ContextViewService) Get(ctx context.Context, tenantID, conversationID u
 	view.UpdatedAt = &createdAt
 	view.Coverage.AnalyzedMessageCount = row.AnalyzedMessageCount
 	view.Coverage.LastAnalyzedMessageAt = row.AnalyzedLastMessageAt
-	switch {
-	case total == 0:
-		view.Stale = false
-	case row.AnalyzedLastMessageAt == nil:
-		view.Stale = true
-	default:
-		view.Stale = lastInboundAt != nil && lastInboundAt.After(*row.AnalyzedLastMessageAt)
-	}
 
 	var topicOrder []uuid.UUID
 	topics := map[uuid.UUID]*ContextViewTopic{}

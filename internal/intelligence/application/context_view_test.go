@@ -14,6 +14,7 @@ type fakeAnalysisRepo struct {
 	row                    *ports.ContextViewRow
 	total                  int
 	lastInboundAt          *time.Time
+	fullyAnalyzed          bool
 	coverageErr, latestErr error
 }
 
@@ -23,11 +24,17 @@ func (f *fakeAnalysisRepo) WindowMessages(ctx context.Context, tenantID, convers
 func (f *fakeAnalysisRepo) Save(ctx context.Context, rec ports.AnalysisRecord) (uuid.UUID, error) {
 	return uuid.Nil, nil
 }
+func (f *fakeAnalysisRepo) ExistsForWindow(ctx context.Context, tenantID, windowID uuid.UUID) (bool, error) {
+	return false, nil
+}
 func (f *fakeAnalysisRepo) LatestForConversation(ctx context.Context, tenantID, conversationID uuid.UUID) (*ports.ContextViewRow, error) {
 	return f.row, f.latestErr
 }
 func (f *fakeAnalysisRepo) ConversationCoverage(ctx context.Context, tenantID, conversationID uuid.UUID) (int, *time.Time, error) {
 	return f.total, f.lastInboundAt, f.coverageErr
+}
+func (f *fakeAnalysisRepo) IsConversationFullyAnalyzed(ctx context.Context, tenantID, conversationID uuid.UUID) (bool, error) {
+	return f.fullyAnalyzed, nil
 }
 
 var _ ports.ContextAnalysisRepository = (*fakeAnalysisRepo)(nil)
@@ -44,37 +51,40 @@ func TestContextViewNoAnalysisYetIsStaleExactlyWhenTheConversationHasMessages(t 
 	ctx := context.Background()
 	tenant, conv := uuid.New(), uuid.New()
 
-	repo := &fakeAnalysisRepo{row: nil, total: 0}
+	repo := &fakeAnalysisRepo{row: nil, total: 0, fullyAnalyzed: true}
 	v, err := NewContextViewService(repo).Get(ctx, tenant, conv)
 	if err != nil || v.AnalysisState != "none" || v.Stale {
 		t.Fatalf("empty conversation: %+v err=%v", v, err)
 	}
 
-	repo = &fakeAnalysisRepo{row: nil, total: 3}
+	repo = &fakeAnalysisRepo{row: nil, total: 3, fullyAnalyzed: false}
 	v, err = NewContextViewService(repo).Get(ctx, tenant, conv)
 	if err != nil || v.AnalysisState != "none" || !v.Stale {
 		t.Fatalf("messages but nothing analyzed: %+v err=%v", v, err)
 	}
 }
 
-func TestContextViewStalenessComparesTheNewestInboundMessageAgainstTheLatestAnalysis(t *testing.T) {
+// Staleness is message/window MEMBERSHIP (IsConversationFullyAnalyzed), never a timestamp compare: two messages
+// sharing a created_at, or an older message landing in a later window, would defeat an "After" check (Codex
+// review round 2) but never defeat exact membership.
+func TestContextViewStalenessFollowsMessageWindowMembershipNotTimestamps(t *testing.T) {
 	ctx := context.Background()
 	tenant, conv := uuid.New(), uuid.New()
 	analyzedAt := at("2026-11-13T10:00:00Z")
 
-	// fully covered: the newest inbound message is exactly what was analyzed
-	repo := &fakeAnalysisRepo{total: 5, lastInboundAt: &analyzedAt, row: &ports.ContextViewRow{Status: "ok", AnalyzedLastMessageAt: &analyzedAt}}
+	// every inbound message belongs to an analyzed window: not stale, regardless of what the timestamps say.
+	repo := &fakeAnalysisRepo{total: 5, fullyAnalyzed: true, row: &ports.ContextViewRow{Status: "ok", AnalyzedLastMessageAt: &analyzedAt}}
 	v, err := NewContextViewService(repo).Get(ctx, tenant, conv)
 	if err != nil || v.Stale {
-		t.Fatalf("fully covered must not be stale: %+v err=%v", v, err)
+		t.Fatalf("fully analyzed must not be stale: %+v err=%v", v, err)
 	}
 
-	// a newer message arrived after the analysis ran
-	newer := analyzedAt.Add(time.Minute)
-	repo = &fakeAnalysisRepo{total: 6, lastInboundAt: &newer, row: &ports.ContextViewRow{Status: "ok", AnalyzedLastMessageAt: &analyzedAt}}
+	// a message exists that is not yet covered by any analyzed window: stale, even if its timestamp happens to be
+	// older than or equal to AnalyzedLastMessageAt (out-of-order delivery, or two messages sharing a timestamp).
+	repo = &fakeAnalysisRepo{total: 6, fullyAnalyzed: false, row: &ports.ContextViewRow{Status: "ok", AnalyzedLastMessageAt: &analyzedAt}}
 	v, err = NewContextViewService(repo).Get(ctx, tenant, conv)
 	if err != nil || !v.Stale {
-		t.Fatalf("a newer message must mark the view stale: %+v err=%v", v, err)
+		t.Fatalf("an unanalyzed message must mark the view stale: %+v err=%v", v, err)
 	}
 }
 
@@ -94,7 +104,7 @@ func TestContextViewGroupsFactsByTopicAndSplitsPendingActionsFromSuggestions(t *
 			{ID: uuid.New(), TopicThreadID: topicB, TopicTitle: "Cobrança", TopicStatus: "resolved", Kind: "suggested_action", Text: "oferecer reembolso parcial", Status: "open", TruthLevel: "ai_inferred"},
 		},
 	}
-	repo := &fakeAnalysisRepo{total: 4, lastInboundAt: &createdAt, row: row}
+	repo := &fakeAnalysisRepo{total: 4, lastInboundAt: &createdAt, fullyAnalyzed: true, row: row}
 	v, err := NewContextViewService(repo).Get(ctx, tenant, conv)
 	if err != nil {
 		t.Fatalf("Get: %v", err)

@@ -1,4 +1,4 @@
-# Context Intelligence v2 — foundation through CONTEXT.2D round 1 fixes (feature not enabled)
+# Context Intelligence v2 — foundation through CONTEXT.2D round 2 fixes (feature not enabled)
 
 - Added pure adaptive 30s/120s/12-message batching policy, forced-flush events, and unit tests.
 - Added strict AI proposal parser with topic/evidence alias allowlists and no operational side effects.
@@ -25,6 +25,13 @@
   Also fixed, found while writing 2D's own test-gap coverage (not a Codex finding): a 2C test's wrong assumption
   that `tenant_agent` lacks `account.read` (migration 000073 seeds it by default), and added the Hub-delegated
   HTTP path test for `GetContextView` deferred from 2C.
+- CONTEXT.2D round 2: a second independent review found 3 more real issues (none from round 1 re-flagged), all
+  fixed: the worker could not recover idempotently from a crash between persisting an analysis and marking its
+  window complete (fixed by checking for an existing receipt before doing any work, so a reclaimed window
+  recognizes it and never calls the model again); the frontend panel never refetched after an async analysis
+  completed (fixed with a conditional poll while stale); and staleness was computed by comparing timestamps,
+  which misses a message sharing the exact same instant as the analyzed one or an older message delivered
+  out-of-order into a later window (fixed with a real message/window-membership check instead).
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.

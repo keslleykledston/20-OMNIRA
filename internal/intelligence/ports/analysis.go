@@ -89,11 +89,22 @@ type ContextAnalysisRepository interface {
 	// previous_analysis_id is resolved internally (the conversation's most recent prior analysis, if any) — the
 	// caller never needs to look it up itself.
 	Save(ctx context.Context, rec AnalysisRecord) (analysisID uuid.UUID, err error)
+	// ExistsForWindow reports whether a window already has an analysis receipt. The runner's own Complete (a
+	// separate call after Save commits) can fail to run at all if the worker crashes in between; WindowAnalyzer
+	// checks this FIRST so a window reclaimed after such a crash recognizes its already-persisted result instead
+	// of calling the model again and failing Save's UNIQUE(tenant_id, window_id) (Codex review round 2).
+	ExistsForWindow(ctx context.Context, tenantID, windowID uuid.UUID) (bool, error)
 	// LatestForConversation returns the conversation's most recent analysis and its facts, or (nil, nil) when
 	// nothing has ever been analyzed for it — never an error for "nothing yet".
 	LatestForConversation(ctx context.Context, tenantID, conversationID uuid.UUID) (*ContextViewRow, error)
 	// ConversationCoverage reports how much of the conversation's inbound traffic exists right now (count, and the
-	// newest inbound message's time) — compared by the caller against an analysis's AnalyzedMessageCount/
-	// AnalyzedLastMessageAt to decide staleness. total=0 means the conversation has no inbound message yet.
+	// newest inbound message's time) — shown in the API as coverage, but never used to decide staleness (two
+	// messages sharing one timestamp, or an older message landing in a later window, defeat a timestamp compare).
+	// total=0 means the conversation has no inbound message yet.
 	ConversationCoverage(ctx context.Context, tenantID, conversationID uuid.UUID) (total int, lastMessageAt *time.Time, err error)
+	// IsConversationFullyAnalyzed reports whether every inbound message of the conversation belongs to a window
+	// that already has an analysis receipt (any status) — real message/window membership, the staleness boundary
+	// CONTEXT.2C actually needs (Codex review round 2 flagged the timestamp-only version as missing same-timestamp
+	// and out-of-order messages). Vacuously true when the conversation has no inbound message yet.
+	IsConversationFullyAnalyzed(ctx context.Context, tenantID, conversationID uuid.UUID) (bool, error)
 }

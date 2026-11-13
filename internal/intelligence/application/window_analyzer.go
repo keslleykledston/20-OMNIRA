@@ -69,6 +69,15 @@ var _ WindowAnalyzer = (*WindowAnalyzerService)(nil)
 // context_window_analyses row; only a definitive outcome (facts extracted, or genuinely nothing to analyze) is
 // persisted, exactly like SummaryService only creates a TopicSummary row on success.
 func (s *WindowAnalyzerService) Analyze(ctx context.Context, w ports.ContextWindow) error {
+	// Crash recovery (Codex review round 2): if the worker died after Save committed but before the runner's
+	// separate Complete call, the lease expires and this window gets reclaimed and re-handed to Analyze. Without
+	// this check it would call the model again and then fail Save's UNIQUE(tenant_id, window_id) — recognize the
+	// already-persisted receipt and let the runner's Complete finish the job instead.
+	if exists, err := s.analysis.ExistsForWindow(ctx, w.TenantID, w.ID); err != nil {
+		return err
+	} else if exists {
+		return nil
+	}
 	route, err := s.models.Route(TaskContextWindowAnalyze)
 	if err != nil {
 		return nil // no model configured: CONTEXT.2B simply does not run yet, same degrade-never-fail rule as the classifier

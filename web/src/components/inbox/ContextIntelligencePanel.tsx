@@ -47,7 +47,16 @@ export default function ContextIntelligencePanel({ conversationId }: { conversat
   const [refreshError, setRefreshError] = useState('')
   const key = ['inbox-context-view', tenantId, conversationId]
 
-  const view = useQuery({ queryKey: key, queryFn: () => contextViewAPI.get(conversationId), retry: false })
+  // The analysis itself runs asynchronously in the worker (CONTEXT.2A/2B) — a 202 from refresh only means the
+  // window was forced to 'due', not that the new analysis exists yet. Poll while stale so a person who stays on
+  // the conversation sees BOTH a manual refresh and the automatic background analysis land, without polling
+  // forever once the view is caught up (Codex review round 2).
+  const view = useQuery({
+    queryKey: key,
+    queryFn: () => contextViewAPI.get(conversationId),
+    retry: false,
+    refetchInterval: (query) => (query.state.data?.stale ? 5_000 : false),
+  })
 
   const refresh = useMutation({
     mutationFn: () => contextViewAPI.refresh(conversationId),

@@ -188,3 +188,30 @@ func (r *PostgresContextAnalysisRepository) ConversationCoverage(ctx context.Con
 		tenantID, conversationID).Scan(&total, &lastAt)
 	return total, lastAt, err
 }
+
+func (r *PostgresContextAnalysisRepository) ExistsForWindow(ctx context.Context, tenantID, windowID uuid.UUID) (bool, error) {
+	var exists bool
+	err := r.q(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2)`,
+		tenantID, windowID).Scan(&exists)
+	return exists, err
+}
+
+// IsConversationFullyAnalyzed: every inbound message either has no window yet (vanishingly rare — Touch commits
+// window membership and the message in the same transaction) or belongs to a window with an analysis receipt. A
+// message belongs to exactly one window ever (migration 000176's PRIMARY KEY (tenant_id, message_id) on
+// context_analysis_window_messages), so this is exact — no timestamp comparison, no ambiguity from two messages
+// sharing a created_at or an older message landing in a later window.
+func (r *PostgresContextAnalysisRepository) IsConversationFullyAnalyzed(ctx context.Context, tenantID, conversationID uuid.UUID) (bool, error) {
+	var ok bool
+	err := r.q(ctx).QueryRow(ctx, `
+		SELECT NOT EXISTS (
+		  SELECT 1 FROM messages m
+		  WHERE m.tenant_id=$1 AND m.conversation_id=$2 AND m.direction='inbound'
+		    AND NOT EXISTS (
+		      SELECT 1 FROM context_analysis_window_messages wm
+		      JOIN context_window_analyses a ON a.tenant_id = wm.tenant_id AND a.window_id = wm.window_id
+		      WHERE wm.tenant_id = m.tenant_id AND wm.message_id = m.id
+		    )
+		)`, tenantID, conversationID).Scan(&ok)
+	return ok, err
+}
