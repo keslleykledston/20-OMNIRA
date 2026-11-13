@@ -74,6 +74,18 @@ func (s *PostgresContextWindowStore) Touch(ctx context.Context, policy contextwi
 
 func (s *PostgresContextWindowStore) touchOnce(ctx context.Context, policy contextwindow.Policy, tenantID, conversationID, messageID uuid.UUID, messageAt time.Time) error {
 	return s.system(ctx, func(ctx context.Context, q platformdb.Querier) error {
+		var exists bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM context_analysis_window_messages WHERE tenant_id=$1 AND message_id=$2)`,
+			tenantID, messageID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			// Redelivered event for a message already recorded — in this window, or in an earlier one that has
+			// since closed. A message belongs to exactly one window ever (PRIMARY KEY (tenant_id, message_id) on
+			// context_analysis_window_messages, migration 000176): skip rather than double-count it into a new
+			// window, which would analyze it twice.
+			return nil
+		}
 		var (
 			windowID        uuid.UUID
 			firstAt, lastAt time.Time
@@ -87,15 +99,17 @@ func (s *PostgresContextWindowStore) touchOnce(ctx context.Context, policy conte
 			return err
 		}
 		if err == nil {
-			// An existing open window: record membership (idempotent), then recompute due_at if this message is new.
+			// An existing open window: record membership, then recompute due_at for this new message. The
+			// ON CONFLICT is a safety net for a concurrent duplicate racing the EXISTS check above, not the
+			// expected path (that one already returned above).
 			tag, ierr := q.Exec(ctx, `
 				INSERT INTO context_analysis_window_messages (tenant_id, window_id, message_id, message_at) VALUES ($1,$2,$3,$4)
-				ON CONFLICT (tenant_id, window_id, message_id) DO NOTHING`, tenantID, windowID, messageID, messageAt)
+				ON CONFLICT (tenant_id, message_id) DO NOTHING`, tenantID, windowID, messageID, messageAt)
 			if ierr != nil {
 				return ierr
 			}
 			if tag.RowsAffected() == 0 {
-				return nil // redelivered event for a message already in this window
+				return nil // concurrent duplicate already recorded this message
 			}
 			snap := contextwindow.Snapshot{FirstAt: firstAt, LastAt: lastAt, Count: count + 1}
 			if messageAt.After(lastAt) {
@@ -136,6 +150,10 @@ func (s *PostgresContextWindowStore) touchOnce(ctx context.Context, policy conte
 			newID, tenantID, conversationID, state, messageAt, messageID, decision.DueAt); ierr != nil {
 			return ierr
 		}
+		// No ON CONFLICT here: a concurrent duplicate that races the EXISTS check above must fail with 23505 and
+		// roll back this whole transaction — including the window row just inserted — rather than leave an
+		// orphan window whose message_count says 1 but which owns zero actual window_messages rows. Touch's
+		// retry loop treats a unique violation as "retry", and the retry's EXISTS check then sees it and no-ops.
 		_, ierr := q.Exec(ctx, `INSERT INTO context_analysis_window_messages (tenant_id, window_id, message_id, message_at) VALUES ($1,$2,$3,$4)`,
 			tenantID, newID, messageID, messageAt)
 		return ierr
@@ -193,7 +211,7 @@ func (s *PostgresContextWindowStore) Claim(ctx context.Context, limit int, lease
 			WITH due AS (
 			  SELECT w.id FROM context_analysis_windows w
 			  JOIN tenants t ON t.id = w.tenant_id AND t.status = 'active'
-			  WHERE w.state = 'due' OR (w.state = 'running' AND w.locked_until < now())
+			  WHERE (w.state = 'due' AND w.due_at <= now()) OR (w.state = 'running' AND w.locked_until < now())
 			  ORDER BY w.due_at, w.created_at
 			  LIMIT $1
 			  FOR UPDATE OF w SKIP LOCKED

@@ -134,7 +134,6 @@ func (r *PostgresContextAnalysisRepository) LatestForConversation(ctx context.Co
 	if err != nil {
 		return nil, err
 	}
-	byID := map[uuid.UUID]*ports.ContextViewFact{}
 	var factIDs []uuid.UUID
 	for factRows.Next() {
 		var f ports.ContextViewFact
@@ -143,7 +142,6 @@ func (r *PostgresContextAnalysisRepository) LatestForConversation(ctx context.Co
 			return nil, err
 		}
 		row.Facts = append(row.Facts, f)
-		byID[f.ID] = &row.Facts[len(row.Facts)-1]
 		factIDs = append(factIDs, f.ID)
 	}
 	factRows.Close()
@@ -152,6 +150,12 @@ func (r *PostgresContextAnalysisRepository) LatestForConversation(ctx context.Co
 	}
 	if len(factIDs) == 0 {
 		return row, nil
+	}
+	// Built only now that row.Facts has stopped growing: appending above can reallocate the backing array, which
+	// would invalidate pointers taken during the loop.
+	byID := make(map[uuid.UUID]*ports.ContextViewFact, len(row.Facts))
+	for i := range row.Facts {
+		byID[row.Facts[i].ID] = &row.Facts[i]
 	}
 	evRows, err := q.Query(ctx, `SELECT fact_id, message_id FROM context_proposed_fact_evidence WHERE tenant_id=$1 AND fact_id = ANY($2::uuid[])`, tenantID, factIDs)
 	if err != nil {

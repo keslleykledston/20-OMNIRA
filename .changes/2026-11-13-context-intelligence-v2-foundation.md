@@ -1,4 +1,4 @@
-# Context Intelligence v2 — foundation through CONTEXT.2C (feature not enabled)
+# Context Intelligence v2 — foundation through CONTEXT.2D round 1 fixes (feature not enabled)
 
 - Added pure adaptive 30s/120s/12-message batching policy, forced-flush events, and unit tests.
 - Added strict AI proposal parser with topic/evidence alias allowlists and no operational side effects.
@@ -16,6 +16,15 @@
   an actor who also holds `account.read`. Wired into `ContextPane` as a new, collapsible "Inteligência de
   contexto" section (manual refresh button, staleness badge, read-only facts) — no operator confirm/dismiss flow
   yet (CONTEXT.2D). OpenAPI updated (`ContextView`/`ContextFact` schemas, both new operations).
+- CONTEXT.2D round 1: independent review (`codex exec review --base c394452`, the diff accumulated over 2A–2C)
+  found and this branch fixed 3 real correctness bugs: a pointer-into-growing-slice bug that silently dropped
+  evidence for earlier facts whenever an analysis had 2+ facts; `Claim` ignoring `due_at`, which defeated `Retry`'s
+  exponential backoff; and a redelivered message landing in a brand-new window once its original window had
+  already closed, double-counting and double-analyzing it (fixed by making `(tenant_id, message_id)` the real
+  primary key of `context_analysis_window_messages`, migration 000176 — edited in place, not yet merged/deployed).
+  Also fixed, found while writing 2D's own test-gap coverage (not a Codex finding): a 2C test's wrong assumption
+  that `tenant_agent` lacks `account.read` (migration 000073 seeds it by default), and added the Hub-delegated
+  HTTP path test for `GetContextView` deferred from 2C.
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.

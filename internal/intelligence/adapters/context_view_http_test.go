@@ -106,8 +106,57 @@ func TestContextViewHTTPNoneStateThenOkAfterAnAnalysisExists(t *testing.T) {
 	if len(view.EvidenceRefs) != 1 || view.EvidenceRefs[0] != msg {
 		t.Fatalf("evidence refs = %+v", view.EvidenceRefs)
 	}
+	// tenant_agent is seeded with account.read by default (migration 000073): the field must be present (even
+	// though false — this test seeded no ambiguous customer account for the topic).
+	if view.NeedsCustomerAccountSelection == nil || *view.NeedsCustomerAccountSelection {
+		t.Fatalf("an agent who holds account.read must see the field as false here, got %v", view.NeedsCustomerAccountSelection)
+	}
+
+	// A topic.read holder who does NOT hold account.read must not even see the field (redaction, not a visible
+	// disabled value) — ADR-0040's rule, re-checked live per actor rather than assumed from role name.
+	noAccounts := e.topicReaderWithoutAccountRead(a.id)
+	rec = e.call(a.id, noAccounts, http.MethodGet, "", cp, h.GetContextView)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("topic.read without account.read = %d %s", rec.Code, rec.Body.String())
+	}
+	var viewNoAccounts contextViewResponse // a fresh struct: json.Unmarshal leaves an absent field's PREVIOUS value untouched
+	decodeBody(t, rec, &viewNoAccounts)
+	if viewNoAccounts.NeedsCustomerAccountSelection != nil {
+		t.Fatalf("an actor without account.read must not even see the field, got %v", *viewNoAccounts.NeedsCustomerAccountSelection)
+	}
+}
+
+// A Hub-delegated session (ADR-0040) reaches GetContextView through the SAME handler and the SAME live permission
+// check as a plain member — ActorHasPermission routes to actor_has_permission(), which resolves a delegated
+// actor's grant via delegated_permissions() instead of memberships. The route's own Delegable("conversation.read",
+// ...) admission is covered separately by the route-registration tests; this exercises the handler's OWN
+// topic.read re-check for a delegated TenantContext that carries no membership row at all.
+func TestContextViewHTTPIsReachableThroughAHubDelegatedSessionThatHoldsTopicRead(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	h := e.contextViewHandler()
+	cp := p("conversation_id", a.conversation.String())
+
+	delegatedUser := uuid.New()
+	rec := e.callDelegated(a.id, delegatedUser, []string{"conversation.read", "topic.read"}, http.MethodGet, "", cp, h.GetContextView)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delegated with topic.read = %d %s", rec.Code, rec.Body.String())
+	}
+	var view contextViewResponse
+	decodeBody(t, rec, &view)
+	if view.AnalysisState != "none" {
+		t.Fatalf("delegated read = %+v", view)
+	}
 	if view.NeedsCustomerAccountSelection != nil {
-		t.Fatalf("an agent without account.read must not even see the field, got %v", *view.NeedsCustomerAccountSelection)
+		t.Fatalf("a delegated grant without account.read must not even see the field, got %v", *view.NeedsCustomerAccountSelection)
+	}
+
+	// The SAME delegated actor, but this Hub contract only grants conversation.read (no topic.read): the route-
+	// level Delegable admission would already have let this through in production, so the 403 below is strictly
+	// this handler's own re-check, not the outer middleware.
+	noTopicRead := e.callDelegated(a.id, delegatedUser, []string{"conversation.read"}, http.MethodGet, "", cp, h.GetContextView)
+	if noTopicRead.Code != http.StatusForbidden {
+		t.Fatalf("delegated without topic.read = %d, want 403", noTopicRead.Code)
 	}
 }
 

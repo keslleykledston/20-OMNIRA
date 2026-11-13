@@ -50,14 +50,17 @@ CREATE INDEX context_analysis_windows_claim_running_idx ON context_analysis_wind
 CREATE INDEX context_analysis_windows_conversation_idx ON context_analysis_windows (tenant_id, conversation_id, generation DESC);
 
 -- The window's membership and deterministic cursor. (message_at, message_id) orders messages even when two share
--- the exact same timestamp; PRIMARY KEY makes a redelivered "touch" for the same message a no-op (ON CONFLICT).
+-- the exact same timestamp. PRIMARY KEY is (tenant_id, message_id), not (tenant_id, window_id, message_id): a
+-- message belongs to at most one window ever, so a redelivered "touch" for a message whose window already closed
+-- must be rejected (23505) rather than silently re-inserted under a different, newer window_id — which would
+-- double-count and double-analyze that message. A same-window redelivery is still a no-op via ON CONFLICT.
 CREATE TABLE context_analysis_window_messages (
   tenant_id    UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   window_id    UUID NOT NULL,
   message_id   UUID NOT NULL,
   message_at   TIMESTAMPTZ NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_id, window_id, message_id),
+  PRIMARY KEY (tenant_id, message_id),
   FOREIGN KEY (tenant_id, window_id) REFERENCES context_analysis_windows(tenant_id, id) ON DELETE CASCADE,
   FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id) ON DELETE CASCADE
 );

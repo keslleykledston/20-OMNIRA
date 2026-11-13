@@ -109,6 +109,41 @@ func TestTouchIsIdempotentForARedeliveredMessage(t *testing.T) {
 	}
 }
 
+// Regression for a Codex finding (round 1, CONTEXT.2D): a message redelivered after its original window already
+// closed used to find no 'open' window and start a brand-new one, double-counting and later double-analyzing the
+// same message. A message belongs to exactly one window ever (PRIMARY KEY (tenant_id, message_id) on
+// context_analysis_window_messages, migration 000176).
+func TestTouchRejectsAMessageRedeliveredAfterItsOriginalWindowAlreadyClosed(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	m1 := e.message(a.id, a.conversation, "oi")
+	at := time.Now().UTC()
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, at); err != nil {
+		t.Fatal(err)
+	}
+	id1 := openWindowID(e, a.id, a.conversation)
+	if _, err := store.Force(e.ctx, a.id, a.conversation, contextwindow.TriggerManual); err != nil {
+		t.Fatal(err) // the window m1 belongs to is now 'due', not 'open'
+	}
+
+	// The same event, redelivered now that its window has closed.
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, at); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.count(`SELECT count(*) FROM context_analysis_windows WHERE tenant_id=$1 AND conversation_id=$2 AND state='open'`, a.id, a.conversation); n != 0 {
+		t.Fatalf("open windows after redelivery = %d, want 0 (no new window for an already-processed message)", n)
+	}
+	if n := e.count(`SELECT count(*) FROM context_analysis_window_messages WHERE message_id=$1`, m1); n != 1 {
+		t.Fatalf("membership rows for the redelivered message = %d, want exactly 1", n)
+	}
+	_, count, _, _ := windowRow(e, id1)
+	if count != 1 {
+		t.Fatalf("original window message_count = %d, want unchanged at 1", count)
+	}
+}
+
 func TestTouchConcurrentOpenersOfTheSameConversationNeverCreateTwoOpenWindows(t *testing.T) {
 	e := newEnv(t)
 	a := e.tenant()
@@ -292,6 +327,39 @@ func TestClaimLeasesWithSkipLockedAndRecoversAnExpiredLease(t *testing.T) {
 	}
 	if ok, err := store.Complete(e.ctx, recovered[0]); err != nil || !ok {
 		t.Fatalf("current Complete: ok=%v err=%v, want true/nil", ok, err)
+	}
+}
+
+// Regression for a Codex finding (round 1, CONTEXT.2D): Claim used to pick up every 'due' window regardless of
+// due_at, so Retry's exponential backoff was defeated by the worker's own next poll tick.
+func TestClaimHonorsRetryBackoffAndDoesNotPickUpABusyWindowEarly(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	m1 := e.message(a.id, a.conversation, "oi")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Force(e.ctx, a.id, a.conversation, contextwindow.TriggerManual); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.Claim(e.ctx, 1, time.Minute)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: n=%d err=%v", len(claimed), err)
+	}
+	const backoff = 150 * time.Millisecond
+	if ok, err := store.Retry(e.ctx, claimed[0], "transient", backoff); err != nil || !ok {
+		t.Fatalf("retry: ok=%v err=%v, want true/nil", ok, err)
+	}
+	// due_at is still in the future right after the retry: Claim must not pick it up.
+	if again, err := store.Claim(e.ctx, 10, time.Minute); err != nil || len(again) != 0 {
+		t.Fatalf("claim before backoff elapsed: n=%d err=%v, want 0/nil", len(again), err)
+	}
+	time.Sleep(backoff + 100*time.Millisecond)
+	after, err := store.Claim(e.ctx, 10, time.Minute)
+	if err != nil || len(after) != 1 {
+		t.Fatalf("claim after backoff elapsed: n=%d err=%v, want 1/nil", len(after), err)
 	}
 }
 
