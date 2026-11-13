@@ -89,10 +89,22 @@ CREATE TABLE context_proposed_fact_evidence (
   FOREIGN KEY (tenant_id, message_id) REFERENCES messages(tenant_id, id) ON DELETE CASCADE
 );
 
+-- Hub-delegated reads (ADR-0040): CONTEXT.2C's GetContextView admits a delegated actor who holds topic.read (its
+-- domain is 'ticket', migration 000108) through the live actor_has_permission() check, but that check only
+-- answers whether the KEY is held — each table's own RLS still gates the ROWS. Without a delegated policy here,
+-- has_active_membership() (false for a delegated session, which has no membership row) would hide every analysis,
+-- fact and evidence row even though the handler already said yes (Codex review round 3). Additive and permissive
+-- (OR-ed with the membership policy, never replacing it): the same delegated_tenants()/EXISTS idiom migration
+-- 000109 already uses for contacts/media, scoped to the conversation (context_window_analyses) or, one hop further,
+-- to the analysis/message it belongs to (facts/evidence) — never a bare tenant_id check, so a contract's queue
+-- scope (already enforced on conversations) still applies transitively.
 ALTER TABLE context_window_analyses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE context_window_analyses FORCE ROW LEVEL SECURITY;
 CREATE POLICY context_window_analyses_read_tenant ON context_window_analyses FOR SELECT
   USING (has_active_membership(tenant_id, current_user_id()) OR is_system_admin());
+CREATE POLICY context_window_analyses_read_delegated ON context_window_analyses FOR SELECT
+  USING (tenant_id IN (SELECT delegated_tenants('ticket', 'read'))
+         AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = context_window_analyses.conversation_id AND c.tenant_id = context_window_analyses.tenant_id));
 CREATE POLICY context_window_analyses_insert_system ON context_window_analyses FOR INSERT WITH CHECK (is_system_admin());
 CREATE POLICY context_window_analyses_update_system ON context_window_analyses FOR UPDATE USING (is_system_admin()) WITH CHECK (is_system_admin());
 CREATE POLICY context_window_analyses_delete_system ON context_window_analyses FOR DELETE USING (is_system_admin());
@@ -102,6 +114,9 @@ ALTER TABLE context_proposed_fact_evidence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE context_proposed_fact_evidence FORCE ROW LEVEL SECURITY;
 CREATE POLICY context_proposed_fact_evidence_read_tenant ON context_proposed_fact_evidence FOR SELECT
   USING (has_active_membership(tenant_id, current_user_id()) OR is_system_admin());
+CREATE POLICY context_proposed_fact_evidence_read_delegated ON context_proposed_fact_evidence FOR SELECT
+  USING (tenant_id IN (SELECT delegated_tenants('ticket', 'read'))
+         AND EXISTS (SELECT 1 FROM messages m WHERE m.id = context_proposed_fact_evidence.message_id AND m.tenant_id = context_proposed_fact_evidence.tenant_id));
 CREATE POLICY context_proposed_fact_evidence_insert_system ON context_proposed_fact_evidence FOR INSERT WITH CHECK (is_system_admin());
 CREATE POLICY context_proposed_fact_evidence_delete_system ON context_proposed_fact_evidence FOR DELETE USING (is_system_admin());
 GRANT SELECT, INSERT, DELETE ON context_proposed_fact_evidence TO omnira_app;
@@ -110,6 +125,9 @@ ALTER TABLE context_proposed_facts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE context_proposed_facts FORCE ROW LEVEL SECURITY;
 CREATE POLICY context_proposed_facts_read_tenant ON context_proposed_facts FOR SELECT
   USING (has_active_membership(tenant_id, current_user_id()) OR is_system_admin());
+CREATE POLICY context_proposed_facts_read_delegated ON context_proposed_facts FOR SELECT
+  USING (tenant_id IN (SELECT delegated_tenants('ticket', 'read'))
+         AND EXISTS (SELECT 1 FROM context_window_analyses a WHERE a.id = context_proposed_facts.analysis_id AND a.tenant_id = context_proposed_facts.tenant_id));
 CREATE POLICY context_proposed_facts_insert_system ON context_proposed_facts FOR INSERT WITH CHECK (is_system_admin());
 -- A person confirms/dismisses their own conversations' facts (topic.manage, same permission ADR-0017 already uses
 -- for organising topics); the guard trigger above stops them from changing WHAT was said or cited either way.

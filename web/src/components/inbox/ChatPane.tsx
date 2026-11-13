@@ -136,6 +136,10 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       void queryClient.invalidateQueries({ queryKey: ['inbox-messages', tenantId, conversationId] });
       void queryClient.invalidateQueries({ queryKey: ['inbox-timeline', tenantId, conversationId] });
       void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+      // CONTEXT.2C: a new message can turn a caught-up context-view stale again; ContextIntelligencePanel's own
+      // polling only runs WHILE already stale, so without this a message arriving after it caught up would never
+      // be noticed until a manual refresh or remount (Codex review round 3).
+      void queryClient.invalidateQueries({ queryKey: ['inbox-context-view', tenantId, conversationId] });
     },
   });
 

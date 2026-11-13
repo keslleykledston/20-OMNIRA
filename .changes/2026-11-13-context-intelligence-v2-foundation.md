@@ -1,4 +1,4 @@
-# Context Intelligence v2 — foundation through CONTEXT.2D round 2 fixes (feature not enabled)
+# Context Intelligence v2 — foundation through CONTEXT.2D round 3 fixes (feature not enabled)
 
 - Added pure adaptive 30s/120s/12-message batching policy, forced-flush events, and unit tests.
 - Added strict AI proposal parser with topic/evidence alias allowlists and no operational side effects.
@@ -32,6 +32,15 @@
   completed (fixed with a conditional poll while stale); and staleness was computed by comparing timestamps,
   which misses a message sharing the exact same instant as the analyzed one or an older message delivered
   out-of-order into a later window (fixed with a real message/window-membership check instead).
+- CONTEXT.2D round 3: a third independent review found 3 more real issues, none from rounds 1-2 re-flagged: the
+  new analysis tables' RLS hid every row from a Hub-delegated actor despite the handler already admitting the
+  request (fixed with additive delegated-read policies, migration 000177, mirroring the existing contacts/media
+  pattern; also switched the facts-to-topic_threads join to LEFT so a fact is never dropped for a delegated
+  actor even though topic_threads itself still lacks any delegated policy — a separate, pre-existing,
+  out-of-scope gap from ADR-0017); a summary over 200 characters could repeatedly fail topic creation and
+  dead-letter the window (fixed by bounding the generated title); and the frontend panel stopped polling for
+  good once caught up, missing later messages (fixed by invalidating its query on the same realtime event that
+  already refreshes messages/timeline).
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.

@@ -127,9 +127,14 @@ func (r *PostgresContextAnalysisRepository) LatestForConversation(ctx context.Co
 	if err != nil {
 		return nil, err
 	}
+	// LEFT JOIN, not INNER: topic_threads has no Hub-delegated read policy yet (pre-existing gap, ADR-0017/migration
+	// 000063 — out of scope here), so an INNER JOIN would silently drop every fact of a delegated actor's own
+	// tenant the moment topic_threads' RLS hides the topic row. A LEFT JOIN still returns the fact — with an
+	// empty title/status instead of vanishing — which is the correct degradation (no cross-tenant data, just a
+	// missing decoration) until that upstream gap is closed.
 	factRows, err := q.Query(ctx, `
-		SELECT f.id, f.topic_thread_id, t.title, t.status, f.kind, f.text, f.truth_level, f.status, f.created_at
-		FROM context_proposed_facts f JOIN topic_threads t ON t.tenant_id = f.tenant_id AND t.id = f.topic_thread_id
+		SELECT f.id, f.topic_thread_id, COALESCE(t.title, ''), COALESCE(t.status, ''), f.kind, f.text, f.truth_level, f.status, f.created_at
+		FROM context_proposed_facts f LEFT JOIN topic_threads t ON t.tenant_id = f.tenant_id AND t.id = f.topic_thread_id
 		WHERE f.tenant_id=$1 AND f.analysis_id=$2 ORDER BY f.created_at ASC`, tenantID, row.AnalysisID)
 	if err != nil {
 		return nil, err

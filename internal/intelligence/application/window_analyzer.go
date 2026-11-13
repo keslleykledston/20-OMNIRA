@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -188,10 +190,22 @@ func (s *WindowAnalyzerService) Analyze(ctx context.Context, w ports.ContextWind
 	return err
 }
 
+// boundedTitle cuts s to at most maxRunes runes (never a byte-boundary split) and trims the cut edge — the
+// summary/fact text a valid model response can return is bounded far looser (contextdelta allows up to 2,000
+// characters) than domain.MaxTitleRunes accepts for a topic title (Codex review round 3).
+func boundedTitle(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	r := []rune(s)
+	return strings.TrimSpace(string(r[:maxRunes]))
+}
+
 func (s *WindowAnalyzerService) createTopicForNewFact(ctx context.Context, tenantID, conversationID uuid.UUID, summary, factText string) (uuid.UUID, error) {
-	title := domain.SanitizeDerivedText(summary)
+	title := boundedTitle(domain.SanitizeDerivedText(summary), domain.MaxTitleRunes)
 	if title == "" {
-		title = domain.SanitizeDerivedText(factText)
+		title = boundedTitle(domain.SanitizeDerivedText(factText), domain.MaxTitleRunes)
 	}
 	t, err := domain.NewTopicThread(tenantID, title, domain.SourceAI, s.now().UTC())
 	if err != nil {

@@ -151,6 +151,44 @@ func TestContextViewHTTPIsReachableThroughAHubDelegatedSessionThatHoldsTopicRead
 		t.Fatalf("a delegated grant without account.read must not even see the field, got %v", *view.NeedsCustomerAccountSelection)
 	}
 
+	// Regression for a Codex finding (round 3, CONTEXT.2D): the handler's own permission re-check passing is not
+	// enough — context_window_analyses/context_proposed_facts/context_proposed_fact_evidence each have their OWN
+	// RLS, which used to hide every row from a delegated session (has_active_membership() is false for one). Now
+	// that a persisted analysis exists, the SAME delegated actor must actually see it, not just an empty "none".
+	msg := e.message(a.id, a.conversation, "quando chega minha entrega?")
+	topicID := e.topic(a.id, "Entrega")
+	win := e.contextWindow(a.id, a.conversation)
+	analysisRepo := NewPostgresContextAnalysisRepository(e.app)
+	if _, err := sys(e, a.id, func(ctx context.Context) (uuid.UUID, error) {
+		return analysisRepo.Save(ctx, ports.AnalysisRecord{
+			TenantID: a.id, ConversationID: a.conversation, WindowID: win, Status: "ok", SummaryText: "cliente perguntou sobre a entrega",
+			AnalyzedMessageIDs: []uuid.UUID{msg},
+			Facts:              []ports.ResolvedFact{{TopicThreadID: topicID, Kind: "need", Text: "saber previsão de entrega", EvidenceMessageIDs: []uuid.UUID{msg}}},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec = e.callDelegated(a.id, delegatedUser, []string{"conversation.read", "topic.read"}, http.MethodGet, "", cp, h.GetContextView)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delegated read after an analysis exists = %d %s", rec.Code, rec.Body.String())
+	}
+	decodeBody(t, rec, &view)
+	if view.AnalysisState != "ok" || view.Summary == "" {
+		t.Fatalf("delegated actor must see the persisted analysis, got: %+v", view)
+	}
+	if len(view.PendingActions) != 1 || view.PendingActions[0].Kind != "need" {
+		t.Fatalf("delegated actor must see the fact itself (topic_thread_id is a plain column, not RLS-gated): %+v", view.PendingActions)
+	}
+	if len(view.EvidenceRefs) != 1 || view.EvidenceRefs[0] != msg {
+		t.Fatalf("delegated actor must see the evidence: %+v", view.EvidenceRefs)
+	}
+	// Known, pre-existing, out-of-scope gap (ADR-0017/migration 000063): topic_threads itself has no delegated
+	// read policy, so the topic's title/status show up empty for a delegated actor until that is fixed — the fact
+	// is never dropped (LEFT JOIN), only its decoration is missing.
+	if len(view.Topics) != 1 || view.Topics[0].TopicID != topicID || view.Topics[0].Title != "" {
+		t.Fatalf("delegated topic decoration = %+v, want empty title (topic_threads RLS gap) but the fact present", view.Topics)
+	}
+
 	// The SAME delegated actor, but this Hub contract only grants conversation.read (no topic.read): the route-
 	// level Delegable admission would already have let this through in production, so the 403 below is strictly
 	// this handler's own re-check, not the outer middleware.

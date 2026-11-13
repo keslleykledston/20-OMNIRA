@@ -2,6 +2,8 @@ package adapters
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +97,39 @@ func TestWindowAnalyzerCreatesANewTopicLinksEvidenceAndAccountsUsage(t *testing.
 	}
 	if !ok || in != 300 || out != 60 {
 		t.Fatalf("ledger: ok=%v in=%d out=%d", ok, in, out)
+	}
+}
+
+// Regression for a Codex finding (round 3, CONTEXT.2D): contextdelta.Parse accepts a summary up to 2,000
+// characters (and the prompt asks for up to two sentences), but domain.NewTopicThread rejects a title over
+// domain.MaxTitleRunes (200) — a valid, otherwise-unremarkable model response could repeatedly fail Save and
+// eventually dead-letter the window. The title must be bounded before NewTopicThread ever sees it.
+func TestWindowAnalyzerBoundsALongSummaryBeforeUsingItAsATopicTitle(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "quero saber sobre o atraso da minha encomenda")
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	longSummary := strings.Repeat("Cliente relata atraso recorrente na entrega e pede atualização urgente do status do pedido. ", 5) // ~470 runes, well under the parser's 2000-char cap but over the 200-rune title limit
+	gen := tokenGen{out: fmt.Sprintf(`{"summary":%q,"facts":[{"topic_alias":"NEW","kind":"need","text":"Cliente quer status do pedido","evidence":["M1"]}]}`, longSummary), in: 200, outTok: 80}
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: gen, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models)
+
+	if _, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) }); err != nil {
+		t.Fatalf("a long but otherwise valid summary must not fail the window: %v", err)
+	}
+	var title string
+	if err := e.seed.QueryRow(e.ctx, `SELECT title FROM topic_threads WHERE tenant_id=$1`, a.id).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if n := len([]rune(title)); n == 0 || n > 200 {
+		t.Fatalf("title rune length = %d, want 1..200", n)
+	}
+	if n := e.count(`SELECT count(*) FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2 AND status='ok'`, a.id, w.ID); n != 1 {
+		t.Fatalf("analyses = %d, want exactly 1 ok", n)
 	}
 }
 
