@@ -160,17 +160,29 @@ func (s *PostgresContextWindowStore) touchOnce(ctx context.Context, policy conte
 	})
 }
 
+func (s *PostgresContextWindowStore) forceWith(ctx context.Context, q platformdb.Querier, tenantID, conversationID uuid.UUID, trigger contextwindow.Trigger) (bool, error) {
+	var forced bool
+	err := q.QueryRow(ctx, `SELECT force_context_window($1, $2, $3)`, tenantID, conversationID, string(trigger)).Scan(&forced)
+	return forced, err
+}
+
+// Force reuses the caller's OWN session/connection when one is already active on ctx — its real caller, the
+// manual-refresh HTTP handler, runs inside the REQUEST's own (member-level) WithTenantSession. Force used to
+// unconditionally open its own system session on top of that, a second nested pool connection that could stall
+// every refresh on a small pool and exhaust a larger one under concurrent refreshes (Codex review round 8, the
+// same class of bug as MessageIDs/round 4). force_context_window (migration 000176) is SECURITY DEFINER, so it
+// can perform the privileged UPDATE on the caller's own connection regardless of that session's own privilege
+// level — no escalation needed, no second connection. Only a standalone caller with no session of its own (a
+// direct test call, or a future system-session caller) falls back to the self-contained system session.
 func (s *PostgresContextWindowStore) Force(ctx context.Context, tenantID, conversationID uuid.UUID, trigger contextwindow.Trigger) (bool, error) {
+	if q := platformdb.QuerierFromContext(ctx, nil); q != nil {
+		return s.forceWith(ctx, q, tenantID, conversationID, trigger)
+	}
 	var forced bool
 	err := s.system(ctx, func(ctx context.Context, q platformdb.Querier) error {
-		tag, err := q.Exec(ctx, `
-			UPDATE context_analysis_windows SET state='due', due_at=now(), trigger=$3, updated_at=now()
-			WHERE tenant_id=$1 AND conversation_id=$2 AND state='open'`, tenantID, conversationID, string(trigger))
-		if err != nil {
-			return err
-		}
-		forced = tag.RowsAffected() == 1
-		return nil
+		f, ferr := s.forceWith(ctx, q, tenantID, conversationID, trigger)
+		forced = f
+		return ferr
 	})
 	return forced, err
 }

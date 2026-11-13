@@ -259,6 +259,38 @@ func TestForceClosesTheOpenWindowImmediatelyAndIsANoOpWithoutOne(t *testing.T) {
 	}
 }
 
+// Regression for a Codex finding (round 8, CONTEXT.2D): Force's real caller, the manual-refresh HTTP handler,
+// runs inside the REQUEST's own member-level session (no system privilege at all) — Force used to unconditionally
+// open ANOTHER, system-level session on top of it, a second nested pool connection that could stall every
+// refresh on a small pool. force_context_window (migration 000176) is SECURITY DEFINER, so calling it through
+// the member session's OWN connection still succeeds — proving no escalation, and no second connection, is
+// needed.
+func TestForceSucceedsThroughAnAlreadyActiveMemberSessionWithNoSystemPrivilege(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	m1 := e.message(a.id, a.conversation, "oi")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	id := openWindowID(e, a.id, a.conversation)
+
+	agent := e.member(a.id, "tenant_agent")
+	var forced bool
+	var err error
+	e.session(a.id, agent, func(ctx context.Context) {
+		forced, err = store.Force(ctx, a.id, a.conversation, contextwindow.TriggerManual)
+	})
+	if err != nil || !forced {
+		t.Fatalf("force through a member session: forced=%v err=%v, want true/nil", forced, err)
+	}
+	state, _, _, trig := windowRow(e, id)
+	if state != "due" || trig == nil || *trig != "manual" {
+		t.Fatalf("after force: state=%s trigger=%v, want due/manual", state, trig)
+	}
+}
+
 func TestSweepClosesOnlyWindowsPastTheirDueAtAndIsIdempotent(t *testing.T) {
 	e := newEnv(t)
 	a := e.tenant()

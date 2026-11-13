@@ -425,6 +425,38 @@ func TestWindowAnalyzerDoesNotWaitForVisionWhenTheTenantNeverOptedIn(t *testing.
 	}
 }
 
+// Regression for a Codex finding (round 8, CONTEXT.2D): VisionProcessor's EnqueueVision only enqueues files
+// created within its own Lookback (7 days by default) — an older, still-unanalyzed image reaching window
+// processing late (a backlog, an outage) was NEVER going to get a receipt either way, so waiting for it (and
+// retrying the whole window, including its good text, until dead) was wrong even with vision enabled and the
+// tenant opted in.
+func TestWindowAnalyzerDoesNotWaitForAnImageOlderThanTheVisionLookback(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	e.exec(`INSERT INTO tenant_ai_integrations (tenant_id, provider, enabled, secret_ciphertext, consent_at) VALUES ($1,'gemini',true,'\x00','1970-01-01'::timestamptz)`, a.id)
+	m1 := e.message(a.id, a.conversation, "")
+	e.exec(`INSERT INTO message_media (id,tenant_id,message_id,status,kind,mime,created_at) VALUES ($1,$2,$3,'clean','image','image/png', now() - interval '30 days')`,
+		uuid.New(), a.id, m1)
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: tokenGen{out: `{"summary":"","facts":[]}`}, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models) // default pipelines: both live, DefaultVisionLookback (7 days)
+
+	if _, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) }); err != nil {
+		t.Fatalf("an image older than the vision lookback must not block the window forever: %v", err)
+	}
+	var status string
+	if err := e.seed.QueryRow(e.ctx, `SELECT status FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "empty" {
+		t.Fatalf("status = %q, want empty", status)
+	}
+}
+
 // Regression for a Codex finding (round 7, CONTEXT.2D): HasPendingMediaAnalysis itself must not wait for either
 // pipeline when the analyzer is told it is not actually running — a deployment with no Whisper engine configured
 // (OMNIRA_WHISPER_URL empty) must not retry a window forever over an audio file still being scanned.

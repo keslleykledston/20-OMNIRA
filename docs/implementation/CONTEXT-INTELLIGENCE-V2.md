@@ -118,6 +118,15 @@ Nenhuma migration nesta rodada. Suíte completa do pacote reverificada, mesma fa
 
 Suíte completa do pacote reverificada, mesma falha de performance pré-existente e não relacionada.
 
+### CONTEXT.2D — Revisão independente (Codex), rodada 8 (2026-11-13)
+
+`codex exec review --base c394452` encontrou mais 2 achados [P2], nenhum das sete rodadas anteriores foi re-levantado:
+
+- **O refresh manual também esgotava conexão aninhada do pool** (`context_window_store.go`, `Force`): o atualizador manual (`POST .../context-analysis/refresh`) roda DENTRO da sessão da própria requisição HTTP (membro comum, sem privilégio de sistema) — `Force` abria incondicionalmente sua própria sessão de sistema por cima, uma segunda conexão aninhada que pode travar todo refresh num pool pequeno e esgotar um maior sob refreshes concorrentes (mesma classe de bug do `MessageIDs`, rodada 4, mas aqui a escrita genuinamente precisa de privilégio elevado — `context_analysis_windows` só aceita `UPDATE` de `is_system_admin()`). Corrigido com o idioma já usado em `lock_served_tenant`/`actor_has_permission`: nova função `force_context_window` (migration 000176), `SECURITY DEFINER` — roda com o privilégio do dono da função (que ignora o RLS desta tabela, como todas as outras funções de migration), na MESMA conexão que o chamador já tem aberta, sem escalar nem abrir uma segunda. A fronteira de autorização não muda: continua inteiramente no handler HTTP (`topic.manage` + ser o atendente), como já era. Teste de regressão: `TestForceSucceedsThroughAnAlreadyActiveMemberSessionWithNoSystemPrivilege` (chama `Force` dentro de uma sessão de membro comum, sem qualquer privilégio de sistema).
+- **A checagem de mídia pendente ignorava o `Lookback` da visão** (`analysis_repository.go`, `HasPendingMediaAnalysis`): `EnqueueVision` só enfileira arquivo criado dentro do seu `Lookback` (7 dias por padrão) — uma imagem mais antiga, chegando atrasada ao processamento de janela (um backlog, uma indisponibilidade), nunca ganharia linha de análise mesmo com visão ligada e o tenant com opt-in, e a janela (com todo o texto bom ao lado) tentaria de novo até morrer. Corrigido: `ports.MediaPipelines` ganhou `VisionLookback` (replica o padrão de 7 dias do `VisionProcessor`, mesma fonte da verdade); a checagem de "limpo, ainda não enfileirado" agora também exige `mm.created_at` dentro desse prazo. Teste de regressão: `TestWindowAnalyzerDoesNotWaitForAnImageOlderThanTheVisionLookback`.
+
+Migração 000176 (nova função `SECURITY DEFINER`) e 000177 round-trip `up/down/up` reverificados idênticos. Suíte completa do pacote reverificada, mesma falha de performance pré-existente e não relacionada.
+
 **Não implementado ainda (geral):** fluxo de confirmação de compromissos pelo operador; evidência clicável; E2E; call-sites reais de `Force` para handoff/claim/finalize. A flag `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` segue `false` em todo lugar — nenhuma flag foi ligada em produção.
 
 ## 3. Próximas fatias verticais necessárias antes de liberar

@@ -72,8 +72,8 @@ func (r *PostgresContextAnalysisRepository) WindowMessages(ctx context.Context, 
 	return out, nil
 }
 
-// HasPendingMediaAnalysis covers three gaps a pure message_media_analysis='pending' check would miss (Codex
-// review rounds 6 and 7):
+// HasPendingMediaAnalysis covers four gaps a pure message_media_analysis='pending' check would miss (Codex review
+// rounds 6, 7 and 8):
 //   - a message_media row still being virus-scanned (status pending/quarantined, any kind) has NEITHER a
 //     transcript NOR a description/document_text row yet — its outcome (clean vs.
 //     infected/rejected/source_gone/failed) is simply not known yet;
@@ -84,10 +84,19 @@ func (r *PostgresContextAnalysisRepository) WindowMessages(ctx context.Context, 
 //     needs OMNIRA_MULTIMODAL_ANALYSIS_ENABLED on AND the tenant opted in via tenant_ai_integrations, and
 //     EnqueueVision also skips an already-purged file; transcription needs OMNIRA_WHISPER_URL configured. Without
 //     checking `pipelines`, a tenant that never turned vision on would retry (and eventually dead-letter) every
-//     window containing an image, even one with perfectly good text alongside it.
+//     window containing an image, even one with perfectly good text alongside it;
+//   - NOR is it worth waiting for a file EnqueueVision's own `newerThan` cutoff already excludes: it only
+//     enqueues files created within `pipelines.VisionLookback` of now (its own `Lookback`, 7 days by default).
+//     A message reaching window processing late (a backlog, an outage) with an older, still-unanalyzed image
+//     would otherwise retry — and the whole window along with it — until dead, since that image was NEVER going
+//     to get a receipt either way.
 func (r *PostgresContextAnalysisRepository) HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID, pipelines ports.MediaPipelines) (bool, error) {
 	if len(messageIDs) == 0 {
 		return false, nil
+	}
+	lookback := pipelines.VisionLookback
+	if lookback <= 0 {
+		lookback = ports.DefaultVisionLookback
 	}
 	var pending bool
 	err := r.q(ctx).QueryRow(ctx, `
@@ -100,12 +109,13 @@ func (r *PostgresContextAnalysisRepository) HasPendingMediaAnalysis(ctx context.
 		             ($3 AND mm.kind = 'audio' AND mm.status IN ('pending', 'quarantined'))
 		             OR ($4 AND mm.mime IN ('image/jpeg', 'image/png', 'image/webp', 'application/pdf')
 		                 AND mm.status IN ('pending', 'quarantined', 'clean')
+		                 AND mm.created_at >= now() - make_interval(secs => $5::float8)
 		                 AND EXISTS (SELECT 1 FROM tenant_ai_integrations ti WHERE ti.tenant_id = mm.tenant_id AND ti.provider = 'gemini' AND ti.enabled)
 		                 AND NOT EXISTS (SELECT 1 FROM message_media_analysis a WHERE a.tenant_id = mm.tenant_id AND a.message_id = mm.message_id
 		                                 AND a.kind IN ('description', 'document_text')))
 		           )
 		       )`,
-		tenantID, messageIDs, pipelines.TranscriptionEnabled, pipelines.VisionEnabled).Scan(&pending)
+		tenantID, messageIDs, pipelines.TranscriptionEnabled, pipelines.VisionEnabled, lookback.Seconds()).Scan(&pending)
 	return pending, err
 }
 

@@ -1,4 +1,4 @@
-# Context Intelligence v2 — foundation through CONTEXT.2D round 7 fixes (feature not enabled)
+# Context Intelligence v2 — foundation through CONTEXT.2D round 8 fixes (feature not enabled)
 
 - Added pure adaptive 30s/120s/12-message batching policy, forced-flush events, and unit tests.
 - Added strict AI proposal parser with topic/evidence alias allowlists and no operational side effects.
@@ -72,6 +72,14 @@
   analyzer is told is actually live (WithMediaPipelines, defaulting to "both live" unless configured, matching
   main.go's own OMNIRA_WHISPER_URL/OMNIRA_MULTIMODAL_ANALYSIS_ENABLED flags). And a non-empty caption on an
   image/PDF/audio made the window permanently discard the completed media analysis instead of combining both.
+- CONTEXT.2D round 8: an eighth independent review found 2 more P2 issues. The manual-refresh HTTP handler runs
+  inside the request's own member-level session, and Force unconditionally opened a second, system-level nested
+  session on top of it to perform its privileged UPDATE — fixed with a new SECURITY DEFINER database function
+  (force_context_window, same idiom as lock_served_tenant/actor_has_permission) that performs the write on the
+  caller's own already-open connection, needing no escalation and no second connection. And the pending-media
+  check didn't account for VisionProcessor's own enqueue lookback (7 days by default) — an older image reaching
+  window processing late (a backlog, an outage) was never going to get an analysis row either way, so waiting for
+  it (and retrying the whole window) was wrong even with vision enabled and the tenant opted in.
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.

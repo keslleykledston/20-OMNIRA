@@ -28,11 +28,20 @@ type WindowMessageRow struct {
 type MediaPipelines struct {
 	TranscriptionEnabled bool
 	VisionEnabled        bool
+	// VisionLookback must match VisionProcessor.Lookback (7 days by default, internal/media/application/vision.go):
+	// EnqueueVision only enqueues files created within this window, so a clean, unanalyzed image/PDF older than
+	// it will NEVER get a receipt no matter how long a window waits (Codex review round 8). Zero means "use the
+	// same 7-day default VisionProcessor itself uses unless main.go configures otherwise" (see AllMediaPipelinesLive).
+	VisionLookback time.Duration
 }
 
-// AllMediaPipelinesLive is MediaPipelines{true, true} — the pre-round-7 assumption, for a caller with no real
-// flag to pass (tests, or any session with no worker config in reach). NOT the type's zero value.
-var AllMediaPipelinesLive = MediaPipelines{TranscriptionEnabled: true, VisionEnabled: true}
+// DefaultVisionLookback mirrors VisionProcessor's own default (internal/media/application/vision.go) — the two
+// must stay in sync, or HasPendingMediaAnalysis waits for files EnqueueVision itself would already have given up on.
+const DefaultVisionLookback = 7 * 24 * time.Hour
+
+// AllMediaPipelinesLive is MediaPipelines{true, true, DefaultVisionLookback} — the pre-round-7 assumption, for a
+// caller with no real flag to pass (tests, or any session with no worker config in reach). NOT the type's zero value.
+var AllMediaPipelinesLive = MediaPipelines{TranscriptionEnabled: true, VisionEnabled: true, VisionLookback: DefaultVisionLookback}
 
 // ResolvedFact is one contextdelta.Fact after its topic_alias was validated against the offered candidates and its
 // evidence aliases resolved to real message ids — by the caller, never by this package. TopicThreadID is always a

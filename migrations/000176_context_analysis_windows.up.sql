@@ -94,3 +94,26 @@ CREATE POLICY context_analysis_windows_read_delegated ON context_analysis_window
 CREATE POLICY context_analysis_window_messages_read_delegated ON context_analysis_window_messages FOR SELECT
   USING (tenant_id IN (SELECT delegated_tenants('ticket', 'read'))
          AND EXISTS (SELECT 1 FROM messages m WHERE m.id = context_analysis_window_messages.message_id AND m.tenant_id = context_analysis_window_messages.tenant_id));
+
+-- force_context_window: the ONLY way a plain member session (ADR-0040's manual refresh, POST .../context-analysis/
+-- refresh) ever moves a window — this table's UPDATE policy is otherwise system-admin only (no human writes these
+-- rows directly). SECURITY DEFINER, same idiom as lock_served_tenant/actor_has_permission: runs with the function
+-- owner's privileges (which bypasses this table's RLS, same as every migration-created function here), on the
+-- CALLER's own already-open connection — never a second, nested platformdb.WithTenantSession/system() session.
+-- Before this, PostgresContextWindowStore.Force unconditionally opened its own system session even when called
+-- from INSIDE the HTTP request's own session (the refresh handler's WithTenantSession), which could stall every
+-- refresh on a small pool and exhaust a larger one under concurrent refreshes (Codex review round 8). The
+-- authorization boundary is unchanged — it was already, and remains, entirely the HTTP handler's own gate
+-- (topic.manage + being the attendant) before Refresh/Force is ever called; this function adds no checks of its
+-- own, same as the UPDATE it replaces never had any beyond is_system_admin().
+CREATE OR REPLACE FUNCTION force_context_window(p_tenant_id UUID, p_conversation_id UUID, p_trigger TEXT) RETURNS BOOLEAN AS $$
+DECLARE v_forced BOOLEAN;
+BEGIN
+  UPDATE context_analysis_windows SET state='due', due_at=now(), trigger=p_trigger, updated_at=now()
+  WHERE tenant_id = p_tenant_id AND conversation_id = p_conversation_id AND state='open';
+  v_forced := FOUND;
+  RETURN v_forced;
+END;
+$$ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+REVOKE EXECUTE ON FUNCTION force_context_window(UUID, UUID, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION force_context_window(UUID, UUID, TEXT) TO omnira_app;
