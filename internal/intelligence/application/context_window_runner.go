@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/omnira/omnira/internal/aiusage"
 	"github.com/omnira/omnira/internal/intelligence/contextwindow"
 	"github.com/omnira/omnira/internal/intelligence/ports"
 )
@@ -50,11 +51,12 @@ func DefaultContextWindowRunnerConfig() ContextWindowRunnerConfig {
 // ContextWindowRunner sweeps idle/max-age windows to 'due', then claims and analyzes due windows. Any number of
 // runners may run at once (both steps use SKIP LOCKED); a crashed one is recovered when its lease expires.
 type ContextWindowRunner struct {
-	store    ports.ContextWindowStore
-	analyzer WindowAnalyzer
-	session  TenantSession
-	cfg      ContextWindowRunnerConfig
-	metrics  JobMetrics
+	store      ports.ContextWindowStore
+	analyzer   WindowAnalyzer
+	session    TenantSession
+	cfg        ContextWindowRunnerConfig
+	metrics    JobMetrics
+	usageFlush func(ctx context.Context, items []aiusage.Record) error
 }
 
 func NewContextWindowRunner(store ports.ContextWindowStore, analyzer WindowAnalyzer, session TenantSession, cfg ContextWindowRunnerConfig, m JobMetrics) *ContextWindowRunner {
@@ -62,6 +64,16 @@ func NewContextWindowRunner(store ports.ContextWindowStore, analyzer WindowAnaly
 		m = noJobMetrics{}
 	}
 	return &ContextWindowRunner{store: store, analyzer: analyzer, session: session, cfg: cfg, metrics: m}
+}
+
+// WithUsageFlush makes the runner collect WindowAnalyzerService's AI-usage ledger writes on ctx (via
+// WithPendingUsage) instead of letting them open their own nested session per analysis, and perform flush ITSELF
+// right after releasing the window's own session — a fresh, independently acquired connection, never nested
+// inside another one (Codex review round 5). Optional: a runner without this still works exactly as before
+// (WindowAnalyzerService.WithLedger's direct-write path), just without the pool-exhaustion protection.
+func (r *ContextWindowRunner) WithUsageFlush(flush func(ctx context.Context, items []aiusage.Record) error) *ContextWindowRunner {
+	r.usageFlush = flush
+	return r
 }
 
 func (r *ContextWindowRunner) Run(ctx context.Context, every time.Duration) {
@@ -104,6 +116,12 @@ func (r *ContextWindowRunner) ProcessOnce(ctx context.Context) (int, error) {
 
 func (r *ContextWindowRunner) handle(ctx context.Context, w ports.ContextWindow) {
 	var err error
+	sessionCtx := ctx
+	var pending *PendingUsage
+	if r.usageFlush != nil {
+		pending = &PendingUsage{}
+		sessionCtx = WithPendingUsage(ctx, pending)
+	}
 	func() {
 		defer func() {
 			if rec := recover(); rec != nil { // a panic on one window must not take the worker down
@@ -111,8 +129,17 @@ func (r *ContextWindowRunner) handle(ctx context.Context, w ports.ContextWindow)
 				err = ErrWindowPermanent
 			}
 		}()
-		err = r.session(ctx, w.TenantID, func(scoped context.Context) error { return r.analyzer.Analyze(scoped, w) })
+		err = r.session(sessionCtx, w.TenantID, func(scoped context.Context) error { return r.analyzer.Analyze(scoped, w) })
 	}()
+	// Outside r.session now: its connection is released. Only here is it safe to let WindowAnalyzerService's
+	// collected ledger writes open their OWN connection without risking the nested-acquisition deadlock.
+	if pending != nil {
+		if items := pending.Drain(); len(items) > 0 {
+			if ferr := r.usageFlush(ctx, items); ferr != nil {
+				log.Printf("context window: cannot record AI usage for %s after releasing its session: %v", w.ID, ferr)
+			}
+		}
+	}
 	switch {
 	case err == nil:
 		if ok, e := r.store.Complete(ctx, w); e != nil {

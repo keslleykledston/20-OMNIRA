@@ -1,4 +1,4 @@
-# Context Intelligence v2 — foundation through CONTEXT.2D round 4 fixes (feature not enabled)
+# Context Intelligence v2 — foundation through CONTEXT.2D round 5 fixes (feature not enabled)
 
 - Added pure adaptive 30s/120s/12-message batching policy, forced-flush events, and unit tests.
 - Added strict AI proposal parser with topic/evidence alias allowlists and no operational side effects.
@@ -48,6 +48,16 @@
   being saved as a permanently "empty" receipt before its transcript/description finished, so that content would
   never actually be analyzed (fixed by retrying instead of completing while any message's media analysis is
   still pending).
+- CONTEXT.2D round 5: a fifth independent review found 3 more issues. The AI-usage ledger write inside the window
+  analyzer had the SAME nested-connection risk round 4 fixed for MessageIDs (a pre-existing pattern also present,
+  unfixed, in 4 other already-shipped intelligence features — out of scope to fix there; fixed here only, via a
+  per-window pending-usage collector the runner flushes after releasing its own session). A window mixing a text
+  message with a still-pending media message skipped the pending-media check entirely (round 4 only checked when
+  a window had zero usable text) and could permanently omit that media once finalized — fixed by checking for
+  the whole window up front. And context_analysis_windows/context_analysis_window_messages (migration 000176)
+  had the same delegated-read RLS gap round 3 fixed for the analysis tables (migration 000177), making a fully
+  analyzed conversation read as permanently stale for a Hub-delegated actor — fixed with the same additive
+  policies.
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.

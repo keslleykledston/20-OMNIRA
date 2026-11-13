@@ -81,3 +81,16 @@ BEGIN
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO omnira_app', t);
   END LOOP;
 END $$;
+
+-- Hub-delegated reads (ADR-0040): CONTEXT.2C's IsConversationFullyAnalyzed (migration 000177) joins THIS table to
+-- answer staleness, and without a delegated policy here it always finds zero rows for a delegated actor — who
+-- then reads as permanently "stale" no matter how caught up the conversation actually is, even though the
+-- analyses themselves (000177) are already correctly readable (Codex review round 5). Additive and permissive,
+-- same delegated_tenants()/EXISTS idiom as 000109/000177, scoped to the conversation (context_analysis_windows)
+-- or, one hop further, the message it belongs to (context_analysis_window_messages).
+CREATE POLICY context_analysis_windows_read_delegated ON context_analysis_windows FOR SELECT
+  USING (tenant_id IN (SELECT delegated_tenants('ticket', 'read'))
+         AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = context_analysis_windows.conversation_id AND c.tenant_id = context_analysis_windows.tenant_id));
+CREATE POLICY context_analysis_window_messages_read_delegated ON context_analysis_window_messages FOR SELECT
+  USING (tenant_id IN (SELECT delegated_tenants('ticket', 'read'))
+         AND EXISTS (SELECT 1 FROM messages m WHERE m.id = context_analysis_window_messages.message_id AND m.tenant_id = context_analysis_window_messages.tenant_id));

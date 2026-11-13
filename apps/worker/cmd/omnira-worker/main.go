@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"github.com/omnira/omnira/internal/aiusage"
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
@@ -539,10 +540,22 @@ func main() {
 			})
 		}
 		windowModels := intelligenceadapters.NewModelRouterFromConfig(cfg)
+		windowLedger := aiusageadapters.NewPostgresLedger(dbPool)
 		windowAnalyzer := intelligenceapp.NewWindowAnalyzerService(windowStore, intelligenceadapters.NewPostgresContextAnalysisRepository(dbPool),
 			intelligenceadapters.NewPostgresTopicRepository(dbPool), intelligenceadapters.NewPostgresSummaryRepository(dbPool),
-			windowModels).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
-		windowRunner := intelligenceapp.NewContextWindowRunner(windowStore, windowAnalyzer, windowSession, intelligenceapp.DefaultContextWindowRunnerConfig(), nil)
+			windowModels).WithLedger(windowLedger)
+		// WithUsageFlush: the runner collects each analysis' ledger writes instead of letting them open their own
+		// nested session while still holding this window's own (Codex review round 5) — it performs them itself,
+		// right after releasing that connection, on a context with no session of its own.
+		windowRunner := intelligenceapp.NewContextWindowRunner(windowStore, windowAnalyzer, windowSession, intelligenceapp.DefaultContextWindowRunnerConfig(), nil).
+			WithUsageFlush(func(ctx context.Context, items []aiusage.Record) error {
+				for _, rec := range items {
+					if err := windowLedger.Record(ctx, rec); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
 		go windowRunner.Run(workerCtx, 2*time.Second)
 		windowHandler, err := contextwindowworker.NewHandler(windowStore, contextwindow.DefaultPolicy())
 		if err != nil {

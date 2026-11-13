@@ -167,6 +167,46 @@ func TestIsConversationFullyAnalyzedUsesWindowMembershipNeverMessageTimestamps(t
 	}
 }
 
+// Regression for a Codex finding (round 5, CONTEXT.2D): migration 000176's context_analysis_windows/
+// context_analysis_window_messages only had a has_active_membership() SELECT policy, so IsConversationFullyAnalyzed
+// always found zero rows for a Hub-delegated actor (no membership row) even though the analyses themselves
+// (migration 000177) were already correctly readable after round 3's fix — a delegated actor would read a fully
+// analyzed conversation as permanently stale. Fixed with additive delegated-read policies on both tables.
+func TestIsConversationFullyAnalyzedIsReadableByADelegatedActor(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	repo := NewPostgresContextAnalysisRepository(e.app)
+	store := NewPostgresContextWindowStore(e.app)
+	policy := contextwindow.DefaultPolicy()
+
+	m1 := e.message(a.id, a.conversation, "primeira mensagem")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Force(e.ctx, a.id, a.conversation, contextwindow.TriggerManual); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.Claim(e.ctx, 1, time.Minute)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: n=%d err=%v", len(claimed), err)
+	}
+	if _, err := sys(e, a.id, func(ctx context.Context) (uuid.UUID, error) {
+		return repo.Save(ctx, ports.AnalysisRecord{TenantID: a.id, ConversationID: a.conversation, WindowID: claimed[0].ID, Status: "ok",
+			SummaryText: "s", AnalyzedMessageIDs: []uuid.UUID{m1}})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	delegated := uuid.New()
+	var ok bool
+	e.delegatedSession(a.id, delegated, []string{"conversation.read", "topic.read"}, func(ctx context.Context) {
+		ok, err = repo.IsConversationFullyAnalyzed(ctx, a.id, a.conversation)
+	})
+	if err != nil || !ok {
+		t.Fatalf("a delegated actor must see the analyzed window as covered too: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestLatestForConversationAndConversationCoverageAreTenantIsolated(t *testing.T) {
 	e := newEnv(t)
 	a, b := e.tenant(), e.tenant()

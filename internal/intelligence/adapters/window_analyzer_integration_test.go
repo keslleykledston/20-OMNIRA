@@ -303,6 +303,48 @@ func TestWindowAnalyzerSavesEmptyOnceMediaAnalysisIsNoLongerPending(t *testing.T
 	}
 }
 
+// Regression for a Codex finding (round 5, CONTEXT.2D): round 4's fix only checked for pending media when the
+// window had ZERO usable text. A window with one text message AND one audio message whose transcript is still
+// pending has usable text (buildMessages keeps the text one), so that check was skipped entirely — the window
+// would be finalized with a terminal receipt that permanently omits the audio, even once its transcript later
+// finishes. The check must run for the WHOLE window, not only the all-media, nothing-usable case.
+func TestWindowAnalyzerRetriesAMixedWindowWhileOnlySomeOfItsMediaIsStillPending(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	policy := contextwindow.Policy{Idle: 30 * time.Second, MaxAge: 2 * time.Minute, MaxMessages: 10}
+	m1 := e.message(a.id, a.conversation, "aqui vai um áudio")
+	e.exec(`INSERT INTO message_media_analysis (tenant_id, message_id, kind, status) VALUES ($1,$2,'transcript','pending')`, a.id, m1)
+	m2 := e.message(a.id, a.conversation, "e aqui o texto sobre o mesmo assunto")
+	if err := windowStore.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := windowStore.Touch(e.ctx, policy, a.id, a.conversation, m2, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := windowStore.Force(e.ctx, a.id, a.conversation, contextwindow.TriggerManual); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := windowStore.Claim(e.ctx, 1, time.Minute)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: n=%d err=%v", len(claimed), err)
+	}
+	w := claimed[0]
+
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: tokenGen{out: `{"summary":"","facts":[]}`}, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models)
+
+	_, err = sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) })
+	if err == nil {
+		t.Fatal("a window with usable text but ALSO pending media must still be retried, not finalized")
+	}
+	if n := e.count(`SELECT count(*) FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID); n != 0 {
+		t.Fatalf("analyses = %d, want 0 (never a terminal receipt while any of the window's media is still pending)", n)
+	}
+}
+
 func TestWindowAnalyzerWithNoModelConfiguredDegradesWithoutError(t *testing.T) {
 	e := newEnv(t)
 	a := e.tenant()

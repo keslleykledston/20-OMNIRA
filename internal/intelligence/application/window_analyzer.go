@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -50,6 +51,41 @@ func (s *WindowAnalyzerService) WithLedger(l aiusage.Ledger) *WindowAnalyzerServ
 	return s
 }
 
+// pendingUsageKey/PendingUsage: PostgresLedger.Record always opens its OWN pool connection — correct in general
+// (a ledger write must survive even when the caller's own transaction later rolls back, e.g. on a provider
+// failure: "accounted even on failure" is the whole point), but calling it while Analyze still holds the
+// runner's OUTER tenant-session connection is a second, nested acquisition from the SAME pool. With up to
+// ClaimLimit windows analyzed at once, that alone can exhaust a pool no bigger than the claim batch and deadlock
+// the runner (Codex review round 5 — the same class of bug as MessageIDs, round 4). WithPendingUsage lets the
+// RUNNER collect these records on ctx instead, and perform the actual Record calls itself AFTER its session has
+// released the connection. Without one on ctx (any direct call to Analyze, outside the runner), account() falls
+// back to writing immediately, exactly as before.
+type pendingUsageKey struct{}
+
+type PendingUsage struct {
+	mu    sync.Mutex
+	items []aiusage.Record
+}
+
+func WithPendingUsage(ctx context.Context, p *PendingUsage) context.Context {
+	return context.WithValue(ctx, pendingUsageKey{}, p)
+}
+
+func (p *PendingUsage) add(r aiusage.Record) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.items = append(p.items, r)
+}
+
+// Drain returns every collected record and clears the collector.
+func (p *PendingUsage) Drain() []aiusage.Record {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	items := p.items
+	p.items = nil
+	return items
+}
+
 func (s *WindowAnalyzerService) account(ctx context.Context, tenantID uuid.UUID, route ModelRoute, resp aiports.GenerateResponse, ref uuid.UUID, ok bool, reason string) {
 	if s.ledger == nil {
 		return
@@ -58,6 +94,10 @@ func (s *WindowAnalyzerService) account(ctx context.Context, tenantID uuid.UUID,
 		OutputTokens: resp.OutputTokens, NoCost: true, Success: ok, Reason: reason, Ref: ref}
 	if rec.Provider == "" {
 		rec.Provider = "unknown"
+	}
+	if p, ok := ctx.Value(pendingUsageKey{}).(*PendingUsage); ok && p != nil {
+		p.add(rec)
+		return
 	}
 	if err := s.ledger.Record(ctx, rec); err != nil {
 		log.Printf("intelligence: cannot record context window analysis usage: %v", err)
@@ -88,24 +128,23 @@ func (s *WindowAnalyzerService) Analyze(ctx context.Context, w ports.ContextWind
 	if err != nil {
 		return err
 	}
+	// Checked for the WHOLE window, before anything else — not only when it turns out to have zero usable text.
+	// A window with a text message AND an audio message whose transcript/description is not done yet still has
+	// pending media: finalizing it now (ok or empty, either is a terminal receipt) would permanently omit that
+	// audio even once its analysis finishes, since nothing ever reopens a completed window. Returning an error
+	// makes the runner retry/back off instead, giving the media pipeline time to finish (Codex review round 5 —
+	// round 4's fix only covered the all-media, zero-usable-text case).
+	if pending, perr := s.analysis.HasPendingMediaAnalysis(ctx, w.TenantID, ids); perr != nil {
+		return perr
+	} else if pending {
+		return fmt.Errorf("context window analyzer: media analysis still pending for this window's messages")
+	}
 	rows, err := s.analysis.WindowMessages(ctx, w.TenantID, w.ConversationID, ids)
 	if err != nil {
 		return err
 	}
 	msgs, msgByAlias := buildMessages(rows)
 	if len(msgs) == 0 {
-		// A window with no usable text yet is not necessarily empty FOREVER: a media-only message's transcript/
-		// description may simply not be done yet (a separate, async pipeline, ADR-0016). Saving "empty" here
-		// would be a terminal receipt — IsConversationFullyAnalyzed would then report the conversation as fully
-		// covered despite that media never actually being analyzed, and nothing ever reopens a completed window
-		// (Codex review round 4). Returning an error instead makes the runner retry/back off, giving the media
-		// pipeline time to finish; only once nothing is pending does "empty" become the genuinely correct,
-		// terminal answer.
-		if pending, perr := s.analysis.HasPendingMediaAnalysis(ctx, w.TenantID, ids); perr != nil {
-			return perr
-		} else if pending {
-			return fmt.Errorf("context window analyzer: media analysis still pending for this window's messages")
-		}
 		_, err := s.analysis.Save(ctx, ports.AnalysisRecord{TenantID: w.TenantID, ConversationID: w.ConversationID, WindowID: w.ID, Status: "empty"})
 		return err
 	}

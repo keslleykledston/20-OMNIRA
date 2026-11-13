@@ -230,7 +230,11 @@ func (e *env) groupMessage(tenant uuid.UUID, g groupFixture, author uuid.UUID, b
 // hub_tenant_service_contracts ceiling wide enough for every permission this package's tests exercise, and a
 // grant limited to exactly the given permissions — through the real lock_served_tenant()/delegated_permissions()
 // machinery (migration 000108), never a forged session variable.
-func (e *env) callDelegated(tenant, user uuid.UUID, permissions []string, method, body string, path map[string]string, fn http.HandlerFunc) *httptest.ResponseRecorder {
+// delegatedSession runs fn inside a real Hub-delegated session (ADR-0040): a fresh hub, a
+// hub_tenant_service_contracts ceiling wide enough for every permission this package's tests exercise, and a
+// grant limited to exactly the given permissions — through the real lock_served_tenant()/delegated_permissions()
+// machinery (migration 000108), never a forged session variable.
+func (e *env) delegatedSession(tenant, user uuid.UUID, permissions []string, fn func(ctx context.Context)) {
 	e.t.Helper()
 	hub, contract, grant := uuid.New(), uuid.New(), uuid.New()
 	e.exec(`INSERT INTO users(id,external_subject,email,status) VALUES($1,$2,$3,'active') ON CONFLICT (id) DO NOTHING`, user, user, user.String()+"@invalid")
@@ -245,7 +249,6 @@ func (e *env) callDelegated(tenant, user uuid.UUID, permissions []string, method
 	e.exec(`INSERT INTO effective_access_grants(id,hub_id,user_id,tenant_id,service_contract_id,valid_from,permissions) VALUES($1,$2,$3,$4,$5,now()-interval '1 day',$6)`,
 		grant, hub, user, tenant, contract, permissions)
 
-	rec := httptest.NewRecorder()
 	err := platformdb.WithTenantSession(e.ctx, e.app, user, false, func(sessionCtx context.Context) error {
 		q := platformdb.QuerierFromContext(sessionCtx, e.app)
 		var locked *bool
@@ -253,22 +256,30 @@ func (e *env) callDelegated(tenant, user uuid.UUID, permissions []string, method
 			return qerr
 		}
 		if locked == nil || !*locked {
-			e.t.Fatal("callDelegated: lock_served_tenant refused the delegated context")
+			e.t.Fatal("delegatedSession: lock_served_tenant refused the delegated context")
 		}
 		tc, terr := tenancydomain.NewHubServeTenantContext(tenant, user, hub, contract, grant, permissions, "")
 		if terr != nil {
 			return terr
 		}
-		req := httptest.NewRequest(method, "/", bytes.NewReader([]byte(body))).WithContext(tenancydomain.WithTenantContext(sessionCtx, tc))
+		fn(tenancydomain.WithTenantContext(sessionCtx, tc))
+		return nil
+	})
+	if err != nil {
+		e.t.Fatalf("delegatedSession: %v", err)
+	}
+}
+
+func (e *env) callDelegated(tenant, user uuid.UUID, permissions []string, method, body string, path map[string]string, fn http.HandlerFunc) *httptest.ResponseRecorder {
+	e.t.Helper()
+	rec := httptest.NewRecorder()
+	e.delegatedSession(tenant, user, permissions, func(ctx context.Context) {
+		req := httptest.NewRequest(method, "/", bytes.NewReader([]byte(body))).WithContext(ctx)
 		for k, v := range path {
 			req.SetPathValue(k, v)
 		}
 		fn(rec, req)
-		return nil
 	})
-	if err != nil {
-		e.t.Fatalf("callDelegated: %v", err)
-	}
 	return rec
 }
 
