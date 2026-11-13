@@ -67,13 +67,31 @@ func (r *PostgresContextAnalysisRepository) WindowMessages(ctx context.Context, 
 	return out, nil
 }
 
+// HasPendingMediaAnalysis also covers two gaps a pure message_media_analysis='pending' check would miss (Codex
+// review round 6): a cleared audio file always gets its 'transcript' row in the SAME transaction as the verdict
+// (migration 000062's trigger), but a message_media row still being virus-scanned (status pending/quarantined,
+// any kind) has NEITHER a transcript NOR a description/document_text row yet — its outcome (clean vs.
+// infected/rejected/source_gone/failed) is simply not known yet. And an image/PDF that already cleared still has
+// no row at all until the next EnqueueVision batch tick (internal/media/adapters, periodic, not trigger-based
+// like audio) creates it. Both must count as "pending" too, or the window finalizes before either resolves and
+// nothing ever reopens it. A clean file of a kind/mime neither pipeline ever analyzes (e.g. video) correctly
+// never counts, so this does not wait forever for media that will never get a receipt.
 func (r *PostgresContextAnalysisRepository) HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID) (bool, error) {
 	if len(messageIDs) == 0 {
 		return false, nil
 	}
 	var pending bool
-	err := r.q(ctx).QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM message_media_analysis WHERE tenant_id=$1 AND message_id = ANY($2::uuid[]) AND status='pending')`,
+	err := r.q(ctx).QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM message_media_analysis WHERE tenant_id=$1 AND message_id = ANY($2::uuid[]) AND status='pending')
+		    OR EXISTS (
+		         SELECT 1 FROM message_media mm
+		         WHERE mm.tenant_id=$1 AND mm.message_id = ANY($2::uuid[])
+		           AND (
+		             mm.status IN ('pending', 'quarantined')
+		             OR (mm.status = 'clean' AND mm.mime IN ('image/jpeg', 'image/png', 'image/webp', 'application/pdf')
+		                 AND NOT EXISTS (SELECT 1 FROM message_media_analysis a WHERE a.tenant_id = mm.tenant_id AND a.message_id = mm.message_id))
+		           )
+		       )`,
 		tenantID, messageIDs).Scan(&pending)
 	return pending, err
 }
@@ -95,8 +113,15 @@ func (r *PostgresContextAnalysisRepository) Save(ctx context.Context, rec ports.
 		INSERT INTO context_window_analyses (id, tenant_id, conversation_id, window_id, previous_analysis_id, status, summary_text,
 		                                      model_provider, model_name, prompt_version, input_tokens, output_tokens, latency_ms,
 		                                      analyzed_message_count, analyzed_first_message_at, analyzed_last_message_at, error_class)
+		-- previous_analysis_id is the highest-GENERATION analysis strictly before this window's own generation, never
+		-- the most recently created ROW: an older window can retry (transient failure) after a newer generation
+		-- already completed, so ordering by created_at could chain to a generation that is not actually "previous" by
+		-- the conversation's own sequence (Codex review round 6).
 		SELECT $1, $2, $3, $4,
-		       (SELECT id FROM context_window_analyses WHERE tenant_id=$2 AND conversation_id=$3 ORDER BY created_at DESC LIMIT 1),
+		       (SELECT a.id FROM context_window_analyses a JOIN context_analysis_windows w ON w.tenant_id = a.tenant_id AND w.id = a.window_id
+		        WHERE a.tenant_id=$2 AND a.conversation_id=$3
+		          AND w.generation < (SELECT generation FROM context_analysis_windows WHERE tenant_id=$2 AND id=$4)
+		        ORDER BY w.generation DESC LIMIT 1),
 		       $5, $6, NULLIF($7,''), NULLIF($8,''), NULLIF($9,''), NULLIF($10,0), NULLIF($11,0), NULLIF($12,0), $13, $14, $15, NULLIF($16,'')`,
 		analysisID, rec.TenantID, rec.ConversationID, rec.WindowID, rec.Status, rec.SummaryText,
 		rec.ModelProvider, rec.ModelName, rec.PromptVersion, rec.InputTokens, rec.OutputTokens, rec.LatencyMS,
@@ -128,9 +153,15 @@ func (r *PostgresContextAnalysisRepository) Save(ctx context.Context, rec ports.
 func (r *PostgresContextAnalysisRepository) LatestForConversation(ctx context.Context, tenantID, conversationID uuid.UUID) (*ports.ContextViewRow, error) {
 	q := r.q(ctx)
 	row := &ports.ContextViewRow{}
+	// Ordered by the WINDOW's generation, not created_at (Codex review round 6): an older window can retry (a
+	// transient failure) and still be in flight while a newer generation is claimed and completes first; by
+	// wall-clock time the older one's eventual receipt would otherwise look "latest" and the panel would show
+	// stale facts even while coverage itself reports stale=false. UNIQUE(tenant_id, window_id) means at most one
+	// receipt per window ever, so no tie is possible at the same generation.
 	err := q.QueryRow(ctx, `
-		SELECT id, status, summary_text, created_at, analyzed_message_count, analyzed_last_message_at
-		FROM context_window_analyses WHERE tenant_id=$1 AND conversation_id=$2 ORDER BY created_at DESC LIMIT 1`,
+		SELECT a.id, a.status, a.summary_text, a.created_at, a.analyzed_message_count, a.analyzed_last_message_at
+		FROM context_window_analyses a JOIN context_analysis_windows w ON w.tenant_id = a.tenant_id AND w.id = a.window_id
+		WHERE a.tenant_id=$1 AND a.conversation_id=$2 ORDER BY w.generation DESC LIMIT 1`,
 		tenantID, conversationID).Scan(&row.AnalysisID, &row.Status, &row.SummaryText, &row.CreatedAt, &row.AnalyzedMessageCount, &row.AnalyzedLastMessageAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

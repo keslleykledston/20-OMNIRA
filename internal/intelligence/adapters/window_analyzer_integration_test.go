@@ -345,6 +345,83 @@ func TestWindowAnalyzerRetriesAMixedWindowWhileOnlySomeOfItsMediaIsStillPending(
 	}
 }
 
+// Regression for a Codex finding (round 6, CONTEXT.2D): round 4/5's pending check only looked at
+// message_media_analysis rows, but an image/PDF still being virus-scanned, or already clean but not yet picked
+// up by the next EnqueueVision batch tick (internal/media/adapters — periodic, unlike audio's trigger-based
+// transcript enqueue), has NO message_media_analysis row at all yet. The window must still be retried, not
+// finalized missing that attachment.
+func TestWindowAnalyzerRetriesWhileAnImageIsStillBeingScanned(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "")
+	e.exec(`INSERT INTO message_media (id,tenant_id,message_id,status,kind,mime) VALUES ($1,$2,$3,'pending','image','image/png')`, uuid.New(), a.id, m1)
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: tokenGen{out: `{"summary":"","facts":[]}`}, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models)
+
+	_, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) })
+	if err == nil {
+		t.Fatal("an image still being scanned (no message_media_analysis row yet) must be retried, not finalized")
+	}
+	if n := e.count(`SELECT count(*) FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID); n != 0 {
+		t.Fatalf("analyses = %d, want 0", n)
+	}
+}
+
+func TestWindowAnalyzerRetriesWhileACleanImageHasNotYetBeenEnqueuedForVisionAnalysis(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "")
+	e.exec(`INSERT INTO message_media (id,tenant_id,message_id,status,kind,mime) VALUES ($1,$2,$3,'clean','image','image/png')`, uuid.New(), a.id, m1)
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: tokenGen{out: `{"summary":"","facts":[]}`}, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models)
+
+	_, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) })
+	if err == nil {
+		t.Fatal("a clean image not yet enqueued for vision analysis must be retried, not finalized")
+	}
+	if n := e.count(`SELECT count(*) FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID); n != 0 {
+		t.Fatalf("analyses = %d, want 0", n)
+	}
+}
+
+// A clean file that neither pipeline will ever analyze (wrong mime for vision, not audio) — or a file that
+// settled to a terminal non-clean status (infected/rejected/source_gone/failed) — must never block the window
+// forever: HasPendingMediaAnalysis only waits for an outcome that is genuinely still unknown.
+func TestWindowAnalyzerSavesEmptyForMediaThatWillNeverBeAnalyzed(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "")
+	e.exec(`INSERT INTO message_media (id,tenant_id,message_id,status,kind,mime) VALUES ($1,$2,$3,'infected','image','image/png')`, uuid.New(), a.id, m1)
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: tokenGen{out: `{"summary":"","facts":[]}`}, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models)
+
+	if _, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) }); err != nil {
+		t.Fatalf("an infected file's outcome is already final; the window must still complete: %v", err)
+	}
+	var status string
+	if err := e.seed.QueryRow(e.ctx, `SELECT status FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "empty" {
+		t.Fatalf("status = %q, want empty", status)
+	}
+}
+
 func TestWindowAnalyzerWithNoModelConfiguredDegradesWithoutError(t *testing.T) {
 	e := newEnv(t)
 	a := e.tenant()

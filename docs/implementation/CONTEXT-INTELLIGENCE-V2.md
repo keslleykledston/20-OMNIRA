@@ -100,6 +100,15 @@ Nenhuma migration nesta rodada. Suíte completa do pacote reverificada, mesma fa
 
 Migração 000176 (política adicional) e 000177 round-trip `up/down/up` reverificados idênticos. Suíte completa do pacote reverificada, mesma falha de performance pré-existente e não relacionada.
 
+### CONTEXT.2D — Revisão independente (Codex), rodada 6 (2026-11-13)
+
+`codex exec review --base c394452` encontrou mais 2 achados [P2], nenhum das cinco rodadas anteriores foi re-levantado:
+
+- **A checagem de mídia pendente não cobria a espera pelo PRÓPRIO enfileiramento da visão** (`analysis_repository.go`, `HasPendingMediaAnalysis`): áudio ganha sua linha `transcript` no MESMO commit que o veredito do antivírus (gatilho da migration 000062), mas imagem/PDF (`description`/`document_text`) é enfileirada por um job periódico separado (`EnqueueVision`, `internal/media/adapters`) — existe uma janela real em que o arquivo já está limpo (ou ainda sendo escaneado) e NENHUMA linha de `message_media_analysis` existe ainda. A checagem anterior só olhava `message_media_analysis`, então via "nada pendente" e a janela era finalizada sem aquele anexo, para sempre. Corrigido: a checagem agora também olha `message_media` diretamente — qualquer arquivo ainda `pending`/`quarantined` (veredito do antivírus não decidido), ou já `clean` de um mime elegível para visão sem linha de análise ainda — sem esperar para sempre por mídia que nenhum dos dois pipelines jamais analisa (vídeo, ou um arquivo que acabou `infected`/`rejected`/`source_gone`/`failed`). Testes de regressão: `TestWindowAnalyzerRetriesWhileAnImageIsStillBeingScanned`, `TestWindowAnalyzerRetriesWhileACleanImageHasNotYetBeenEnqueuedForVisionAnalysis`, `TestWindowAnalyzerSavesEmptyForMediaThatWillNeverBeAnalyzed`.
+- **"Última análise" e `previous_analysis_id` ordenavam por `created_at`, não por geração da janela** (`analysis_repository.go`): uma janela mais antiga pode estar em retry (falha transitória) e só terminar DEPOIS que uma geração mais nova da mesma conversa já foi analisada — por `created_at DESC`, o recibo mais antigo (escrito por último) "ganhava" de volta, mostrando fatos desatualizados no painel mesmo com `stale=false`. A mesma ambiguidade afetava o encadeamento de `previous_analysis_id` no `Save`. Corrigido: as duas consultas agora ordenam por `context_analysis_windows.generation`, não por `created_at` — a sequência real da conversa, nunca a ordem de escrita. Testes de regressão: `TestLatestForConversationOrdersByWindowGenerationNeverByWhenTheReceiptWasWritten`, `TestSaveChainsPreviousAnalysisIDByGenerationNeverByWhenItWasWritten`.
+
+Nenhuma migration nesta rodada. Suíte completa do pacote reverificada, mesma falha de performance pré-existente e não relacionada.
+
 **Não implementado ainda (geral):** fluxo de confirmação de compromissos pelo operador; evidência clicável; E2E; call-sites reais de `Force` para handoff/claim/finalize. A flag `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` segue `false` em todo lugar — nenhuma flag foi ligada em produção.
 
 ## 3. Próximas fatias verticais necessárias antes de liberar

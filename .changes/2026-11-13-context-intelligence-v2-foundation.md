@@ -1,4 +1,4 @@
-# Context Intelligence v2 — foundation through CONTEXT.2D round 5 fixes (feature not enabled)
+# Context Intelligence v2 — foundation through CONTEXT.2D round 6 fixes (feature not enabled)
 
 - Added pure adaptive 30s/120s/12-message batching policy, forced-flush events, and unit tests.
 - Added strict AI proposal parser with topic/evidence alias allowlists and no operational side effects.
@@ -58,6 +58,13 @@
   had the same delegated-read RLS gap round 3 fixed for the analysis tables (migration 000177), making a fully
   analyzed conversation read as permanently stale for a Hub-delegated actor — fixed with the same additive
   policies.
+- CONTEXT.2D round 6: a sixth independent review found 2 more P2 issues. The pending-media check only looked at
+  message_media_analysis, missing the window where an image/PDF is still being virus-scanned or already clean
+  but not yet picked up by the periodic vision-enqueue job (audio's transcript row is created synchronously by a
+  trigger instead, so it never had this gap) — fixed by also checking message_media directly, without waiting
+  forever for media neither pipeline ever analyzes. And "the latest analysis" (and previous_analysis_id's chain)
+  ordered by created_at, which an older window's late-finishing retry could win back over a newer generation that
+  already completed — fixed by ordering by the window's own generation instead.
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.

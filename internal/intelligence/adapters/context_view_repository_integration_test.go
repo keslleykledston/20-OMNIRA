@@ -207,6 +207,81 @@ func TestIsConversationFullyAnalyzedIsReadableByADelegatedActor(t *testing.T) {
 	}
 }
 
+// Regression for a Codex finding (round 6, CONTEXT.2D): an older window can retry (a transient failure) and still
+// be in flight while a newer generation is claimed and completes first. Ordering "the latest analysis" by
+// created_at would then pick the OLDER generation's receipt once its retry finally lands, even though a newer one
+// already exists — stale facts shown while coverage itself reports stale=false. It must order by the window's
+// own GENERATION instead.
+func TestLatestForConversationOrdersByWindowGenerationNeverByWhenTheReceiptWasWritten(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	repo := NewPostgresContextAnalysisRepository(e.app)
+	win1 := e.contextWindow(a.id, a.conversation) // generation 1
+	win2 := e.contextWindow(a.id, a.conversation) // generation 2
+
+	// Generation 2 finishes FIRST...
+	if _, err := sys(e, a.id, func(ctx context.Context) (uuid.UUID, error) {
+		return repo.Save(ctx, ports.AnalysisRecord{TenantID: a.id, ConversationID: a.conversation, WindowID: win2, Status: "ok", SummaryText: "segunda geração"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// ...and generation 1's retry only lands AFTER (a later created_at despite being the OLDER generation).
+	if _, err := sys(e, a.id, func(ctx context.Context) (uuid.UUID, error) {
+		return repo.Save(ctx, ports.AnalysisRecord{TenantID: a.id, ConversationID: a.conversation, WindowID: win1, Status: "ok", SummaryText: "primeira geração, terminou depois"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	agent := e.member(a.id, "tenant_agent")
+	var row *ports.ContextViewRow
+	var err error
+	e.session(a.id, agent, func(ctx context.Context) { row, err = repo.LatestForConversation(ctx, a.id, a.conversation) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row == nil || row.SummaryText != "segunda geração" {
+		t.Fatalf("row = %+v, want the HIGHER generation's analysis even though it was written first", row)
+	}
+}
+
+// Same bug, the write side: previous_analysis_id must chain by generation too, never by creation order.
+func TestSaveChainsPreviousAnalysisIDByGenerationNeverByWhenItWasWritten(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	repo := NewPostgresContextAnalysisRepository(e.app)
+	win1 := e.contextWindow(a.id, a.conversation) // generation 1
+	win2 := e.contextWindow(a.id, a.conversation) // generation 2
+	win3 := e.contextWindow(a.id, a.conversation) // generation 3
+
+	gen2ID, err := sys(e, a.id, func(ctx context.Context) (uuid.UUID, error) {
+		return repo.Save(ctx, ports.AnalysisRecord{TenantID: a.id, ConversationID: a.conversation, WindowID: win2, Status: "ok"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Generation 1's retry lands AFTER generation 2 (later created_at, older generation) — must never become
+	// anyone's "previous".
+	if _, err := sys(e, a.id, func(ctx context.Context) (uuid.UUID, error) {
+		return repo.Save(ctx, ports.AnalysisRecord{TenantID: a.id, ConversationID: a.conversation, WindowID: win1, Status: "ok"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gen3ID, err := sys(e, a.id, func(ctx context.Context) (uuid.UUID, error) {
+		return repo.Save(ctx, ports.AnalysisRecord{TenantID: a.id, ConversationID: a.conversation, WindowID: win3, Status: "ok"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var prev uuid.UUID
+	if err := e.seed.QueryRow(e.ctx, `SELECT previous_analysis_id FROM context_window_analyses WHERE id=$1`, gen3ID).Scan(&prev); err != nil {
+		t.Fatal(err)
+	}
+	if prev != gen2ID {
+		t.Fatalf("previous_analysis_id = %s, want generation 2's analysis %s (not generation 1's, even though it was written later)", prev, gen2ID)
+	}
+}
+
 func TestLatestForConversationAndConversationCoverageAreTenantIsolated(t *testing.T) {
 	e := newEnv(t)
 	a, b := e.tenant(), e.tenant()
