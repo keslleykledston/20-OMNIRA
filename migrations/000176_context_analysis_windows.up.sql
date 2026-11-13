@@ -99,16 +99,40 @@ CREATE POLICY context_analysis_window_messages_read_delegated ON context_analysi
 -- refresh) ever moves a window — this table's UPDATE policy is otherwise system-admin only (no human writes these
 -- rows directly). SECURITY DEFINER, same idiom as lock_served_tenant/actor_has_permission: runs with the function
 -- owner's privileges (which bypasses this table's RLS, same as every migration-created function here), on the
--- CALLER's own already-open connection — never a second, nested platformdb.WithTenantSession/system() session.
--- Before this, PostgresContextWindowStore.Force unconditionally opened its own system session even when called
--- from INSIDE the HTTP request's own session (the refresh handler's WithTenantSession), which could stall every
--- refresh on a small pool and exhaust a larger one under concurrent refreshes (Codex review round 8). The
--- authorization boundary is unchanged — it was already, and remains, entirely the HTTP handler's own gate
--- (topic.manage + being the attendant) before Refresh/Force is ever called; this function adds no checks of its
--- own, same as the UPDATE it replaces never had any beyond is_system_admin().
+-- CALLER's own already-open connection — never a second, nested platformdb.WithTenantSession/system() session
+-- (Codex review round 8).
+--
+-- CRITICAL FIX (Codex review round 9, a real cross-Tenant bypass): GRANT EXECUTE ... TO omnira_app authorizes
+-- NOTHING by itself — omnira_app is the one runtime role the ENTIRE API uses, so without a check HERE any
+-- session could call this with ANOTHER Tenant's ids and force its window due, bypassing both this table's own
+-- RLS and the HTTP handler's permission/attendant gate (which only ran in the legitimate caller, and this
+-- function has no way to know that it did). It must re-derive and check the SAME two things the handler already
+-- checks (topic.manage, then being the conversation's own attendant or holding conversation.manage) from
+-- current_user_id() — the session GUC SECURITY DEFINER does NOT change — exactly like lock_served_tenant already
+-- does for its own delegated door. A system session (is_system_admin()) skips this: the worker is the other,
+-- already-trusted caller (today only via `manual`; handoff/claim/finalize are not yet wired to Force at all).
 CREATE OR REPLACE FUNCTION force_context_window(p_tenant_id UUID, p_conversation_id UUID, p_trigger TEXT) RETURNS BOOLEAN AS $$
-DECLARE v_forced BOOLEAN;
+DECLARE
+  v_forced   BOOLEAN;
+  v_actor    UUID := current_user_id();
+  v_assignee UUID;
 BEGIN
+  IF NOT is_system_admin() THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM memberships m JOIN role_permissions rp ON rp.role_id = m.role_id
+      WHERE m.tenant_id = p_tenant_id AND m.user_id = v_actor AND m.status = 'active' AND rp.permission_key = 'topic.manage'
+    ) THEN
+      RETURN false;
+    END IF;
+    SELECT assigned_to_user_id INTO v_assignee FROM conversations WHERE tenant_id = p_tenant_id AND id = p_conversation_id;
+    IF v_assignee IS DISTINCT FROM v_actor AND NOT EXISTS (
+      SELECT 1 FROM memberships m JOIN role_permissions rp ON rp.role_id = m.role_id
+      WHERE m.tenant_id = p_tenant_id AND m.user_id = v_actor AND m.status = 'active' AND rp.permission_key = 'conversation.manage'
+    ) THEN
+      RETURN false;
+    END IF;
+  END IF;
+
   UPDATE context_analysis_windows SET state='due', due_at=now(), trigger=p_trigger, updated_at=now()
   WHERE tenant_id = p_tenant_id AND conversation_id = p_conversation_id AND state='open';
   v_forced := FOUND;

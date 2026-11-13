@@ -1,4 +1,4 @@
-# Context Intelligence v2 — foundation through CONTEXT.2D round 8 fixes (feature not enabled)
+# Context Intelligence v2 — foundation through CONTEXT.2D round 9 fixes (feature not enabled)
 
 - Added pure adaptive 30s/120s/12-message batching policy, forced-flush events, and unit tests.
 - Added strict AI proposal parser with topic/evidence alias allowlists and no operational side effects.
@@ -80,6 +80,15 @@
   check didn't account for VisionProcessor's own enqueue lookback (7 days by default) — an older image reaching
   window processing late (a backlog, an outage) was never going to get an analysis row either way, so waiting for
   it (and retrying the whole window) was wrong even with vision enabled and the tenant opted in.
+- CONTEXT.2D round 9: a ninth independent review found a real, serious cross-Tenant bypass introduced by round 8's
+  own fix — force_context_window's SECURITY DEFINER status plus GRANT EXECUTE TO omnira_app authorized nothing on
+  its own (omnira_app is the one role the whole API uses), so any caller could force ANOTHER tenant's window due,
+  skipping both the table's RLS and the HTTP handler's permission/attendant gate. Fixed by having the function
+  itself re-check topic.manage and (being the conversation's attendant or holding conversation.manage) from the
+  session's own current_user_id(), the same pattern lock_served_tenant already uses for its own delegated door; a
+  system session still skips this. Also found: an internal (staff) conversation's message could enter the
+  customer-context analyzer and get labeled "cliente" — ResolveMessage never excluded it the way
+  TopicRepository.ConversationInfo already does elsewhere; fixed with the same exclusion.
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.

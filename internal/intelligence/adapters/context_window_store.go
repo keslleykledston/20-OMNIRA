@@ -42,8 +42,15 @@ func (s *PostgresContextWindowStore) ResolveMessage(ctx context.Context, message
 	var msg ports.ResolvedMessage
 	found := false
 	err := s.system(ctx, func(ctx context.Context, q platformdb.Querier) error {
+		// ADR-0018: a conversation with staff has no contact and is never customer content — TopicRepository.
+		// ConversationInfo already excludes it the same way, but this is a SEPARATE path (the consumer decides
+		// whether to open/extend a window at all) that never applied the same guard: an internal conversation's
+		// inbound message would otherwise enter the customer-context pipeline and get analyzed/labeled "cliente"
+		// (Codex review round 9).
 		err := q.QueryRow(ctx, `
-			SELECT tenant_id, conversation_id, created_at FROM messages WHERE id=$1 AND direction='inbound'`, messageID).
+			SELECT m.tenant_id, m.conversation_id, m.created_at FROM messages m
+			JOIN conversations c ON c.tenant_id = m.tenant_id AND c.id = m.conversation_id
+			WHERE m.id=$1 AND m.direction='inbound' AND c.internal_user_id IS NULL`, messageID).
 			Scan(&msg.TenantID, &msg.ConversationID, &msg.CreatedAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil

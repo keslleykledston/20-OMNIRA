@@ -235,6 +235,28 @@ func TestResolveMessageReadsTheTenantFromTheStoredRowNeverFromTheCaller(t *testi
 	}
 }
 
+// Regression for a Codex finding (round 9, CONTEXT.2D): an internal (staff-to-staff) conversation has no contact
+// (ADR-0018) and is never customer content — TopicRepository.ConversationInfo already excludes it, but
+// ResolveMessage is a SEPARATE path (the consumer's own decision whether to open/extend a window at all) that
+// never applied the same guard. Without this, an internal conversation's inbound message would enter the
+// customer-context pipeline and, with a model configured, get analyzed/labeled "cliente".
+func TestResolveMessageExcludesInternalStaffConversations(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	staffer := e.member(a.id, "tenant_agent")
+	internalConv := uuid.New()
+	e.exec(`INSERT INTO conversations (id, tenant_id, status, conversation_kind, internal_user_id) VALUES ($1,$2,'open','internal',$3)`,
+		internalConv, a.id, staffer)
+	m1 := uuid.New()
+	e.exec(`INSERT INTO messages(id,tenant_id,conversation_id,direction,message_type,body,status) VALUES($1,$2,$3,'inbound','text','mensagem interna','received')`,
+		m1, a.id, internalConv)
+
+	if _, found, err := store.ResolveMessage(e.ctx, m1); err != nil || found {
+		t.Fatalf("internal conversation's message: found=%v err=%v, want false/nil (never enters the customer-context pipeline)", found, err)
+	}
+}
+
 func TestForceClosesTheOpenWindowImmediatelyAndIsANoOpWithoutOne(t *testing.T) {
 	e := newEnv(t)
 	a := e.tenant()
@@ -277,6 +299,7 @@ func TestForceSucceedsThroughAnAlreadyActiveMemberSessionWithNoSystemPrivilege(t
 	id := openWindowID(e, a.id, a.conversation)
 
 	agent := e.member(a.id, "tenant_agent")
+	e.exec(`UPDATE conversations SET assigned_to_user_id=$1 WHERE tenant_id=$2 AND id=$3`, agent, a.id, a.conversation) // the attendant check force_context_window itself now does (round 9)
 	var forced bool
 	var err error
 	e.session(a.id, agent, func(ctx context.Context) {
@@ -288,6 +311,64 @@ func TestForceSucceedsThroughAnAlreadyActiveMemberSessionWithNoSystemPrivilege(t
 	state, _, _, trig := windowRow(e, id)
 	if state != "due" || trig == nil || *trig != "manual" {
 		t.Fatalf("after force: state=%s trigger=%v, want due/manual", state, trig)
+	}
+}
+
+// Regression for a Codex finding (round 9, CONTEXT.2D): force_context_window is SECURITY DEFINER, reachable by
+// ANY omnira_app session — GRANT EXECUTE authorizes nothing by itself. A member who holds neither topic.manage
+// nor is the conversation's attendant must be refused, exactly like the HTTP handler's own gate would refuse
+// them, as a database-level backstop independent of whatever the Go layer did or didn't check.
+func TestForceRefusesAMemberWithoutTopicManageOrWhoIsNotTheAttendant(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	m1 := e.message(a.id, a.conversation, "oi")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	id := openWindowID(e, a.id, a.conversation)
+
+	stranger := e.readOnlyMember(a.id) // tenant.read only: no topic.manage, not the attendant
+	var forced bool
+	var err error
+	e.session(a.id, stranger, func(ctx context.Context) {
+		forced, err = store.Force(ctx, a.id, a.conversation, contextwindow.TriggerManual)
+	})
+	if err != nil || forced {
+		t.Fatalf("force without topic.manage or being the attendant: forced=%v err=%v, want false/nil", forced, err)
+	}
+	state, _, _, _ := windowRow(e, id)
+	if state != "open" {
+		t.Fatalf("state = %s, want still open (an unauthorized force must change nothing)", state)
+	}
+}
+
+// Same finding, the actual cross-Tenant case Codex described: a member of tenant B must never force tenant A's
+// window, regardless of what p_tenant_id/p_conversation_id the caller passes.
+func TestForceRefusesAMemberOfAnotherTenant(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(), e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	m1 := e.message(a.id, a.conversation, "oi")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	id := openWindowID(e, a.id, a.conversation)
+
+	stranger := e.member(b.id, "tenant_agent") // a member of B, not A
+	var forced bool
+	var err error
+	e.session(b.id, stranger, func(ctx context.Context) {
+		forced, err = store.Force(ctx, a.id, a.conversation, contextwindow.TriggerManual)
+	})
+	if err != nil || forced {
+		t.Fatalf("a member of another tenant must never force A's window: forced=%v err=%v, want false/nil", forced, err)
+	}
+	state, _, _, _ := windowRow(e, id)
+	if state != "open" {
+		t.Fatalf("state = %s, want still open", state)
 	}
 }
 
