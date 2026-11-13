@@ -81,6 +81,15 @@ Também corrigidos, descobertos ao escrever os testes de lacuna da 2D (não acha
 
 Migração 000177 round-trip `up/down/up` (130 linhas de esquema, idêntico) e suíte completa do pacote reverificadas depois destas três correções, mesma falha de performance pré-existente e não relacionada.
 
+### CONTEXT.2D — Revisão independente (Codex), rodada 4 (2026-11-13)
+
+`codex exec review --base c394452` encontrou mais 2 achados — um [P1] e um [P2] — nenhum das três rodadas anteriores foi re-levantado:
+
+- **[P1] `MessageIDs` podia esgotar o pool de conexões e travar o worker** (`context_window_store.go`): toda chamada abria sua própria sessão de sistema (uma conexão NOVA do pool), mesmo sendo chamada de dentro da sessão que o `ContextWindowRunner` já mantém aberta para a análise inteira. Com até `ClaimLimit` (5) análises concorrentes, cada uma segurando sua conexão externa enquanto espera por uma segunda — isso por si só pode esgotar um pool do mesmo tamanho do lote de claim e travar o worker inteiro (nenhuma goroutine consegue avançar). Corrigido: `MessageIDs` agora reaproveita o querier já ativo no `ctx` quando existe um (o único chamador real, `WindowAnalyzerService.Analyze`, sempre roda dentro da sessão do runner) — só abre sua própria sessão de sistema quando chamada isoladamente (sem sessão ativa; hoje só em teste direto). Testes de regressão: `TestMessageIDsReusesAnAlreadyActiveSessionInsteadOfOpeningANestedOne` (prova que funciona com sessão já ativa) mantendo `TestMessageIDsReturnsTheWindowMembershipOldestFirst` (sem sessão) passando sem mudança.
+- **[P2] Janela só com mídia pendente virava "vazia" para sempre** (`window_analyzer.go`): se uma janela fecha antes da transcrição/descrição da mídia terminar (pipeline assíncrona separada, ADR-0016), o código salvava um recibo `empty` terminal — nada nunca reabre uma janela já completada, então aquele conteúdo nunca seria de fato analisado, e `IsConversationFullyAnalyzed` (fix da rodada 2) passava a considerar a conversa "coberta" mesmo sem a mídia ter sido analisada. Corrigido: antes de salvar `empty`, `HasPendingMediaAnalysis` (novo método do repositório) verifica se alguma mensagem da janela ainda tem análise `pending`; se sim, devolve erro (o runner tenta de novo com backoff, dando tempo à mídia terminar) — só quando nada está pendente (feito sem texto, falhou ou foi pulado) `empty` é a resposta terminal correta. Testes de regressão: `TestWindowAnalyzerRetriesInsteadOfCompletingEmptyWhileMediaAnalysisIsPending` e `TestWindowAnalyzerSavesEmptyOnceMediaAnalysisIsNoLongerPending`.
+
+Nenhuma migration nesta rodada. Suíte completa do pacote reverificada, mesma falha de performance pré-existente e não relacionada.
+
 **Não implementado ainda (geral):** fluxo de confirmação de compromissos pelo operador; evidência clicável; E2E; call-sites reais de `Force` para handoff/claim/finalize. A flag `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` segue `false` em todo lugar — nenhuma flag foi ligada em produção.
 
 ## 3. Próximas fatias verticais necessárias antes de liberar

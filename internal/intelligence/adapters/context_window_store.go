@@ -243,24 +243,41 @@ func (s *PostgresContextWindowStore) Claim(ctx context.Context, limit int, lease
 	return out, err
 }
 
+func (s *PostgresContextWindowStore) messageIDsWith(ctx context.Context, q platformdb.Querier, w ports.ContextWindow) ([]uuid.UUID, error) {
+	rows, err := q.Query(ctx, `
+		SELECT message_id FROM context_analysis_window_messages WHERE tenant_id=$1 AND window_id=$2 ORDER BY message_at, message_id`,
+		w.TenantID, w.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// MessageIDs reuses the caller's OWN session/connection when one is already active on ctx (its only real caller,
+// WindowAnalyzerService.Analyze, always runs inside the runner's session) — opening ANOTHER nested session here
+// would acquire a SECOND pool connection per in-flight analysis; with up to ClaimLimit analyses running at once,
+// that alone can exhaust a pool no bigger than the claim batch and deadlock the whole runner (every goroutine
+// holding its outer connection while blocked acquiring a second one — Codex review round 4). A standalone caller
+// with no session of its own (none in production; only a direct test call) still gets the old self-contained
+// system session as a fallback.
 func (s *PostgresContextWindowStore) MessageIDs(ctx context.Context, w ports.ContextWindow) ([]uuid.UUID, error) {
+	if q := platformdb.QuerierFromContext(ctx, nil); q != nil {
+		return s.messageIDsWith(ctx, q, w)
+	}
 	var out []uuid.UUID
 	err := s.system(ctx, func(ctx context.Context, q platformdb.Querier) error {
-		rows, err := q.Query(ctx, `
-			SELECT message_id FROM context_analysis_window_messages WHERE tenant_id=$1 AND window_id=$2 ORDER BY message_at, message_id`,
-			w.TenantID, w.ID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id uuid.UUID
-			if err := rows.Scan(&id); err != nil {
-				return err
-			}
-			out = append(out, id)
-		}
-		return rows.Err()
+		ids, err := s.messageIDsWith(ctx, q, w)
+		out = ids
+		return err
 	})
 	return out, err
 }

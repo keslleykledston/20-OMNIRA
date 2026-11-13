@@ -94,6 +94,18 @@ func (s *WindowAnalyzerService) Analyze(ctx context.Context, w ports.ContextWind
 	}
 	msgs, msgByAlias := buildMessages(rows)
 	if len(msgs) == 0 {
+		// A window with no usable text yet is not necessarily empty FOREVER: a media-only message's transcript/
+		// description may simply not be done yet (a separate, async pipeline, ADR-0016). Saving "empty" here
+		// would be a terminal receipt — IsConversationFullyAnalyzed would then report the conversation as fully
+		// covered despite that media never actually being analyzed, and nothing ever reopens a completed window
+		// (Codex review round 4). Returning an error instead makes the runner retry/back off, giving the media
+		// pipeline time to finish; only once nothing is pending does "empty" become the genuinely correct,
+		// terminal answer.
+		if pending, perr := s.analysis.HasPendingMediaAnalysis(ctx, w.TenantID, ids); perr != nil {
+			return perr
+		} else if pending {
+			return fmt.Errorf("context window analyzer: media analysis still pending for this window's messages")
+		}
 		_, err := s.analysis.Save(ctx, ports.AnalysisRecord{TenantID: w.TenantID, ConversationID: w.ConversationID, WindowID: w.ID, Status: "empty"})
 		return err
 	}

@@ -67,6 +67,17 @@ func (r *PostgresContextAnalysisRepository) WindowMessages(ctx context.Context, 
 	return out, nil
 }
 
+func (r *PostgresContextAnalysisRepository) HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID) (bool, error) {
+	if len(messageIDs) == 0 {
+		return false, nil
+	}
+	var pending bool
+	err := r.q(ctx).QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM message_media_analysis WHERE tenant_id=$1 AND message_id = ANY($2::uuid[]) AND status='pending')`,
+		tenantID, messageIDs).Scan(&pending)
+	return pending, err
+}
+
 func (r *PostgresContextAnalysisRepository) Save(ctx context.Context, rec ports.AnalysisRecord) (uuid.UUID, error) {
 	q := r.q(ctx)
 	var firstAt, lastAt any

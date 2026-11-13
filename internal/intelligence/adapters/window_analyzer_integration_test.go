@@ -250,6 +250,59 @@ func TestWindowAnalyzerRecognizesAnAlreadyPersistedReceiptInsteadOfAnalyzingAgai
 	}
 }
 
+// Regression for a Codex finding (round 4, CONTEXT.2D): a window whose only message is media still waiting on its
+// transcript/description used to be saved as a terminal "empty" receipt — nothing ever reopens a completed
+// window, so that content would never actually be analyzed once the media pipeline finally finished. Analyze
+// must return an error (so the runner retries/backs off) while media analysis is still pending.
+func TestWindowAnalyzerRetriesInsteadOfCompletingEmptyWhileMediaAnalysisIsPending(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "") // media-only: no body of its own
+	e.exec(`INSERT INTO message_media_analysis (tenant_id, message_id, kind, status) VALUES ($1,$2,'transcript','pending')`, a.id, m1)
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: tokenGen{out: `{"summary":"","facts":[]}`}, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models)
+
+	_, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) })
+	if err == nil {
+		t.Fatal("pending media analysis must be returned as an error for the runner to retry, not completed")
+	}
+	if n := e.count(`SELECT count(*) FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID); n != 0 {
+		t.Fatalf("analyses = %d, want 0 (never a terminal receipt while media is still pending)", n)
+	}
+}
+
+// Once media analysis is no longer pending (done with no usable text, failed, or skipped — never 'pending'), a
+// window with no usable text genuinely has nothing to analyze and "empty" is the correct, terminal answer.
+func TestWindowAnalyzerSavesEmptyOnceMediaAnalysisIsNoLongerPending(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "")
+	e.exec(`INSERT INTO message_media_analysis (tenant_id, message_id, kind, status) VALUES ($1,$2,'transcript','failed')`, a.id, m1)
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: tokenGen{out: `{"summary":"","facts":[]}`}, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models)
+
+	if _, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) }); err != nil {
+		t.Fatalf("a window whose media analysis failed (not pending) must still complete: %v", err)
+	}
+	var status string
+	if err := e.seed.QueryRow(e.ctx, `SELECT status FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "empty" {
+		t.Fatalf("status = %q, want empty", status)
+	}
+}
+
 func TestWindowAnalyzerWithNoModelConfiguredDegradesWithoutError(t *testing.T) {
 	e := newEnv(t)
 	a := e.tenant()

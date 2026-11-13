@@ -85,6 +85,11 @@ type ContextAnalysisRepository interface {
 	// ContextWindowStore.MessageIDs) scoped to tenantID/conversationID — a message of a different conversation (or
 	// tenant) is simply absent from the result, never an error.
 	WindowMessages(ctx context.Context, tenantID, conversationID uuid.UUID, messageIDs []uuid.UUID) ([]WindowMessageRow, error)
+	// HasPendingMediaAnalysis reports whether any of the given messages has a media analysis still pending (not
+	// done, failed, skipped or empty). WindowAnalyzer checks this before treating a window with no usable text as
+	// definitively "empty": a media-only window whose transcript/description simply has not finished yet must be
+	// retried, not completed forever with nothing analyzed (Codex review round 4).
+	HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID) (bool, error)
 	// Save persists the analysis receipt and, when Status is "ok", every fact and its evidence, atomically.
 	// previous_analysis_id is resolved internally (the conversation's most recent prior analysis, if any) — the
 	// caller never needs to look it up itself.

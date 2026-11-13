@@ -488,3 +488,26 @@ func TestMessageIDsReturnsTheWindowMembershipOldestFirst(t *testing.T) {
 		}
 	}
 }
+
+// Regression for a Codex finding (round 4, CONTEXT.2D): MessageIDs used to always open its OWN nested system
+// session, acquiring a SECOND pool connection on top of whatever session the caller (WindowAnalyzerService.Analyze,
+// itself inside the runner's session) already holds — with ClaimLimit analyses running at once, that alone can
+// exhaust a pool no bigger than the claim batch and deadlock the runner. Called from WITHIN an existing session
+// (via sys, mirroring how the runner's TenantSession wraps Analyze), it must reuse that session's own querier
+// instead, with no second connection acquired.
+func TestMessageIDsReusesAnAlreadyActiveSessionInsteadOfOpeningANestedOne(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := contextwindow.DefaultPolicy()
+	m1 := e.message(a.id, a.conversation, "m")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	window := ports.ContextWindow{TenantID: a.id, ID: openWindowID(e, a.id, a.conversation)}
+
+	got, err := sys(e, a.id, func(ctx context.Context) ([]uuid.UUID, error) { return store.MessageIDs(ctx, window) })
+	if err != nil || len(got) != 1 || got[0] != m1 {
+		t.Fatalf("MessageIDs within an active session: got=%v err=%v", got, err)
+	}
+}

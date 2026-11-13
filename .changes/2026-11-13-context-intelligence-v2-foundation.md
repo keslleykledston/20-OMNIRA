@@ -1,4 +1,4 @@
-# Context Intelligence v2 — foundation through CONTEXT.2D round 3 fixes (feature not enabled)
+# Context Intelligence v2 — foundation through CONTEXT.2D round 4 fixes (feature not enabled)
 
 - Added pure adaptive 30s/120s/12-message batching policy, forced-flush events, and unit tests.
 - Added strict AI proposal parser with topic/evidence alias allowlists and no operational side effects.
@@ -41,6 +41,13 @@
   dead-letter the window (fixed by bounding the generated title); and the frontend panel stopped polling for
   good once caught up, missing later messages (fixed by invalidating its query on the same realtime event that
   already refreshes messages/timeline).
+- CONTEXT.2D round 4: a fourth independent review found 2 more real issues, none from rounds 1-3 re-flagged: a
+  worker connection-pool exhaustion risk (every window analysis opened a second, nested database session on top
+  of the one the runner already holds, which alone could deadlock the worker once concurrent analyses matched
+  the pool size — fixed by reusing the already-active session's connection instead) and a media-only window
+  being saved as a permanently "empty" receipt before its transcript/description finished, so that content would
+  never actually be analyzed (fixed by retrying instead of completing while any message's media analysis is
+  still pending).
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.
