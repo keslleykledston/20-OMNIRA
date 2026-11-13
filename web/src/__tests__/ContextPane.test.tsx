@@ -103,6 +103,7 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
   // ADR-0020 adds one more READ of our own backend: the contact's attendance history and open follow-ups.
   // ADR-0044 adds one more READ of our own backend: where the conversation is routed and its SLA clocks (…/routing). Still never a provider.
   // ADR-0049 adds one more READ of our own backend: the conversation's service session (protocol) and, only when one exists, its tasks. GET only, no POST on open.
+  // CONTEXT.2C adds one more READ of our own backend: the context-view aggregate (CONTEXT.2B's analysis, read-only). GET only, no POST on open.
   it('introduces no new backend/provider request', async () => {
     mockConversation({ crm_contact_id: 'k3g-contact-999' });
     renderAt(<ContextPane conversationId={CONV} />);
@@ -114,7 +115,8 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
         url.endsWith(`/inbox/conversations/${CONV}`) || url.endsWith('/crm/companies') || url.endsWith('/ticket') ||
           url.endsWith(`/inbox/conversations/${CONV}/topics`) || url.endsWith(`/inbox/conversations/${CONV}/ambiguities`) || url.endsWith('/me/access') ||
           url.endsWith(`/inbox/conversations/${CONV}/attendance-context`) || url.endsWith('/channels/lines') || url.endsWith(`/inbox/conversations/${CONV}/routing`) ||
-          url.endsWith(`/conversations/${CONV}/service-session`) || url.endsWith('/service-tasks'),
+          url.endsWith(`/conversations/${CONV}/service-session`) || url.endsWith('/service-tasks') ||
+          url.endsWith(`/inbox/conversations/${CONV}/context-view`),
       ).toBe(true);
     }
     expect(axios.post).not.toHaveBeenCalled();

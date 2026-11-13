@@ -4264,6 +4264,62 @@ paths:
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: The ambiguity was already resolved }
         '422': { description: 'Neither or both of topic_id and new_topic_title, or an invalid title' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/context-view:
+    get:
+      operationId: getConversationContextView
+      tags: [Topics]
+      summary: 'CONTEXT.2C: server-aggregated read model of the conversation''s windowed AI analysis'
+      description: |
+        A server-only aggregation over CONTEXT.2B's `context_window_analyses`/`context_proposed_facts` — never the
+        model's own words taken as fact, and nothing here is ever applied automatically. `analysis_state` is `none`
+        when nothing has ever been analyzed for this conversation yet. `stale` is true when the conversation has
+        inbound traffic newer than the latest analysis covers. `needs_customer_account_selection` is present only
+        for an actor who also holds `account.read` (omitted, not false, for anyone else — redaction, not visual
+        hiding). Requires `topic.read`; reachable in a Hub-delegated session via the `conversation.read` grant.
+        404 while `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` is off.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200':
+          description: The conversation's context view
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContextView' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/context-analysis/refresh:
+    post:
+      operationId: refreshConversationContextAnalysis
+      tags: [Topics]
+      summary: 'CONTEXT.2C: ask for the conversation''s open analysis window to close now'
+      description: |
+        Records intent only — it forces the conversation's current open window to due (CONTEXT.2A's `manual`
+        trigger) and returns at once; it never waits on the AI analysis itself, which runs asynchronously.
+        `forced: false` means there was no open window (nothing pending), not a failure. Idempotent and rate
+        limited per conversation (429 with `Retry-After` when asked again too soon). Requires `topic.manage` and
+        being the conversation's attendant (or `conversation.manage`) — a Hub-delegated session is not wired to
+        trigger analysis.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '202':
+          description: Intent recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [forced]
+                properties:
+                  forced: { type: boolean }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '429': { description: Asked again too soon for this conversation }
   /tenants/{tenant_id}/messages/{message_id}/media:
     get:
       operationId: getMessageMedia
@@ -6574,6 +6630,45 @@ components:
         source_summary_id: { type: string, format: uuid }
         created_at: { type: string, format: date-time }
         confirmed_at: { type: string, format: date-time }
+    ContextFact:
+      type: object
+      required: [id, kind, text, truth_level, status, evidence_message_ids, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [need, observation, commitment, suggested_action, possible_resolution, risk] }
+        text: { type: string }
+        truth_level: { type: string, enum: [ai_inferred, agent_confirmed, customer_confirmed, provider_verified, system_verified] }
+        status: { type: string, enum: [open, confirmed, dismissed] }
+        evidence_message_ids: { type: array, items: { type: string, format: uuid } }
+        created_at: { type: string, format: date-time }
+    ContextViewTopic:
+      type: object
+      required: [topic_id, title, status, facts]
+      properties:
+        topic_id: { type: string, format: uuid }
+        title: { type: string }
+        status: { type: string, enum: [open, resolved, archived] }
+        facts: { type: array, items: { $ref: '#/components/schemas/ContextFact' } }
+    ContextView:
+      type: object
+      required: [analysis_state, summary, stale, coverage, topics, pending_actions, suggestions, evidence_refs]
+      properties:
+        analysis_state: { type: string, enum: [none, ok, empty, failed] }
+        updated_at: { type: string, format: date-time, description: 'When the latest analysis ran; absent when analysis_state is none' }
+        summary: { type: string }
+        stale: { type: boolean, description: "The conversation has inbound traffic newer than what the latest analysis covers" }
+        coverage:
+          type: object
+          required: [analyzed_message_count, total_inbound_message_count]
+          properties:
+            analyzed_message_count: { type: integer }
+            total_inbound_message_count: { type: integer }
+            last_analyzed_message_at: { type: string, format: date-time }
+        topics: { type: array, items: { $ref: '#/components/schemas/ContextViewTopic' } }
+        pending_actions: { type: array, items: { $ref: '#/components/schemas/ContextFact' }, description: 'Open need/commitment/possible_resolution/risk facts, flattened across topics' }
+        suggestions: { type: array, items: { $ref: '#/components/schemas/ContextFact' }, description: 'Open suggested_action facts, flattened across topics' }
+        evidence_refs: { type: array, items: { type: string, format: uuid }, description: 'Every message id cited by any fact, deduplicated' }
+        needs_customer_account_selection: { type: boolean, description: 'Present only for an actor who also holds account.read; omitted (never false) for anyone else' }
     RoleList:
       type: object
       required: [items]

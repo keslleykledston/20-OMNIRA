@@ -49,9 +49,37 @@ type AnalysisRecord struct {
 	Facts              []ResolvedFact
 }
 
-// ContextAnalysisRepository persists CONTEXT.2B's structured output (migration 000177). It never decides WHAT the
-// facts are — that is contextdelta.Parse plus the caller's own alias resolution — only persists the decision, same
-// split as ContextWindowStore for CONTEXT.2A.
+// ContextViewFact is one proposed fact as the CONTEXT.2C read model exposes it: joined with the topic it was filed
+// under (title/status included so the caller never needs a second round trip). It is never rewritten in place —
+// only Status/confirmation can change after creation (the migration 000177 trigger enforces that in the database).
+type ContextViewFact struct {
+	ID                 uuid.UUID
+	TopicThreadID      uuid.UUID
+	TopicTitle         string
+	TopicStatus        string
+	Kind               string
+	Text               string
+	TruthLevel         string
+	Status             string
+	EvidenceMessageIDs []uuid.UUID
+	CreatedAt          time.Time
+}
+
+// ContextViewRow is the conversation's most recent analysis (whatever its Status) and its facts — the raw material
+// behind GET .../context-view (CONTEXT.2C). LatestForConversation returns (nil, nil) when none exists yet.
+type ContextViewRow struct {
+	AnalysisID            uuid.UUID
+	Status                string
+	SummaryText           string
+	CreatedAt             time.Time
+	AnalyzedMessageCount  int
+	AnalyzedLastMessageAt *time.Time
+	Facts                 []ContextViewFact
+}
+
+// ContextAnalysisRepository persists CONTEXT.2B's structured output (migration 000177) and, for CONTEXT.2C, reads it
+// back as an aggregated view. It never decides WHAT the facts are — that is contextdelta.Parse plus the caller's own
+// alias resolution — only persists the decision, same split as ContextWindowStore for CONTEXT.2A.
 type ContextAnalysisRepository interface {
 	// WindowMessages loads the given messages (in any order; the caller already has the deterministic cursor from
 	// ContextWindowStore.MessageIDs) scoped to tenantID/conversationID — a message of a different conversation (or
@@ -61,4 +89,11 @@ type ContextAnalysisRepository interface {
 	// previous_analysis_id is resolved internally (the conversation's most recent prior analysis, if any) — the
 	// caller never needs to look it up itself.
 	Save(ctx context.Context, rec AnalysisRecord) (analysisID uuid.UUID, err error)
+	// LatestForConversation returns the conversation's most recent analysis and its facts, or (nil, nil) when
+	// nothing has ever been analyzed for it — never an error for "nothing yet".
+	LatestForConversation(ctx context.Context, tenantID, conversationID uuid.UUID) (*ContextViewRow, error)
+	// ConversationCoverage reports how much of the conversation's inbound traffic exists right now (count, and the
+	// newest inbound message's time) — compared by the caller against an analysis's AnalyzedMessageCount/
+	// AnalyzedLastMessageAt to decide staleness. total=0 means the conversation has no inbound message yet.
+	ConversationCoverage(ctx context.Context, tenantID, conversationID uuid.UUID) (total int, lastMessageAt *time.Time, err error)
 }

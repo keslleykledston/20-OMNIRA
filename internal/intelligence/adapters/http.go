@@ -46,6 +46,14 @@ type TopicHandler struct {
 	tools       *application.ToolGateway
 	restructure *application.RestructureService
 	evaluation  ports.EvaluationRepository
+	contextView *application.ContextViewService
+	refresh     *application.ContextRefreshService
+}
+
+// WithContextView enables CONTEXT.2C's context-view and context-analysis/refresh endpoints.
+func (h *TopicHandler) WithContextView(view *application.ContextViewService, refresh *application.ContextRefreshService) *TopicHandler {
+	h.contextView, h.refresh = view, refresh
+	return h
 }
 
 // WithEvaluation enables the aggregate evaluation report.
@@ -193,6 +201,9 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, "summaries are unavailable right now", http.StatusServiceUnavailable)
 	case errors.Is(err, application.ErrNothingToSummarize):
 		http.Error(w, "this topic has no messages to summarize yet", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrContextRefreshThrottled):
+		w.Header().Set("Retry-After", "30")
+		http.Error(w, "context analysis was already requested recently for this conversation", http.StatusTooManyRequests)
 	default:
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
