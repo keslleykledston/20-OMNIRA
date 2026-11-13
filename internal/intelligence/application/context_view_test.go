@@ -27,7 +27,7 @@ func (f *fakeAnalysisRepo) Save(ctx context.Context, rec ports.AnalysisRecord) (
 func (f *fakeAnalysisRepo) ExistsForWindow(ctx context.Context, tenantID, windowID uuid.UUID) (bool, error) {
 	return false, nil
 }
-func (f *fakeAnalysisRepo) HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID) (bool, error) {
+func (f *fakeAnalysisRepo) HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID, pipelines ports.MediaPipelines) (bool, error) {
 	return false, nil
 }
 func (f *fakeAnalysisRepo) LatestForConversation(ctx context.Context, tenantID, conversationID uuid.UUID) (*ports.ContextViewRow, error) {

@@ -39,6 +39,7 @@ import (
 	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
 	"github.com/omnira/omnira/internal/intelligence/contextwindow"
 	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
+	intelligenceports "github.com/omnira/omnira/internal/intelligence/ports"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
 	mediaapp "github.com/omnira/omnira/internal/media/application"
 	mediaports "github.com/omnira/omnira/internal/media/ports"
@@ -541,9 +542,15 @@ func main() {
 		}
 		windowModels := intelligenceadapters.NewModelRouterFromConfig(cfg)
 		windowLedger := aiusageadapters.NewPostgresLedger(dbPool)
+		// WithMediaPipelines: whether each media pipeline can ever actually settle a "pending" row right now —
+		// without this, a tenant that never opted into vision (or a deployment with transcription off) would
+		// retry, and eventually dead-letter, every window containing that kind of attachment (Codex review
+		// round 7). Matches the exact flags gating VisionProcessor/TranscriptionProcessor further up.
 		windowAnalyzer := intelligenceapp.NewWindowAnalyzerService(windowStore, intelligenceadapters.NewPostgresContextAnalysisRepository(dbPool),
 			intelligenceadapters.NewPostgresTopicRepository(dbPool), intelligenceadapters.NewPostgresSummaryRepository(dbPool),
-			windowModels).WithLedger(windowLedger)
+			windowModels).WithLedger(windowLedger).WithMediaPipelines(intelligenceports.MediaPipelines{
+			TranscriptionEnabled: cfg.WhisperURL != "", VisionEnabled: intelligenceFlags.MultimodalAnalysisEnabled,
+		})
 		// WithUsageFlush: the runner collects each analysis' ledger writes instead of letting them open their own
 		// nested session while still holding this window's own (Codex review round 5) — it performs them itself,
 		// right after releasing that connection, on a context with no session of its own.

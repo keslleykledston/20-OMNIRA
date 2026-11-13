@@ -47,7 +47,12 @@ func (r *PostgresContextAnalysisRepository) WindowMessages(ctx context.Context, 
 		if err := rows.Scan(&row.ID, &row.Inbound, &body, &row.At, &media); err != nil {
 			return nil, err
 		}
+		// Both, never just the caption: a short caption on an image/PDF/audio ("aqui está") used to make the
+		// switch pick only the body and silently discard the completed attachment analysis, permanently losing
+		// whatever the image/transcript actually said (Codex review round 7).
 		switch {
+		case body != nil && media != nil:
+			row.Text, row.FromMedia = *body+"\n"+*media, true
 		case body != nil:
 			row.Text = *body
 		case media != nil:
@@ -67,32 +72,40 @@ func (r *PostgresContextAnalysisRepository) WindowMessages(ctx context.Context, 
 	return out, nil
 }
 
-// HasPendingMediaAnalysis also covers two gaps a pure message_media_analysis='pending' check would miss (Codex
-// review round 6): a cleared audio file always gets its 'transcript' row in the SAME transaction as the verdict
-// (migration 000062's trigger), but a message_media row still being virus-scanned (status pending/quarantined,
-// any kind) has NEITHER a transcript NOR a description/document_text row yet — its outcome (clean vs.
-// infected/rejected/source_gone/failed) is simply not known yet. And an image/PDF that already cleared still has
-// no row at all until the next EnqueueVision batch tick (internal/media/adapters, periodic, not trigger-based
-// like audio) creates it. Both must count as "pending" too, or the window finalizes before either resolves and
-// nothing ever reopens it. A clean file of a kind/mime neither pipeline ever analyzes (e.g. video) correctly
-// never counts, so this does not wait forever for media that will never get a receipt.
-func (r *PostgresContextAnalysisRepository) HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID) (bool, error) {
+// HasPendingMediaAnalysis covers three gaps a pure message_media_analysis='pending' check would miss (Codex
+// review rounds 6 and 7):
+//   - a message_media row still being virus-scanned (status pending/quarantined, any kind) has NEITHER a
+//     transcript NOR a description/document_text row yet — its outcome (clean vs.
+//     infected/rejected/source_gone/failed) is simply not known yet;
+//   - an image/PDF that already cleared still has no row at all until the next EnqueueVision batch tick
+//     (internal/media/adapters, periodic, unlike audio's trigger-based transcript enqueue, migration 000062)
+//     creates it;
+//   - but NEITHER of those is worth waiting for when the relevant pipeline will never actually run: vision
+//     needs OMNIRA_MULTIMODAL_ANALYSIS_ENABLED on AND the tenant opted in via tenant_ai_integrations, and
+//     EnqueueVision also skips an already-purged file; transcription needs OMNIRA_WHISPER_URL configured. Without
+//     checking `pipelines`, a tenant that never turned vision on would retry (and eventually dead-letter) every
+//     window containing an image, even one with perfectly good text alongside it.
+func (r *PostgresContextAnalysisRepository) HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID, pipelines ports.MediaPipelines) (bool, error) {
 	if len(messageIDs) == 0 {
 		return false, nil
 	}
 	var pending bool
 	err := r.q(ctx).QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM message_media_analysis WHERE tenant_id=$1 AND message_id = ANY($2::uuid[]) AND status='pending')
+		SELECT EXISTS (SELECT 1 FROM message_media_analysis WHERE tenant_id=$1 AND message_id = ANY($2::uuid[]) AND status='pending'
+		               AND ((kind = 'transcript' AND $3) OR (kind IN ('description','document_text') AND $4)))
 		    OR EXISTS (
 		         SELECT 1 FROM message_media mm
-		         WHERE mm.tenant_id=$1 AND mm.message_id = ANY($2::uuid[])
+		         WHERE mm.tenant_id=$1 AND mm.message_id = ANY($2::uuid[]) AND mm.file_purged_at IS NULL
 		           AND (
-		             mm.status IN ('pending', 'quarantined')
-		             OR (mm.status = 'clean' AND mm.mime IN ('image/jpeg', 'image/png', 'image/webp', 'application/pdf')
-		                 AND NOT EXISTS (SELECT 1 FROM message_media_analysis a WHERE a.tenant_id = mm.tenant_id AND a.message_id = mm.message_id))
+		             ($3 AND mm.kind = 'audio' AND mm.status IN ('pending', 'quarantined'))
+		             OR ($4 AND mm.mime IN ('image/jpeg', 'image/png', 'image/webp', 'application/pdf')
+		                 AND mm.status IN ('pending', 'quarantined', 'clean')
+		                 AND EXISTS (SELECT 1 FROM tenant_ai_integrations ti WHERE ti.tenant_id = mm.tenant_id AND ti.provider = 'gemini' AND ti.enabled)
+		                 AND NOT EXISTS (SELECT 1 FROM message_media_analysis a WHERE a.tenant_id = mm.tenant_id AND a.message_id = mm.message_id
+		                                 AND a.kind IN ('description', 'document_text')))
 		           )
 		       )`,
-		tenantID, messageIDs).Scan(&pending)
+		tenantID, messageIDs, pipelines.TranscriptionEnabled, pipelines.VisionEnabled).Scan(&pending)
 	return pending, err
 }
 

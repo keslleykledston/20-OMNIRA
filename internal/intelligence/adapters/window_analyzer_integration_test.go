@@ -354,6 +354,7 @@ func TestWindowAnalyzerRetriesWhileAnImageIsStillBeingScanned(t *testing.T) {
 	e := newEnv(t)
 	a := e.tenant()
 	windowStore := NewPostgresContextWindowStore(e.app)
+	e.exec(`INSERT INTO tenant_ai_integrations (tenant_id, provider, enabled, secret_ciphertext, consent_at) VALUES ($1,'gemini',true,'\x00','1970-01-01'::timestamptz)`, a.id)
 	m1 := e.message(a.id, a.conversation, "")
 	e.exec(`INSERT INTO message_media (id,tenant_id,message_id,status,kind,mime) VALUES ($1,$2,$3,'pending','image','image/png')`, uuid.New(), a.id, m1)
 	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
@@ -376,6 +377,7 @@ func TestWindowAnalyzerRetriesWhileACleanImageHasNotYetBeenEnqueuedForVisionAnal
 	e := newEnv(t)
 	a := e.tenant()
 	windowStore := NewPostgresContextWindowStore(e.app)
+	e.exec(`INSERT INTO tenant_ai_integrations (tenant_id, provider, enabled, secret_ciphertext, consent_at) VALUES ($1,'gemini',true,'\x00','1970-01-01'::timestamptz)`, a.id)
 	m1 := e.message(a.id, a.conversation, "")
 	e.exec(`INSERT INTO message_media (id,tenant_id,message_id,status,kind,mime) VALUES ($1,$2,$3,'clean','image','image/png')`, uuid.New(), a.id, m1)
 	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
@@ -391,6 +393,63 @@ func TestWindowAnalyzerRetriesWhileACleanImageHasNotYetBeenEnqueuedForVisionAnal
 	}
 	if n := e.count(`SELECT count(*) FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID); n != 0 {
 		t.Fatalf("analyses = %d, want 0", n)
+	}
+}
+
+// Regression for a Codex finding (round 7, CONTEXT.2D): for a tenant that never enabled the Gemini integration,
+// a clean image never receives an analysis row no matter how long the window waits — EnqueueVision explicitly
+// requires the per-tenant opt-in. HasPendingMediaAnalysis must recognize this and let the window finalize
+// (previously it would retry, and eventually dead-letter, the window forever).
+func TestWindowAnalyzerDoesNotWaitForVisionWhenTheTenantNeverOptedIn(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "")
+	e.exec(`INSERT INTO message_media (id,tenant_id,message_id,status,kind,mime) VALUES ($1,$2,$3,'clean','image','image/png')`, uuid.New(), a.id, m1)
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: tokenGen{out: `{"summary":"","facts":[]}`}, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models)
+
+	if _, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) }); err != nil {
+		t.Fatalf("a tenant without vision opt-in must not block the window forever: %v", err)
+	}
+	var status string
+	if err := e.seed.QueryRow(e.ctx, `SELECT status FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "empty" {
+		t.Fatalf("status = %q, want empty", status)
+	}
+}
+
+// Regression for a Codex finding (round 7, CONTEXT.2D): HasPendingMediaAnalysis itself must not wait for either
+// pipeline when the analyzer is told it is not actually running — a deployment with no Whisper engine configured
+// (OMNIRA_WHISPER_URL empty) must not retry a window forever over an audio file still being scanned.
+func TestWindowAnalyzerDoesNotWaitForTranscriptionWhenThePipelineIsNotLive(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	windowStore := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "")
+	e.exec(`INSERT INTO message_media (id,tenant_id,message_id,status,kind,mime) VALUES ($1,$2,$3,'pending','audio','audio/ogg')`, uuid.New(), a.id, m1)
+	w := claimOneDueWindow(t, e, a.id, a.conversation, m1, contextwindow.DefaultPolicy())
+
+	models := application.NewModelRouter().Set(application.TaskContextWindowAnalyze,
+		application.ModelRoute{Provider: "fake", Model: "fake-1", Generator: tokenGen{out: `{"summary":"","facts":[]}`}, MaxOutputTokens: 500})
+	analyzer := application.NewWindowAnalyzerService(windowStore, NewPostgresContextAnalysisRepository(e.app), NewPostgresTopicRepository(e.app),
+		NewPostgresSummaryRepository(e.app), models).WithMediaPipelines(ports.MediaPipelines{TranscriptionEnabled: false, VisionEnabled: true})
+
+	if _, err := sys(e, a.id, func(ctx context.Context) (struct{}, error) { return struct{}{}, analyzer.Analyze(ctx, w) }); err != nil {
+		t.Fatalf("transcription not live must not block the window forever: %v", err)
+	}
+	var status string
+	if err := e.seed.QueryRow(e.ctx, `SELECT status FROM context_window_analyses WHERE tenant_id=$1 AND window_id=$2`, a.id, w.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "empty" {
+		t.Fatalf("status = %q, want empty", status)
 	}
 }
 

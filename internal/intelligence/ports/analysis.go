@@ -19,6 +19,21 @@ type WindowMessageRow struct {
 	FromMedia bool
 }
 
+// MediaPipelines says which of ADR-0016's two derived-text pipelines are actually running right now: transcription
+// (audio, internal/media/application.TranscriptionProcessor, needs OMNIRA_WHISPER_URL) and vision (image/PDF,
+// VisionProcessor, needs OMNIRA_MULTIMODAL_ANALYSIS_ENABLED — and even then, a tenant must separately opt in via
+// tenant_ai_integrations before EnqueueVision ever looks at its files). Note the Go zero value is {false, false}
+// (neither live) — callers that have no real flag to pass use AllMediaPipelinesLive instead, the assumption every
+// caller in this package made before this type existed (Codex review round 7).
+type MediaPipelines struct {
+	TranscriptionEnabled bool
+	VisionEnabled        bool
+}
+
+// AllMediaPipelinesLive is MediaPipelines{true, true} — the pre-round-7 assumption, for a caller with no real
+// flag to pass (tests, or any session with no worker config in reach). NOT the type's zero value.
+var AllMediaPipelinesLive = MediaPipelines{TranscriptionEnabled: true, VisionEnabled: true}
+
 // ResolvedFact is one contextdelta.Fact after its topic_alias was validated against the offered candidates and its
 // evidence aliases resolved to real message ids — by the caller, never by this package. TopicThreadID is always a
 // real, already-existing-or-just-created topic by the time Save is called (CONTEXT.2B never defers that decision
@@ -85,11 +100,18 @@ type ContextAnalysisRepository interface {
 	// ContextWindowStore.MessageIDs) scoped to tenantID/conversationID — a message of a different conversation (or
 	// tenant) is simply absent from the result, never an error.
 	WindowMessages(ctx context.Context, tenantID, conversationID uuid.UUID, messageIDs []uuid.UUID) ([]WindowMessageRow, error)
-	// HasPendingMediaAnalysis reports whether any of the given messages has a media analysis still pending (not
-	// done, failed, skipped or empty). WindowAnalyzer checks this before treating a window with no usable text as
-	// definitively "empty": a media-only window whose transcript/description simply has not finished yet must be
+	// HasPendingMediaAnalysis reports whether any of the given messages has media whose outcome is not known yet
+	// — a transcript/description/document_text row still 'pending', a file still being virus-scanned, or an
+	// already-clean image/PDF not yet picked up by the next vision-enqueue tick. WindowAnalyzer checks this
+	// before treating a window with no usable text as definitively "empty": that media-only window must be
 	// retried, not completed forever with nothing analyzed (Codex review round 4).
-	HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID) (bool, error)
+	//
+	// pipelines says which of the two media pipelines is actually LIVE right now: without it, this would wait
+	// forever for a tenant that never opted into vision, or a deployment with transcription turned off, since
+	// neither of those ever produces a terminal outcome on its own (Codex review round 7). A kind this message's
+	// media is NOT eligible for (the wrong pipeline disabled, the tenant not opted into vision, or the file
+	// already purged) never counts as pending, however long it has sat unanalyzed.
+	HasPendingMediaAnalysis(ctx context.Context, tenantID uuid.UUID, messageIDs []uuid.UUID, pipelines MediaPipelines) (bool, error)
 	// Save persists the analysis receipt and, when Status is "ok", every fact and its evidence, atomically.
 	// previous_analysis_id is resolved internally (the conversation's most recent prior analysis, if any) — the
 	// caller never needs to look it up itself.

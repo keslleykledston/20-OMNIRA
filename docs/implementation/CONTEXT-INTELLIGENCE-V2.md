@@ -109,6 +109,15 @@ Migração 000176 (política adicional) e 000177 round-trip `up/down/up` reverif
 
 Nenhuma migration nesta rodada. Suíte completa do pacote reverificada, mesma falha de performance pré-existente e não relacionada.
 
+### CONTEXT.2D — Revisão independente (Codex), rodada 7 (2026-11-13)
+
+`codex exec review --base c394452` encontrou mais 2 achados [P2], nenhum das seis rodadas anteriores foi re-levantado — e a suíte de integração (não o Codex) pegou um bug de digitação introduzido pela própria correção da rodada 6: os parâmetros `$4`/`$5` da query SQL não tinham argumento correspondente (só 4 argumentos eram passados), `SQLSTATE 42P18`, quebrando TODO teste que chama `Analyze()`; corrigido junto (`$3`/`$4`).
+
+- **A checagem de mídia pendente esperava para sempre por um pipeline que nunca vai rodar** (`analysis_repository.go`, `HasPendingMediaAnalysis`): a correção da rodada 6 tratava qualquer imagem/PDF limpo e não enfileirado como "pendente", sem considerar que `EnqueueVision` exige opt-in por tenant (`tenant_ai_integrations`) e que o processador de visão inteiro tem seu próprio flag global (`OMNIRA_MULTIMODAL_ANALYSIS_ENABLED`) — para um tenant sem Gemini habilitado, aquele anexo NUNCA ganharia linha de análise, e a janela ficaria tentando de novo até esgotar as tentativas e morrer, mesmo tendo texto perfeitamente bom ao lado. Corrigido: `HasPendingMediaAnalysis` agora recebe `ports.MediaPipelines{TranscriptionEnabled, VisionEnabled}` — os mesmos dois flags que já ligam/desligam `TranscriptionProcessor`/`VisionProcessor` no `main.go` — e só espera por um tipo de mídia quando o pipeline correspondente está de fato rodando, além de respeitar o opt-in por tenant e arquivos já purgados. `WindowAnalyzerService.WithMediaPipelines` (novo) injeta isso; sem chamá-lo, assume os dois ligados (o comportamento anterior, preservando todos os testes já existentes). Testes de regressão: `TestWindowAnalyzerDoesNotWaitForVisionWhenTheTenantNeverOptedIn`, `TestWindowAnalyzerDoesNotWaitForTranscriptionWhenThePipelineIsNotLive`.
+- **Legenda de mídia descartava a análise do anexo** (`analysis_repository.go`, `WindowMessages`): quando uma imagem/PDF/áudio tinha legenda não vazia, o código escolhia SÓ a legenda e descartava a descrição/transcrição já concluída do anexo — a janela esperava a análise de mídia terminar e, quando terminava, nunca a usava, perdendo para sempre qualquer fato que só existisse no anexo. Corrigido: quando os dois existem, o texto combina legenda e análise de mídia (nunca escolhe um só). Teste de regressão: `TestWindowMessagesKeepsBothTheCaptionAndTheMediaAnalysisWhenBothExist`.
+
+Suíte completa do pacote reverificada, mesma falha de performance pré-existente e não relacionada.
+
 **Não implementado ainda (geral):** fluxo de confirmação de compromissos pelo operador; evidência clicável; E2E; call-sites reais de `Force` para handoff/claim/finalize. A flag `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` segue `false` em todo lugar — nenhuma flag foi ligada em produção.
 
 ## 3. Próximas fatias verticais necessárias antes de liberar

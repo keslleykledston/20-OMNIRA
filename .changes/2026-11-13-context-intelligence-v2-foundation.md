@@ -1,4 +1,4 @@
-# Context Intelligence v2 — foundation through CONTEXT.2D round 6 fixes (feature not enabled)
+# Context Intelligence v2 — foundation through CONTEXT.2D round 7 fixes (feature not enabled)
 
 - Added pure adaptive 30s/120s/12-message batching policy, forced-flush events, and unit tests.
 - Added strict AI proposal parser with topic/evidence alias allowlists and no operational side effects.
@@ -65,6 +65,13 @@
   forever for media neither pipeline ever analyzes. And "the latest analysis" (and previous_analysis_id's chain)
   ordered by created_at, which an older window's late-finishing retry could win back over a newer generation that
   already completed — fixed by ordering by the window's own generation instead.
+- CONTEXT.2D round 7: a seventh independent review found 2 more P2 issues (plus a parameter-binding typo the
+  integration suite itself caught in round 6's own fix, fixed alongside). The pending-media check would wait
+  forever for a tenant that never opted into vision, or a deployment with transcription turned off, since
+  neither pipeline would ever produce a terminal outcome on its own — fixed by only waiting on a pipeline the
+  analyzer is told is actually live (WithMediaPipelines, defaulting to "both live" unless configured, matching
+  main.go's own OMNIRA_WHISPER_URL/OMNIRA_MULTIMODAL_ANALYSIS_ENABLED flags). And a non-empty caption on an
+  image/PDF/audio made the window permanently discard the completed media analysis instead of combining both.
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.

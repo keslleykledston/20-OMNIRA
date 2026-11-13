@@ -31,18 +31,28 @@ const maxWindowTopicCandidates = 8
 // never links a message to anything stronger than DecisionAI (a human or deterministic decision always outranks it,
 // enforced by TopicRepository.LinkMessage itself).
 type WindowAnalyzerService struct {
-	windows   ports.ContextWindowStore
-	analysis  ports.ContextAnalysisRepository
-	topics    ports.TopicRepository
-	summaries ports.SummaryRepository
-	models    *ModelRouter
-	ledger    aiusage.Ledger // nil = calls are not accounted
-	now       func() time.Time
+	windows        ports.ContextWindowStore
+	analysis       ports.ContextAnalysisRepository
+	topics         ports.TopicRepository
+	summaries      ports.SummaryRepository
+	models         *ModelRouter
+	ledger         aiusage.Ledger // nil = calls are not accounted
+	mediaPipelines ports.MediaPipelines
+	now            func() time.Time
 }
 
 func NewWindowAnalyzerService(windows ports.ContextWindowStore, analysis ports.ContextAnalysisRepository, topics ports.TopicRepository,
 	summaries ports.SummaryRepository, models *ModelRouter) *WindowAnalyzerService {
-	return &WindowAnalyzerService{windows: windows, analysis: analysis, topics: topics, summaries: summaries, models: models, now: time.Now}
+	return &WindowAnalyzerService{windows: windows, analysis: analysis, topics: topics, summaries: summaries, models: models,
+		mediaPipelines: ports.AllMediaPipelinesLive, now: time.Now}
+}
+
+// WithMediaPipelines tells the analyzer which of ADR-0016's two media pipelines are actually live right now
+// (main.go's own OMNIRA_WHISPER_URL/OMNIRA_MULTIMODAL_ANALYSIS_ENABLED flags) — without it, every analyzer
+// assumes both are live (Codex review round 7; see ports.MediaPipelines).
+func (s *WindowAnalyzerService) WithMediaPipelines(p ports.MediaPipelines) *WindowAnalyzerService {
+	s.mediaPipelines = p
+	return s
 }
 
 // WithLedger makes every model call of the analyzer (successful or not) leave a row in the AI usage ledger.
@@ -134,7 +144,7 @@ func (s *WindowAnalyzerService) Analyze(ctx context.Context, w ports.ContextWind
 	// audio even once its analysis finishes, since nothing ever reopens a completed window. Returning an error
 	// makes the runner retry/back off instead, giving the media pipeline time to finish (Codex review round 5 —
 	// round 4's fix only covered the all-media, zero-usable-text case).
-	if pending, perr := s.analysis.HasPendingMediaAnalysis(ctx, w.TenantID, ids); perr != nil {
+	if pending, perr := s.analysis.HasPendingMediaAnalysis(ctx, w.TenantID, ids, s.mediaPipelines); perr != nil {
 		return perr
 	} else if pending {
 		return fmt.Errorf("context window analyzer: media analysis still pending for this window's messages")

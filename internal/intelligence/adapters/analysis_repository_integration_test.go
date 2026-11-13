@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +81,33 @@ func TestWindowMessagesLoadsTextFallsBackToMediaAnalysisAndExcludesOtherConversa
 	}
 	if _, ok := byID[elsewhere]; ok {
 		t.Fatal("a message of another conversation must never be returned")
+	}
+}
+
+// Regression for a Codex finding (round 7, CONTEXT.2D): a non-empty caption on an image/PDF/audio used to make
+// WindowMessages pick ONLY the caption, silently discarding the completed media analysis — permanently losing
+// whatever the image/transcript actually said. Both must be kept.
+func TestWindowMessagesKeepsBothTheCaptionAndTheMediaAnalysisWhenBothExist(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	repo := NewPostgresContextAnalysisRepository(e.app)
+
+	withCaptionAndMedia := e.message(a.id, a.conversation, "aqui está")
+	e.exec(`INSERT INTO message_media_analysis (tenant_id, message_id, kind, status, body) VALUES ($1,$2,'description','done','uma foto do roteador')`,
+		a.id, withCaptionAndMedia)
+
+	rows, err := sys(e, a.id, func(ctx context.Context) ([]ports.WindowMessageRow, error) {
+		return repo.WindowMessages(ctx, a.id, a.conversation, []uuid.UUID{withCaptionAndMedia})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	r := rows[0]
+	if !strings.Contains(r.Text, "aqui está") || !strings.Contains(r.Text, "uma foto do roteador") || !r.FromMedia {
+		t.Fatalf("text = %+v, want both the caption and the media analysis body present", r)
 	}
 }
 
