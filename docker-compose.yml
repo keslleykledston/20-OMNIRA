@@ -116,6 +116,9 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_PRIVATE_HANDOFF_ENABLED: ${OMNIRA_PRIVATE_HANDOFF_ENABLED-}
   OMNIRA_MULTIMODAL_ANALYSIS_ENABLED: ${OMNIRA_MULTIMODAL_ANALYSIS_ENABLED-}
   OMNIRA_AUTO_TICKET_POLICY_ENABLED: ${OMNIRA_AUTO_TICKET_POLICY_ENABLED-}
+  # CONTEXT.2 (Context Intelligence v2): windowed, grouped semantic analysis of a conversation's messages.
+  # FOUNDATION CODE, not cleared for production — see docs/implementation/CONTEXT-INTELLIGENCE-V2.md. Off by default.
+  OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED: ${OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED-false}
 
 services:
   postgres:

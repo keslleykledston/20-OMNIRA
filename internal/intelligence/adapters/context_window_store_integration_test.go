@@ -1,0 +1,422 @@
+package adapters
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/omnira/omnira/internal/intelligence/contextwindow"
+	"github.com/omnira/omnira/internal/intelligence/ports"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
+)
+
+// CONTEXT.2A: storage and scheduling for grouped semantic analysis. Real Postgres, FORCE RLS, runtime role
+// (omnira_app) — never the owner connection, except through e.seed for setup/assertions.
+
+func testPolicy() contextwindow.Policy {
+	return contextwindow.Policy{Idle: 30 * time.Second, MaxAge: 2 * time.Minute, MaxMessages: 3}
+}
+
+func windowRow(e *env, id uuid.UUID) (state string, count int, generation int, trigger *string) {
+	e.t.Helper()
+	if err := e.seed.QueryRow(e.ctx, `SELECT state, message_count, generation, trigger FROM context_analysis_windows WHERE id=$1`, id).
+		Scan(&state, &count, &generation, &trigger); err != nil {
+		e.t.Fatalf("windowRow: %v", err)
+	}
+	return
+}
+
+func openWindowID(e *env, tenant, conversation uuid.UUID) uuid.UUID {
+	e.t.Helper()
+	var id uuid.UUID
+	if err := e.seed.QueryRow(e.ctx, `SELECT id FROM context_analysis_windows WHERE tenant_id=$1 AND conversation_id=$2 AND state='open'`, tenant, conversation).Scan(&id); err != nil {
+		e.t.Fatalf("no open window: %v", err)
+	}
+	return id
+}
+
+func TestTouchOpensAWindowAndExtendsItUntilThePolicyClosesItByMaxMessages(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy() // MaxMessages: 3
+
+	m1 := e.message(a.id, a.conversation, "oi")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	id := openWindowID(e, a.id, a.conversation)
+	state, count, gen, _ := windowRow(e, id)
+	if state != "open" || count != 1 || gen != 1 {
+		t.Fatalf("after 1st message: state=%s count=%d gen=%d", state, count, gen)
+	}
+
+	m2 := e.message(a.id, a.conversation, "tudo bem?")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m2, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	state, count, _, _ = windowRow(e, id)
+	if state != "open" || count != 2 {
+		t.Fatalf("after 2nd message: state=%s count=%d, want open/2", state, count)
+	}
+
+	m3 := e.message(a.id, a.conversation, "preciso de ajuda")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m3, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	state, count, _, _ = windowRow(e, id)
+	if state != "due" || count != 3 {
+		t.Fatalf("after 3rd message (max_messages=3): state=%s count=%d, want due/3", state, count)
+	}
+
+	// A 4th message must NOT reopen or extend the closed window: a new generation starts.
+	m4 := e.message(a.id, a.conversation, "mais uma")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m4, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	id2 := openWindowID(e, a.id, a.conversation)
+	if id2 == id {
+		t.Fatal("the 4th message must open a NEW window, not reopen the closed one")
+	}
+	_, count2, gen2, _ := windowRow(e, id2)
+	if count2 != 1 || gen2 != 2 {
+		t.Fatalf("new window: count=%d gen=%d, want 1/2", count2, gen2)
+	}
+}
+
+func TestTouchIsIdempotentForARedeliveredMessage(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	m1 := e.message(a.id, a.conversation, "oi")
+	at := time.Now().UTC()
+	for i := 0; i < 5; i++ { // the same event, delivered again and again
+		if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, at); err != nil {
+			t.Fatalf("delivery %d: %v", i, err)
+		}
+	}
+	id := openWindowID(e, a.id, a.conversation)
+	_, count, _, _ := windowRow(e, id)
+	if count != 1 {
+		t.Fatalf("message_count = %d, want exactly 1 however many times the event arrives", count)
+	}
+	if n := e.count(`SELECT count(*) FROM context_analysis_window_messages WHERE window_id=$1`, id); n != 1 {
+		t.Fatalf("membership rows = %d, want 1", n)
+	}
+}
+
+func TestTouchConcurrentOpenersOfTheSameConversationNeverCreateTwoOpenWindows(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+
+	const n = 8
+	ids := make([]uuid.UUID, n)
+	for i := range ids {
+		ids[i] = e.message(a.id, a.conversation, "x")
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = store.Touch(e.ctx, policy, a.id, a.conversation, ids[i], time.Now().UTC())
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("touch %d: %v", i, err)
+		}
+	}
+	if n := e.count(`SELECT count(*) FROM context_analysis_windows WHERE tenant_id=$1 AND conversation_id=$2 AND state='open'`, a.id, a.conversation); n != 1 {
+		t.Fatalf("open windows = %d, want exactly 1 (no duplicate created by the race)", n)
+	}
+	// Every distinct message ended up in SOME window of this conversation (none lost).
+	total := e.count(`SELECT count(*) FROM context_analysis_window_messages wm JOIN context_analysis_windows w ON w.id=wm.window_id WHERE w.tenant_id=$1 AND w.conversation_id=$2`, a.id, a.conversation)
+	if total != n {
+		t.Fatalf("messages recorded across windows = %d, want %d (max_messages=%d may have split them across generations, but none lost)", total, n, policy.MaxMessages)
+	}
+}
+
+func TestTouchNeverLeaksAcrossTenantsOrConversations(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(), e.tenant()
+	otherConv := e.conversationFor(a.id, nil)
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+
+	ma := e.message(a.id, a.conversation, "a")
+	mb := e.message(b.id, b.conversation, "b")
+	mOther := e.message(a.id, otherConv, "other conv, same tenant")
+	for _, c := range []struct{ tenant, conv, msg uuid.UUID }{
+		{a.id, a.conversation, ma}, {b.id, b.conversation, mb}, {a.id, otherConv, mOther},
+	} {
+		if err := store.Touch(e.ctx, policy, c.tenant, c.conv, c.msg, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := e.count(`SELECT count(*) FROM context_analysis_windows WHERE tenant_id=$1`, a.id); n != 2 {
+		t.Fatalf("tenant A windows = %d, want 2 (one per conversation)", n)
+	}
+	if n := e.count(`SELECT count(*) FROM context_analysis_windows WHERE tenant_id=$1`, b.id); n != 1 {
+		t.Fatalf("tenant B windows = %d, want 1", n)
+	}
+	// Tenant B's member cannot see tenant A's windows at all (RLS).
+	userB := e.member(b.id, "tenant_admin")
+	e.session(b.id, userB, func(ctx context.Context) {
+		var n int
+		_ = platformdb.QuerierFromContext(ctx, e.app).QueryRow(ctx, `SELECT count(*) FROM context_analysis_windows`).Scan(&n)
+		if n != 1 {
+			t.Fatalf("tenant B session sees %d window(s), want 1 (its own only)", n)
+		}
+	})
+}
+
+func TestResolveMessageReadsTheTenantFromTheStoredRowNeverFromTheCaller(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	m1 := e.message(a.id, a.conversation, "oi")
+	e.exec(`INSERT INTO messages(id,tenant_id,conversation_id,direction,message_type,body,status) VALUES(gen_random_uuid(),$1,$2,'outbound','text','saindo','sent')`, a.id, a.conversation)
+
+	msg, found, err := store.ResolveMessage(e.ctx, m1)
+	if err != nil || !found || msg.TenantID != a.id || msg.ConversationID != a.conversation {
+		t.Fatalf("ResolveMessage(inbound) = %+v found=%v err=%v", msg, found, err)
+	}
+	if _, found, err := store.ResolveMessage(e.ctx, uuid.New()); err != nil || found {
+		t.Fatalf("unknown message: found=%v err=%v, want false/nil", found, err)
+	}
+	var outboundID uuid.UUID
+	_ = e.seed.QueryRow(e.ctx, `SELECT id FROM messages WHERE tenant_id=$1 AND direction='outbound'`, a.id).Scan(&outboundID)
+	if _, found, err := store.ResolveMessage(e.ctx, outboundID); err != nil || found {
+		t.Fatalf("outbound message: found=%v err=%v, want false/nil (never windowed)", found, err)
+	}
+}
+
+func TestForceClosesTheOpenWindowImmediatelyAndIsANoOpWithoutOne(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+
+	if forced, err := store.Force(e.ctx, a.id, a.conversation, contextwindow.TriggerClaim); err != nil || forced {
+		t.Fatalf("force without an open window: forced=%v err=%v, want false/nil", forced, err)
+	}
+	m1 := e.message(a.id, a.conversation, "oi")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	id := openWindowID(e, a.id, a.conversation)
+	forced, err := store.Force(e.ctx, a.id, a.conversation, contextwindow.TriggerHandoff)
+	if err != nil || !forced {
+		t.Fatalf("force: forced=%v err=%v, want true/nil", forced, err)
+	}
+	state, count, _, trig := windowRow(e, id)
+	if state != "due" || count != 1 || trig == nil || *trig != "handoff" {
+		t.Fatalf("after force: state=%s count=%d trigger=%v, want due/1/handoff", state, count, trig)
+	}
+}
+
+func TestSweepClosesOnlyWindowsPastTheirDueAtAndIsIdempotent(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	m1 := e.message(a.id, a.conversation, "oi")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	id := openWindowID(e, a.id, a.conversation)
+
+	if n, err := store.Sweep(e.ctx, time.Now().UTC(), 100); err != nil || n != 0 {
+		t.Fatalf("sweep before due_at: n=%d err=%v, want 0/nil (idle=%s has not elapsed)", n, err, policy.Idle)
+	}
+	state, _, _, _ := windowRow(e, id)
+	if state != "open" {
+		t.Fatalf("state = %s, want still open", state)
+	}
+
+	future := time.Now().UTC().Add(policy.Idle + time.Second)
+	if n, err := store.Sweep(e.ctx, future, 100); err != nil || n != 1 {
+		t.Fatalf("sweep past due_at: n=%d err=%v, want 1/nil", n, err)
+	}
+	state, _, _, _ = windowRow(e, id)
+	if state != "due" {
+		t.Fatalf("state = %s, want due", state)
+	}
+	if n, err := store.Sweep(e.ctx, future, 100); err != nil || n != 0 {
+		t.Fatalf("sweeping again: n=%d err=%v, want 0/nil (already due, not open)", n, err)
+	}
+}
+
+func TestClaimLeasesWithSkipLockedAndRecoversAnExpiredLease(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	m1 := e.message(a.id, a.conversation, "oi")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Force(e.ctx, a.id, a.conversation, contextwindow.TriggerManual); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := store.Claim(e.ctx, 10, 50*time.Millisecond)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("1st claim: n=%d err=%v, want 1/nil", len(claimed), err)
+	}
+	w := claimed[0]
+	if w.Attempt != 1 || w.ConversationID != a.conversation {
+		t.Fatalf("claimed window = %+v", w)
+	}
+	// A second claim right away sees nothing: the lease has not expired and nothing else is due.
+	if again, err := store.Claim(e.ctx, 10, time.Minute); err != nil || len(again) != 0 {
+		t.Fatalf("2nd claim (lease live): n=%d err=%v, want 0/nil", len(again), err)
+	}
+	time.Sleep(80 * time.Millisecond) // past the 50ms lease
+	recovered, err := store.Claim(e.ctx, 10, time.Minute)
+	if err != nil || len(recovered) != 1 || recovered[0].Attempt != 2 {
+		t.Fatalf("recovery claim: n=%d attempt=%v err=%v, want 1/2/nil", len(recovered), recovered, err)
+	}
+	// The stale first claim can no longer complete it (fenced by attempt): it already moved on.
+	if ok, err := store.Complete(e.ctx, w); err != nil || ok {
+		t.Fatalf("stale Complete: ok=%v err=%v, want false/nil (fenced out by generation/attempt)", ok, err)
+	}
+	if ok, err := store.Complete(e.ctx, recovered[0]); err != nil || !ok {
+		t.Fatalf("current Complete: ok=%v err=%v, want true/nil", ok, err)
+	}
+}
+
+func TestClaimTwoWorkersNeverGetTheSameWindow(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	const n = 6
+	for i := 0; i < n; i++ {
+		conv := e.conversationFor(a.id, nil)
+		m := e.message(a.id, conv, "x")
+		if err := store.Touch(e.ctx, policy, a.id, conv, m, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Force(e.ctx, a.id, conv, contextwindow.TriggerPriority); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	results := make([][]ports.ContextWindow, 3)
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			got, err := store.Claim(e.ctx, n, time.Minute)
+			if err != nil {
+				t.Errorf("worker %d: %v", i, err)
+				return
+			}
+			results[i] = got
+		}(i)
+	}
+	wg.Wait()
+	seen := map[uuid.UUID]bool{}
+	total := 0
+	for _, r := range results {
+		for _, w := range r {
+			if seen[w.ID] {
+				t.Fatalf("window %s claimed by more than one worker", w.ID)
+			}
+			seen[w.ID] = true
+			total++
+		}
+	}
+	if total != n {
+		t.Fatalf("total claimed = %d, want %d (every due window claimed exactly once)", total, n)
+	}
+}
+
+func TestRetryReschedulesAndDeadIsPermanentFencedByAttempt(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := testPolicy()
+	m1 := e.message(a.id, a.conversation, "oi")
+	if err := store.Touch(e.ctx, policy, a.id, a.conversation, m1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Force(e.ctx, a.id, a.conversation, contextwindow.TriggerManual); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.Claim(e.ctx, 1, time.Minute)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: n=%d err=%v", len(claimed), err)
+	}
+	w := claimed[0]
+	if ok, err := store.Retry(e.ctx, w, "transient", time.Millisecond); err != nil || !ok {
+		t.Fatalf("retry: ok=%v err=%v, want true/nil", ok, err)
+	}
+	state, _, _, _ := windowRow(e, w.ID)
+	if state != "due" {
+		t.Fatalf("after retry: state=%s, want due", state)
+	}
+	// Retrying again with the SAME (now stale) attempt token must fail: the window already moved past it.
+	if ok, err := store.Retry(e.ctx, w, "transient", time.Millisecond); err != nil || ok {
+		t.Fatalf("stale retry: ok=%v err=%v, want false/nil", ok, err)
+	}
+
+	claimed2, err := store.Claim(e.ctx, 1, time.Minute)
+	if err != nil || len(claimed2) != 1 {
+		t.Fatalf("2nd claim: n=%d err=%v", len(claimed2), err)
+	}
+	if ok, err := store.Dead(e.ctx, claimed2[0], "permanent"); err != nil || !ok {
+		t.Fatalf("dead: ok=%v err=%v, want true/nil", ok, err)
+	}
+	state, _, _, _ = windowRow(e, w.ID)
+	if state != "dead" {
+		t.Fatalf("after dead: state=%s, want dead", state)
+	}
+	// Dead is terminal: Claim never picks it up again, however long it waits.
+	if n, err := store.Sweep(e.ctx, time.Now().UTC().Add(time.Hour), 100); err != nil || n != 0 {
+		t.Fatalf("sweep after dead: n=%d err=%v, want 0/nil", n, err)
+	}
+	if again, err := store.Claim(e.ctx, 10, time.Nanosecond); err != nil || len(again) != 0 {
+		t.Fatalf("claim after dead: n=%d err=%v, want 0/nil", len(again), err)
+	}
+}
+
+func TestMessageIDsReturnsTheWindowMembershipOldestFirst(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	store := NewPostgresContextWindowStore(e.app)
+	policy := contextwindow.Policy{Idle: 30 * time.Second, MaxAge: 2 * time.Minute, MaxMessages: 10}
+	// Close to the real "now" Touch evaluates the policy against: a message far in the past relative to actual
+	// wall-clock time would close the window immediately via the idle/max-age path, before the other 3 could join
+	// it. Still deliberately out of chronological order by a few milliseconds, to prove the cursor sorts by
+	// message_at, not insertion order.
+	base := time.Now().UTC()
+	ids := make([]uuid.UUID, 4)
+	for i := range ids {
+		ids[i] = e.message(a.id, a.conversation, "m")
+		at := base.Add(time.Duration(len(ids)-i) * 10 * time.Millisecond)
+		if err := store.Touch(e.ctx, policy, a.id, a.conversation, ids[i], at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	window := ports.ContextWindow{TenantID: a.id, ID: openWindowID(e, a.id, a.conversation)}
+	got, err := store.MessageIDs(e.ctx, window)
+	if err != nil || len(got) != 4 {
+		t.Fatalf("MessageIDs: n=%d err=%v", len(got), err)
+	}
+	for i, id := range got {
+		if id != ids[len(ids)-1-i] {
+			t.Fatalf("order[%d] = %s, want the reverse insertion order (oldest message_at first)", i, id)
+		}
+	}
+}

@@ -36,6 +36,7 @@ import (
 	flowsports "github.com/omnira/omnira/internal/flows/ports"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
+	"github.com/omnira/omnira/internal/intelligence/contextwindow"
 	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
 	mediaapp "github.com/omnira/omnira/internal/media/application"
@@ -53,6 +54,7 @@ import (
 	routingapp "github.com/omnira/omnira/internal/routing/application"
 	routingengine "github.com/omnira/omnira/internal/routing/engine"
 	routingports "github.com/omnira/omnira/internal/routing/ports"
+	contextwindowworker "github.com/omnira/omnira/internal/worker/contextwindow"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	flowsworker "github.com/omnira/omnira/internal/worker/flows"
 	"github.com/omnira/omnira/internal/worker/hubdistributor"
@@ -517,6 +519,36 @@ func main() {
 		}
 		defer intelligenceConsumer.Stop()
 		log.Printf("Conversation Intelligence pipeline started (auto routing=%v)\n", intelligenceFlags.TopicAutoRoutingEnabled)
+	}
+
+	// CONTEXT.2A (Context Intelligence v2): event -> context window -> runner. FOUNDATION CODE, not cleared for
+	// production (docs/implementation/CONTEXT-INTELLIGENCE-V2.md). Independent of OMNIRA_TOPIC_THREADS_ENABLED on
+	// purpose: windowing is orthogonal to topic classification, and CONTEXT.2B's real analyzer is not wired yet —
+	// only NoopWindowAnalyzer, so the scheduling plumbing can be exercised end-to-end before CONTEXT.2B exists.
+	if intelligenceFlags.ContextIntelligenceV2Enabled {
+		windowStore := intelligenceadapters.NewPostgresContextWindowStore(dbPool)
+		windowSession := func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
+			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, func(c context.Context) error {
+				if active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, dbPool), tenantID); err != nil {
+					return err
+				} else if !active {
+					return errors.New("company is suspended")
+				}
+				return fn(c)
+			})
+		}
+		windowRunner := intelligenceapp.NewContextWindowRunner(windowStore, intelligenceapp.NoopWindowAnalyzer{}, windowSession, intelligenceapp.DefaultContextWindowRunnerConfig(), nil)
+		go windowRunner.Run(workerCtx, 2*time.Second)
+		windowHandler, err := contextwindowworker.NewHandler(windowStore, contextwindow.DefaultPolicy())
+		if err != nil {
+			log.Fatalf("context window handler error: %v", err)
+		}
+		windowConsumer, err := contextwindowworker.StartConsumer(workerCtx, js, windowHandler)
+		if err != nil {
+			log.Fatalf("failed to start context window consumer: %v", err)
+		}
+		defer windowConsumer.Stop()
+		log.Printf("Context Intelligence v2 window scheduling started (CONTEXT.2A, analyzer=noop — CONTEXT.2B not wired yet)\n")
 	}
 
 	// Flow Builder runtime (ADR-0019), only when OMNIRA_FLOWS_ENABLED=true: the inbound-message consumer and the sweeper for
