@@ -94,6 +94,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))
 	s.RegisterWahaWebhook(http.NotFoundHandler())
 	s.RegisterGroupHandlers(nil, groupsadapters.NewHandler(nil, nil, nil))
+	s.RegisterSLAAlertFeatureFlagHandlers(nil, groupsadapters.NewSLAAlertFeatureFlagHandler(nil))
 	s.RegisterIntelligenceHandlers(nil, intelligenceadapters.NewTopicHandler(nil, nil, nil))
 	s.RegisterAIIntegrationHandlers(nil, tenancyadapters.NewAIIntegrationHandler(nil, nil, nil))
 	s.RegisterHubHandlers(nil, true, true, true)
