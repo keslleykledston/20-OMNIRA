@@ -127,6 +127,18 @@ func (e *env) readOnlyMember(tenant uuid.UUID) uuid.UUID {
 	return u
 }
 
+// topicReaderWithoutAccountRead has topic.read but, unlike the seeded tenant_agent/tenant_supervisor/tenant_admin
+// roles (migration 000073 grants them account.read by default), deliberately lacks account.read.
+func (e *env) topicReaderWithoutAccountRead(tenant uuid.UUID) uuid.UUID {
+	u, role := uuid.New(), uuid.New()
+	e.exec(`INSERT INTO users(id,external_subject,email,status) VALUES($1,$2,$3,'active')`, u, u, u.String()+"@invalid")
+	e.t.Cleanup(func() { _, _ = e.seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, u) })
+	e.exec(`INSERT INTO roles(id,tenant_id,key,name) VALUES($1,$2,'topic_reader_no_accounts','Topic reader')`, role, tenant)
+	e.exec(`INSERT INTO role_permissions(role_id,permission_key) VALUES($1,'topic.read')`, role)
+	e.exec(`INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'active')`, tenant, u, role)
+	return u
+}
+
 // session runs fn inside a real tenant session of the runtime role (RLS applies) with a trusted tenant context.
 func (e *env) session(tenant, user uuid.UUID, fn func(ctx context.Context)) {
 	e.t.Helper()
@@ -212,6 +224,63 @@ func (e *env) groupMessage(tenant uuid.UUID, g groupFixture, author uuid.UUID, b
 	e.exec(`INSERT INTO wa_group_messages(id,tenant_id,group_id,provider_message_id,author_jid,author_name,message_type,body,sent_at,sender_channel_participant_id,reply_to_group_message_id)
 	        VALUES($1,$2,$3,$4,'a@lid','x','text',$5,now(),$6,$7)`, id, tenant, g.group, fmt.Sprintf("gm-%d-%s", groupSeq, id), body, author, replyTo)
 	return id
+}
+
+// callDelegated runs fn in a request-like session for a Hub-delegated actor (ADR-0040): a fresh hub, a
+// hub_tenant_service_contracts ceiling wide enough for every permission this package's tests exercise, and a
+// grant limited to exactly the given permissions — through the real lock_served_tenant()/delegated_permissions()
+// machinery (migration 000108), never a forged session variable.
+// delegatedSession runs fn inside a real Hub-delegated session (ADR-0040): a fresh hub, a
+// hub_tenant_service_contracts ceiling wide enough for every permission this package's tests exercise, and a
+// grant limited to exactly the given permissions — through the real lock_served_tenant()/delegated_permissions()
+// machinery (migration 000108), never a forged session variable.
+func (e *env) delegatedSession(tenant, user uuid.UUID, permissions []string, fn func(ctx context.Context)) {
+	e.t.Helper()
+	hub, contract, grant := uuid.New(), uuid.New(), uuid.New()
+	e.exec(`INSERT INTO users(id,external_subject,email,status) VALUES($1,$2,$3,'active') ON CONFLICT (id) DO NOTHING`, user, user, user.String()+"@invalid")
+	e.exec(`INSERT INTO service_hubs(id,name) VALUES($1,$2)`, hub, "hub-"+hub.String()[:8])
+	var hubAgentRole uuid.UUID
+	if err := e.seed.QueryRow(e.ctx, `SELECT id FROM roles WHERE tenant_id IS NULL AND key='hub_agent'`).Scan(&hubAgentRole); err != nil {
+		e.t.Fatal(err)
+	}
+	e.exec(`INSERT INTO hub_memberships(hub_id,user_id,role_id) VALUES($1,$2,$3)`, hub, user, hubAgentRole)
+	e.exec(`INSERT INTO hub_tenant_service_contracts(id,hub_id,tenant_id,valid_from,delegable_permissions) VALUES($1,$2,$3,now()-interval '1 day',$4)`,
+		contract, hub, tenant, []string{"conversation.read", "topic.read"})
+	e.exec(`INSERT INTO effective_access_grants(id,hub_id,user_id,tenant_id,service_contract_id,valid_from,permissions) VALUES($1,$2,$3,$4,$5,now()-interval '1 day',$6)`,
+		grant, hub, user, tenant, contract, permissions)
+
+	err := platformdb.WithTenantSession(e.ctx, e.app, user, false, func(sessionCtx context.Context) error {
+		q := platformdb.QuerierFromContext(sessionCtx, e.app)
+		var locked *bool
+		if qerr := q.QueryRow(sessionCtx, `SELECT lock_served_tenant($1,$2,$3)`, tenant, user, hub).Scan(&locked); qerr != nil {
+			return qerr
+		}
+		if locked == nil || !*locked {
+			e.t.Fatal("delegatedSession: lock_served_tenant refused the delegated context")
+		}
+		tc, terr := tenancydomain.NewHubServeTenantContext(tenant, user, hub, contract, grant, permissions, "")
+		if terr != nil {
+			return terr
+		}
+		fn(tenancydomain.WithTenantContext(sessionCtx, tc))
+		return nil
+	})
+	if err != nil {
+		e.t.Fatalf("delegatedSession: %v", err)
+	}
+}
+
+func (e *env) callDelegated(tenant, user uuid.UUID, permissions []string, method, body string, path map[string]string, fn http.HandlerFunc) *httptest.ResponseRecorder {
+	e.t.Helper()
+	rec := httptest.NewRecorder()
+	e.delegatedSession(tenant, user, permissions, func(ctx context.Context) {
+		req := httptest.NewRequest(method, "/", bytes.NewReader([]byte(body))).WithContext(ctx)
+		for k, v := range path {
+			req.SetPathValue(k, v)
+		}
+		fn(rec, req)
+	})
+	return rec
 }
 
 // callQuery is call() with a query string.

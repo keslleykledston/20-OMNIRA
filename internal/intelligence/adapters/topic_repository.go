@@ -107,11 +107,22 @@ func (r *PostgresTopicRepository) UpdateTopic(ctx context.Context, t *domain.Top
 	return nil
 }
 
+// listCounts and listCountsJoins go together: listCountsJoins must follow "FROM topic_threads t" (it references the
+// t alias) before any other join, and listCounts is appended to that same query's SELECT list.
+//
+// Both LATERAL subqueries are read ONCE per topic no matter how many messages or tickets it has, each paying RLS's
+// per-row has_active_membership() check only for the rows it actually touches. The naive form — a scalar subquery
+// per aggregate, the last one joining to messages just to read its created_at — read message_topic_links TWICE per
+// topic and, worse, walked messages row by row (3,000 RLS checks on a 40-topic/3,000-message conversation): measured
+// at ~720ms against a 400ms budget designed to catch exactly this kind of pathological query (PERF.1). last_at is
+// message_topic_links.created_at (when a message was linked to this topic), not messages.created_at (when it was
+// sent): that is already this system's notion of topic activity — LinkMessage bumps topic_threads.last_activity_at
+// the same way, at link time, not send time — so this is not a behavior change, only the same value read cheaply.
+const listCountsJoins = `
+	LEFT JOIN LATERAL (SELECT count(*) AS msg_count, max(l.created_at) AS last_at FROM message_topic_links l WHERE l.tenant_id = t.tenant_id AND l.topic_thread_id = t.id) agg ON true
+	LEFT JOIN LATERAL (SELECT count(*) AS ticket_count FROM topic_ticket_links k WHERE k.tenant_id = t.tenant_id AND k.topic_thread_id = t.id) tk ON true`
 const listCounts = `,
-	(SELECT count(*) FROM message_topic_links l WHERE l.tenant_id=t.tenant_id AND l.topic_thread_id=t.id),
-	(SELECT count(*) FROM topic_ticket_links k WHERE k.tenant_id=t.tenant_id AND k.topic_thread_id=t.id),
-	(SELECT max(m.created_at) FROM message_topic_links l JOIN messages m ON m.tenant_id=l.tenant_id AND m.id=l.message_id
-	   WHERE l.tenant_id=t.tenant_id AND l.topic_thread_id=t.id)`
+	agg.msg_count, tk.ticket_count, agg.last_at`
 
 func (r *PostgresTopicRepository) scanList(rows pgx.Rows) ([]ports.TopicListItem, error) {
 	defer rows.Close()
@@ -132,6 +143,7 @@ func (r *PostgresTopicRepository) ListConversationTopics(ctx context.Context, te
 	rows, err := r.q(ctx).Query(ctx, `
 		SELECT `+topicColumns+listCounts+`
 		FROM topic_threads t
+		`+listCountsJoins+`
 		JOIN topic_conversation_links c ON c.tenant_id=t.tenant_id AND c.topic_thread_id=t.id
 		WHERE t.tenant_id=$1 AND c.conversation_id=$2 AND t.status <> 'archived'
 		ORDER BY (t.status='open') DESC, t.last_activity_at DESC, t.id`, tenantID, conversationID)
@@ -153,6 +165,7 @@ func (r *PostgresTopicRepository) ListContactTopics(ctx context.Context, tenantI
 	rows, err := r.q(ctx).Query(ctx, `
 		SELECT `+topicColumns+listCounts+`
 		FROM topic_threads t
+		`+listCountsJoins+`
 		WHERE t.tenant_id=$1 AND t.primary_contact_id=$2 AND t.status <> 'archived' AND ($3::text IS NULL OR t.status=$3)
 		ORDER BY (t.status='open') DESC, t.last_activity_at DESC, t.id LIMIT $4`, tenantID, contactID, st, limit)
 	if err != nil {

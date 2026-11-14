@@ -11,8 +11,9 @@ import (
 type Task string
 
 const (
-	TaskTopicClassify Task = "topic_classify"
-	TaskTopicSummary  Task = "topic_summary"
+	TaskTopicClassify        Task = "topic_classify"
+	TaskTopicSummary         Task = "topic_summary"
+	TaskContextWindowAnalyze Task = "context_window_analyze"
 )
 
 // ErrNoModel: no model is configured for the task. The caller degrades (deterministic router, manual work); it never fails.

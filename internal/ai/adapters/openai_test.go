@@ -163,7 +163,7 @@ func TestOpenAIGenerator_ServerError(t *testing.T) {
 }
 
 func TestOpenAIGenerator_Timeout_NoRetry(t *testing.T) {
-	var callCount atomic.Int32
+	var callCount atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount.Add(1)
 		time.Sleep(50 * time.Millisecond)

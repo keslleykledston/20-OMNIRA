@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"github.com/omnira/omnira/internal/aiusage"
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
@@ -38,7 +39,9 @@ import (
 	groupsapp "github.com/omnira/omnira/internal/groups/application"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
+	"github.com/omnira/omnira/internal/intelligence/contextwindow"
 	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
+	intelligenceports "github.com/omnira/omnira/internal/intelligence/ports"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
 	mediaapp "github.com/omnira/omnira/internal/media/application"
 	mediaports "github.com/omnira/omnira/internal/media/ports"
@@ -55,6 +58,7 @@ import (
 	routingapp "github.com/omnira/omnira/internal/routing/application"
 	routingengine "github.com/omnira/omnira/internal/routing/engine"
 	routingports "github.com/omnira/omnira/internal/routing/ports"
+	contextwindowworker "github.com/omnira/omnira/internal/worker/contextwindow"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	flowsworker "github.com/omnira/omnira/internal/worker/flows"
 	"github.com/omnira/omnira/internal/worker/groupalert"
@@ -619,6 +623,60 @@ func main() {
 		}
 	} else {
 		log.Printf("Group AI observer disabled (OMNIRA_GROUP_AI_OBSERVER_ENABLED != true)\n")
+	}
+
+	// CONTEXT.2 (Context Intelligence v2): event -> context window -> runner -> structured analysis. FOUNDATION
+	// CODE, not cleared for production (docs/implementation/CONTEXT-INTELLIGENCE-V2.md). Independent of
+	// OMNIRA_TOPIC_THREADS_ENABLED on purpose: windowing is orthogonal to topic classification. Without a model
+	// configured for TaskContextWindowAnalyze, WindowAnalyzerService itself degrades to a no-op (same rule as the
+	// topic classifier) — the scheduling plumbing still runs and is provable end-to-end either way.
+	if intelligenceFlags.ContextIntelligenceV2Enabled {
+		windowStore := intelligenceadapters.NewPostgresContextWindowStore(dbPool)
+		windowSession := func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
+			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, func(c context.Context) error {
+				if active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, dbPool), tenantID); err != nil {
+					return err
+				} else if !active {
+					return errors.New("company is suspended")
+				}
+				return fn(c)
+			})
+		}
+		windowModels := intelligenceadapters.NewModelRouterFromConfig(cfg)
+		windowLedger := aiusageadapters.NewPostgresLedger(dbPool)
+		// WithMediaPipelines: whether each media pipeline can ever actually settle a "pending" row right now —
+		// without this, a tenant that never opted into vision (or a deployment with transcription off) would
+		// retry, and eventually dead-letter, every window containing that kind of attachment (Codex review
+		// round 7). Matches the exact flags gating VisionProcessor/TranscriptionProcessor further up.
+		windowAnalyzer := intelligenceapp.NewWindowAnalyzerService(windowStore, intelligenceadapters.NewPostgresContextAnalysisRepository(dbPool),
+			intelligenceadapters.NewPostgresTopicRepository(dbPool), intelligenceadapters.NewPostgresSummaryRepository(dbPool),
+			windowModels).WithLedger(windowLedger).WithMediaPipelines(intelligenceports.MediaPipelines{
+			TranscriptionEnabled: cfg.WhisperURL != "", VisionEnabled: intelligenceFlags.MultimodalAnalysisEnabled,
+		})
+		// WithUsageFlush: the runner collects each analysis' ledger writes instead of letting them open their own
+		// nested session while still holding this window's own (Codex review round 5) — it performs them itself,
+		// right after releasing that connection, on a context with no session of its own.
+		windowRunner := intelligenceapp.NewContextWindowRunner(windowStore, windowAnalyzer, windowSession, intelligenceapp.DefaultContextWindowRunnerConfig(), nil).
+			WithUsageFlush(func(ctx context.Context, items []aiusage.Record) error {
+				for _, rec := range items {
+					if err := windowLedger.Record(ctx, rec); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+		go windowRunner.Run(workerCtx, 2*time.Second)
+		windowHandler, err := contextwindowworker.NewHandler(windowStore, contextwindow.DefaultPolicy())
+		if err != nil {
+			log.Fatalf("context window handler error: %v", err)
+		}
+		windowConsumer, err := contextwindowworker.StartConsumer(workerCtx, js, windowHandler)
+		if err != nil {
+			log.Fatalf("failed to start context window consumer: %v", err)
+		}
+		defer windowConsumer.Stop()
+		_, modelReady := windowModels.Route(intelligenceapp.TaskContextWindowAnalyze)
+		log.Printf("Context Intelligence v2 window scheduling + analysis started (CONTEXT.2A/2B; model configured=%v)\n", modelReady == nil)
 	}
 
 	// Flow Builder runtime (ADR-0019), only when OMNIRA_FLOWS_ENABLED=true: the inbound-message consumer and the sweeper for

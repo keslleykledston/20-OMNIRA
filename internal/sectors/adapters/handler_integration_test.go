@@ -129,6 +129,18 @@ func businessBody(name, tz string) map[string]any {
 	return map[string]any{"name": name, "definition": map[string]any{"kind": "business", "timezone": tz, "weekly": days}}
 }
 
+// nextBusinessDay returns a Mon-Fri calendar date comfortably in the future (never today or tomorrow, to leave room
+// for a slow run), as "2006-01-02". Used for fixtures that would otherwise hardcode a date that ages past
+// store.go's 30-day suspension retention window as real time passes.
+func nextBusinessDay(t *testing.T) string {
+	t.Helper()
+	d := time.Now().UTC().AddDate(0, 0, 10)
+	for d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
+		d = d.AddDate(0, 0, 1)
+	}
+	return d.Format("2006-01-02")
+}
+
 func at(t *testing.T, tz, local string) string {
 	t.Helper()
 	loc, err := time.LoadLocation(tz)
@@ -275,14 +287,18 @@ func TestCalendarEditsHolidaysSuspensionsAndRevision(t *testing.T) {
 	if open("2026-09-07 10:00") || !open("2026-10-10 10:00") || open("2026-10-10 14:00") {
 		t.Fatal("holiday closes Monday; the exception opens Saturday morning only")
 	}
-	// emergency suspension: closes a normally open hour, bumps the revision, and removing it reopens
+	// emergency suspension: closes a normally open hour, bumps the revision, and removing it reopens. Its day is picked
+	// relative to "now" (a business weekday a little in the future), never a fixed date: store.go's Schedule() drops a
+	// suspension once its "to" is more than 30 days in the past, and a hardcoded date eventually ages past that window
+	// as real time goes by, making this assertion fail for a reason that has nothing to do with the suspension logic.
+	susDay := nextBusinessDay(t)
 	sus := e.call(t, a, admin, "POST", "/", e.h.AddSuspension, map[string]string{"calendar_id": cal.ID.String()},
-		map[string]any{"from": at(t, tz, "2026-10-13 10:00"), "to": at(t, tz, "2026-10-13 12:00"), "reason": "queda de energia"})
+		map[string]any{"from": at(t, tz, susDay+" 10:00"), "to": at(t, tz, susDay+" 12:00"), "reason": "queda de energia"})
 	if sus.Code != 201 {
 		t.Fatalf("suspension = %d %s", sus.Code, sus.Body.String())
 	}
-	if open("2026-10-13 11:00") || !open("2026-10-13 12:00") || !open("2026-10-13 09:59") {
-		t.Fatal("the suspension closes exactly its span")
+	if o1100, o1200, o0959 := open(susDay+" 11:00"), open(susDay+" 12:00"), open(susDay+" 09:59"); o1100 || !o1200 || !o0959 {
+		t.Fatalf("the suspension closes exactly its span: 11:00=%t(want false) 12:00=%t(want true) 09:59=%t(want true)", o1100, o1200, o0959)
 	}
 	if got := decode[Calendar](t, e.call(t, a, admin, "GET", "/", e.h.GetCalendar, map[string]string{"calendar_id": cal.ID.String()}, nil)).Revision; got != 3 {
 		t.Fatalf("revision after suspension = %d, want 3", got)
@@ -291,11 +307,11 @@ func TestCalendarEditsHolidaysSuspensionsAndRevision(t *testing.T) {
 	if got := e.call(t, a, admin, "DELETE", "/", e.h.RemoveSuspension, map[string]string{"calendar_id": cal.ID.String(), "suspension_id": sid.String()}, nil).Code; got != 204 {
 		t.Fatalf("remove suspension = %d", got)
 	}
-	if !open("2026-10-13 11:00") {
+	if !open(susDay + " 11:00") {
 		t.Fatal("removing the suspension reopens")
 	}
 	if got := e.call(t, a, admin, "POST", "/", e.h.AddSuspension, map[string]string{"calendar_id": cal.ID.String()},
-		map[string]any{"from": at(t, tz, "2026-10-13 12:00"), "to": at(t, tz, "2026-10-13 10:00")}).Code; got != 400 {
+		map[string]any{"from": at(t, tz, susDay+" 12:00"), "to": at(t, tz, susDay+" 10:00")}).Code; got != 400 {
 		t.Fatalf("reversed suspension = %d, want 400", got)
 	}
 	// in use -> 409; after unlinking -> 204

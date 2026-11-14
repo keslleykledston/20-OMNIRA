@@ -392,6 +392,12 @@ func main() {
 		}
 		topicHandler.WithTools(intelligenceapp.NewToolGateway(intelligenceadapters.NewPostgresToolCallRepository(dbPool), topicRepo, topicHandler.ToolAuthorizer(),
 			toolExecutors, intelligenceFlags))
+		if intelligenceFlags.ContextIntelligenceV2Enabled { // CONTEXT.2C: read model over CONTEXT.2B's analyses + the manual refresh trigger
+			contextWindowStore := intelligenceadapters.NewPostgresContextWindowStore(dbPool)
+			topicHandler.WithContextView(
+				intelligenceapp.NewContextViewService(intelligenceadapters.NewPostgresContextAnalysisRepository(dbPool)),
+				intelligenceapp.NewContextRefreshService(contextWindowStore))
+		}
 		srv.RegisterIntelligenceHandlers(dbPool, topicHandler)
 	}
 	if erpCipherErr == nil && erpCipher != nil {

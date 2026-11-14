@@ -82,7 +82,11 @@ func (w *world) realtimeAPI(t *testing.T) *rtAPI {
 	t.Cleanup(func() { tenancyadapters.EnableDelegatedServing(false) })
 	auth := streamAuth{w: w, authz: tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(w.app), tenancyadapters.NewPostgresTenantRepository(w.app))}
 	h := inboxadapters.NewRealtimeHandler(nc, auth, inboxadapters.RealtimeOptions{
-		Recheck: time.Hour, DelegatedRecheck: 200 * time.Millisecond, VisibilityTTL: 50 * time.Millisecond, Keepalive: 100 * time.Millisecond,
+		// DatabaseTimeout must fit the real cost of the delegated recheck (lock_served_tenant's six FOR SHARE locks, the
+		// permission check and the acting_scope() lookup, in one short transaction): 100ms (DelegatedRecheck/2 before this
+		// fix) was tight enough to fail outright under a loaded CI container, closing the stream ("authorization lost")
+		// even though nothing was actually revoked — never a flake, reproduced every time once the budget was this tight.
+		Recheck: time.Hour, DelegatedRecheck: 1200 * time.Millisecond, DatabaseTimeout: time.Second, VisibilityTTL: 50 * time.Millisecond, Keepalive: 100 * time.Millisecond,
 	})
 	who := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {

@@ -16,6 +16,7 @@ import { ContactNotes } from '../contacts/ContactNotes';
 import { WhatsAppName } from '../contacts/WhatsAppName';
 import { ChannelSwitcher } from './ChannelSwitcher';
 import AttendanceMemoryPanel from './AttendanceMemoryPanel';
+import ContextIntelligencePanel from './ContextIntelligencePanel';
 import RoutingPanel from './RoutingPanel';
 import HistorySearch from './HistorySearch';
 import FinalizeDialog from './FinalizeDialog';
@@ -396,6 +397,14 @@ export default function ContextPane({ conversationId, onOpenConversation, onSent
       <CollapsibleSection id="summary" title="Resumo com IA" icon="sparkles">
         <ConversationSummary conversationId={conversationId} />
       </CollapsibleSection>
+
+      {/* CONTEXT.2C: server-aggregated read model of CONTEXT.2B's windowed analysis (OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED, off by
+          default) — a conversation-level overview above the per-topic detail below. */}
+      {!internal && (
+        <CollapsibleSection id="context-intelligence" title="Inteligência de contexto" icon="sparkles">
+          <ContextIntelligencePanel conversationId={conversationId} />
+        </CollapsibleSection>
+      )}
 
       <CollapsibleSection id="topics" title="Assuntos" icon="conversations">
         <TopicsPanel conversationId={conversationId} />

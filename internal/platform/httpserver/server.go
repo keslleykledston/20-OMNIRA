@@ -1087,6 +1087,10 @@ func (s *Server) RegisterIntelligenceHandlers(dbPool *pgxpool.Pool, h *intellige
 	s.mux.Handle("GET "+t+"/intelligence/evaluation", wrap(h.GetEvaluation))
 	s.mux.Handle("GET "+t+"/inbox/conversations/{conversation_id}/ambiguities", wrap(h.ListConversationAmbiguities))
 	s.mux.Handle("POST "+t+"/ambiguities/{ambiguity_id}/resolve", wrap(h.ResolveAmbiguity))
+	// CONTEXT.2C: read-only, so a Hub-delegated operator's conversation.read grant is honoured the same way the plain
+	// inbox endpoints already honour it (ADR-0040) — topic.read is checked again, live, inside the handler itself.
+	s.mux.Handle("GET "+t+"/inbox/conversations/{conversation_id}/context-view", tenancyadapters.Delegable("conversation.read", wrap(h.GetContextView)))
+	s.mux.Handle("POST "+t+"/inbox/conversations/{conversation_id}/context-analysis/refresh", wrap(h.RefreshContextAnalysis))
 }
 
 // RegisterAIIntegrationHandlers exposes the per-tenant external-AI opt-in and key (ADR-0016). Everything is

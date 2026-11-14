@@ -111,6 +111,7 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_AI_MODEL_TOPIC_SUMMARY: ${OMNIRA_AI_MODEL_TOPIC_SUMMARY-}
   OMNIRA_AI_MODEL_COPILOT: ${OMNIRA_AI_MODEL_COPILOT-}
   OMNIRA_AI_MODEL_CLOSING_SUGGEST: ${OMNIRA_AI_MODEL_CLOSING_SUGGEST-}
+  OMNIRA_AI_MODEL_CONTEXT_WINDOW_ANALYZE: ${OMNIRA_AI_MODEL_CONTEXT_WINDOW_ANALYZE-}
   # Conversation Intelligence switches (ADR-0017). Empty = the code default (topics on, everything else off).
   OMNIRA_COPILOT_ENABLED: ${OMNIRA_COPILOT_ENABLED-}
   OMNIRA_AI_TOOL_GATEWAY_ENABLED: ${OMNIRA_AI_TOOL_GATEWAY_ENABLED-}
@@ -131,6 +132,9 @@ x-omnira-runtime: &omnira-runtime
   # Hub group organizer (ADR-0059): off unless a Hub contract is also explicitly granted the 'groups'
   # management scope — this flag alone grants nothing to any existing contract.
   OMNIRA_GROUP_ORGANIZER_ENABLED: ${OMNIRA_GROUP_ORGANIZER_ENABLED-}
+  # CONTEXT.2 (Context Intelligence v2): windowed, grouped semantic analysis of a conversation's messages.
+  # FOUNDATION CODE, not cleared for production — see docs/implementation/CONTEXT-INTELLIGENCE-V2.md. Off by default.
+  OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED: ${OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED-false}
 
 services:
   postgres:
