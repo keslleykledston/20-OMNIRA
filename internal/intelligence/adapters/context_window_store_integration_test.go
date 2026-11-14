@@ -417,7 +417,11 @@ func TestClaimLeasesWithSkipLockedAndRecoversAnExpiredLease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	claimed, err := store.Claim(e.ctx, 10, 50*time.Millisecond)
+	// A 50ms lease (and an 80ms sleep past it) was too tight: under a loaded CI container, the round trip for the
+	// "still live" claim below could itself take tens of ms, so the lease could expire between the two claims and
+	// make the test fail on a real recovery, not a bug. 300ms/450ms keeps the same two-phase check (live, then
+	// expired) with real margin on both sides.
+	claimed, err := store.Claim(e.ctx, 10, 300*time.Millisecond)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("1st claim: n=%d err=%v, want 1/nil", len(claimed), err)
 	}
@@ -429,7 +433,7 @@ func TestClaimLeasesWithSkipLockedAndRecoversAnExpiredLease(t *testing.T) {
 	if again, err := store.Claim(e.ctx, 10, time.Minute); err != nil || len(again) != 0 {
 		t.Fatalf("2nd claim (lease live): n=%d err=%v, want 0/nil", len(again), err)
 	}
-	time.Sleep(80 * time.Millisecond) // past the 50ms lease
+	time.Sleep(450 * time.Millisecond) // past the 300ms lease
 	recovered, err := store.Claim(e.ctx, 10, time.Minute)
 	if err != nil || len(recovered) != 1 || recovered[0].Attempt != 2 {
 		t.Fatalf("recovery claim: n=%d attempt=%v err=%v, want 1/2/nil", len(recovered), recovered, err)
