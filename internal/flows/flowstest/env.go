@@ -31,7 +31,19 @@ func New(t *testing.T) *Env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := pgxpool.New(ctx, appURL)
+	// servicectx's external-request flow holds one App connection for the whole request (platformdb.WithTenantSession)
+	// AND opens a second one per sub-transaction (InNewTransaction) while the first is still held; a concurrency test
+	// that fires several requests at once can need more connections at once than pgxpool's default (NumCPU, as low as
+	// 2-4 on a constrained CI runner) — starving on the pool itself, well before any real lock contention, and
+	// surfacing as a spurious "context deadline exceeded" on the request's own timeout. The disposable integration
+	// Postgres has room to spare (default max_connections=100) for one test package's pool.
+	appCfg, err := pgxpool.ParseConfig(appURL)
+	if err != nil {
+		seed.Close()
+		t.Fatal(err)
+	}
+	appCfg.MaxConns = 20
+	app, err := pgxpool.NewWithConfig(ctx, appCfg)
 	if err != nil {
 		seed.Close()
 		t.Fatal(err)
