@@ -33,7 +33,7 @@ ADR-0057).
    presente, pela mesma regra "sem leitura, sem recurso dependente" já usada pelo observador de IA.
 2. **Nunca um grupo de cliente — reforçado por `CHECK`, não por confiança.** `CHECK (NOT is_alert_channel OR
    account_id IS NULL)`. Um grupo só pode virar canal de alerta se não estiver vinculado a nenhum
-   `customer_account` (ADR-0018/migração 000177), e a mesma constraint impede vincular um cliente a um grupo que
+   `customer_account` (ADR-0018/migração 000179), e a mesma constraint impede vincular um cliente a um grupo que
    já é o canal de alerta. Nas duas direções, o banco recusa a combinação, não só a tela.
 3. **Só SLA estourado (`sla_breach`), nunca "em risco".** O risco já tem o toast in-app (ADR-0057); mensagem de
    WhatsApp é mais intrusiva e fica reservada ao caso mais urgente, reduzindo ruído no grupo.

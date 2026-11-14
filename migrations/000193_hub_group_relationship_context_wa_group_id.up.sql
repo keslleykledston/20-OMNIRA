@@ -11,7 +11,7 @@
 -- read access to.
 --
 -- Postgres does not allow CREATE OR REPLACE to change a function's return columns, so the prior version
--- (000190) is dropped first. Same body/authorization otherwise.
+-- (000192) is dropped first. Same body/authorization otherwise.
 DROP FUNCTION IF EXISTS hub_group_catalog_relationship_context(UUID, UUID);
 
 CREATE FUNCTION hub_group_catalog_relationship_context(p_hub_id UUID, p_user_id UUID)

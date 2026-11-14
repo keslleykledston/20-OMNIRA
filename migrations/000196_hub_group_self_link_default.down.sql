@@ -1,4 +1,4 @@
--- Reverts hub_autodiscover_catalog_upsert to its pre-000194 body (no self-link side effect). Does NOT
+-- Reverts hub_autodiscover_catalog_upsert to its pre-000196 body (no self-link side effect). Does NOT
 -- delete the hub_group_tenant_links rows this migration backfilled or the function since created: a down
 -- migration is a last-resort rollback, not a data-destructive undo, and those rows are real information
 -- (a tenant linked to its own group) that may already be relied on by the time anyone rolls back.

@@ -1,7 +1,7 @@
 -- ADR-0059 addendum 8: some WhatsApp groups genuinely concern MORE THAN ONE of the tenant's CRM clients at
 -- once — e.g. a "swap"/peering group between two ISPs the tenant operates on behalf of both of, where a
 -- ticket (when one is needed) may be registered against either client or both, decided by whoever is asked.
--- wa_groups.account_id (migration 000177) stays exactly as is: the group's ONE primary/default client, used
+-- wa_groups.account_id (migration 000179) stays exactly as is: the group's ONE primary/default client, used
 -- everywhere it already is today (GroupList/GroupThread badge, the Hub Organizer's "Cliente do CRM" folders,
 -- hub_group_catalog_relationship_context). This migration adds a SEPARATE, purely additive N:N table for
 -- every OTHER client a group also concerns — never a replacement, never touched by LinkAccount/UnlinkAccount.

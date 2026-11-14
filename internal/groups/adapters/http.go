@@ -64,8 +64,8 @@ const (
 	enabledListCap   = 500
 )
 
-// groupPurposes is the closed list an administrator picks from (migration 000176, 'partner'/'supplier'
-// added by migration 000188). Never guessed from participants — that is conversation_kind's job;
+// groupPurposes is the closed list an administrator picks from (migration 000178, 'partner'/'supplier'
+// added by migration 000190). Never guessed from participants — that is conversation_kind's job;
 // purpose is always an explicit choice.
 var groupPurposes = map[string]bool{
 	"client_management":   true,
@@ -752,7 +752,7 @@ func (h *Handler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 		newAlertChannel = *req.AlertChannel
 	}
 	// Classifying a group (purpose) IS itself an administrator's explicit choice about this specific group
-	// (ADR-0015's own requirement) — autodiscovery (migration 000187) leaves enabled at its column default
+	// (ADR-0015's own requirement) — autodiscovery (migration 000189) leaves enabled at its column default
 	// of false exactly because nobody has decided anything about the group yet; the moment the Hub
 	// Organizer's Kanban (or any other caller) sets its purpose, that silence ends, so reading starts too,
 	// without a separate "Ativar" click the operator would otherwise have to remember. Never overrides an
@@ -1154,7 +1154,7 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 
 	accountChanged := prev == nil || *prev != accountID
 	// Linking a client IS itself an administrator's explicit choice about this specific group (same
-	// reasoning as SetEnabled's own purpose-classify case above): autodiscovery (migration 000187) can
+	// reasoning as SetEnabled's own purpose-classify case above): autodiscovery (migration 000189) can
 	// leave a group cataloged and addressable (wa_group_id known) but never enabled, and the Hub
 	// Organizer's "Vincular cliente"/Kanban act on it directly, bypassing the enabled-only List filter —
 	// found live in production: a group fully classified and linked to a client that was still never

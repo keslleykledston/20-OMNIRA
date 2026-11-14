@@ -36,7 +36,7 @@ func (w *world) catalogEntry(hub, sourceTenantKey string, conn uuid.UUID, provid
 }
 
 // waGroup inserts a tenant-owned wa_groups row directly (bypassing RLS, like channelConnection above) so
-// hub_discover_tenant_groups (migration 000185) has something real to read. enabled is set so a test can
+// hub_discover_tenant_groups (migration 000187) has something real to read. enabled is set so a test can
 // prove the discovery bridge never echoes it back.
 func (w *world) waGroup(tenantKey string, conn uuid.UUID, providerGroupID, name string, enabled bool) uuid.UUID {
 	id := uuid.New()

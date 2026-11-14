@@ -21,7 +21,7 @@ import (
 // (internal/media/application.Processor's ports.Repository), run a second time against wa_group_message_media.
 
 // A group message with a non-empty media_ref gets a pending wa_group_message_media row automatically
-// (migration 000198's trigger) — tenant-scoped, never crossing into message_media.
+// (migration 000200's trigger) — tenant-scoped, never crossing into message_media.
 func TestGroupMessageMediaRowIsEnqueuedByTheIngestionTriggerAndIsTenantScoped(t *testing.T) {
 	e := newEnv(t)
 	tenantA, connA := e.tenant()

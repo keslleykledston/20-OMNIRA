@@ -381,7 +381,7 @@ func main() {
 		// consumer of an event that already exists, not a new producer. Needs a configured channel provider
 		// to have anything to send through, which is why this lives inside this WAHA/Meta block. The consumer
 		// always starts; whether it actually sends is the group_sla_alert_feature kill switch (migration
-		// 000182), checked by SLAAlertService on EVERY event — a platform operator's button in the admin
+		// 000184), checked by SLAAlertService on EVERY event — a platform operator's button in the admin
 		// console, not an env var + worker restart.
 		alertSvc := groupsapp.NewSLAAlertService(
 			groupsadapters.NewPostgresAlertChannelRepository(dbPool),

@@ -484,7 +484,7 @@ func TestGroupAPIPermissionsEnableDisableCursorAndDeleteAreTenantScoped(t *testi
 	}
 }
 
-// purpose (migration 000176) is a manual, closed-list tag an administrator picks per group, independent of
+// purpose (migration 000178) is a manual, closed-list tag an administrator picks per group, independent of
 // enabled/disabled and of the automatic conversation_kind. Validated, audited, tenant-scoped, idempotent.
 func TestGroupSetPurposeIsValidatedAuditedAndTenantScoped(t *testing.T) {
 	e := newEnv(t)
@@ -556,7 +556,7 @@ func TestGroupSetPurposeIsValidatedAuditedAndTenantScoped(t *testing.T) {
 	}
 }
 
-// ai_observer_enabled (ADR-0055, migration 000178): suggest-only AI classification, opt-in per group,
+// ai_observer_enabled (ADR-0055, migration 000180): suggest-only AI classification, opt-in per group,
 // independent of purpose, but never on for a group that is not reading — there would be nothing to observe.
 func TestGroupAIObserverToggleRequiresReadingAndIsAudited(t *testing.T) {
 	e := newEnv(t)
@@ -811,7 +811,7 @@ func TestGroupMessageSuggestionIncludesSuggestedAction(t *testing.T) {
 	}
 }
 
-// account_id (migration 000177) links a group to the "cliente final" it belongs to, reusing customer_accounts
+// account_id (migration 000179) links a group to the "cliente final" it belongs to, reusing customer_accounts
 // (ADR-0018) instead of a second company catalog. Validated against the SAME tenant, audited, idempotent,
 // and List's account_id filter finds both "this client's groups" and "groups nobody linked yet".
 func TestGroupAccountLinkIsValidatedAuditedAndTenantScoped(t *testing.T) {
@@ -918,7 +918,7 @@ func TestGroupAccountLinkIsValidatedAuditedAndTenantScoped(t *testing.T) {
 }
 
 // TestGroupClassifyingOrLinkingAutoEnablesAGroupAutodiscoveryLeftDisabled proves a gap found live in
-// production: autodiscovery (migration 000187) can catalog a group and leave it fully addressable
+// production: autodiscovery (migration 000189) can catalog a group and leave it fully addressable
 // (wa_group_id known) while enabled stays false (ADR-0015's own "nobody decided anything yet" default) —
 // and the Hub Organizer's "Vincular cliente"/Kanban drag act on a group directly by id, bypassing List's
 // own "g.enabled" filter entirely. The result, found live: a group fully classified AND linked to a client

@@ -3,7 +3,7 @@
 ## Status
 Aceito (2026-11-10), a pedido do dono do produto, no fio da conversa sobre "colocar o projeto de grupos em
 produção pra permitir agrupar, monitorar, alertar". Ao investigar o que "alertar" deveria significar, achamos que
-**o vínculo grupo→cliente final já existe** (migração 000177, `GroupAccountLink`) e que **o alerta de verdade não é
+**o vínculo grupo→cliente final já existe** (migração 000179, `GroupAccountLink`) e que **o alerta de verdade não é
 uma funcionalidade de grupo**: é a primeira vez que o OMNIRA ganha qualquer notificação in-app, e o caso mais
 imediato e já pronto do lado de trás é o SLA de conversas 1:1 (ADR-0044), que já dispara eventos sem ninguém
 ouvindo. Esta ADR cobre só essa fatia; alerta de grupo (mensagem real enviada a um grupo de confiança da

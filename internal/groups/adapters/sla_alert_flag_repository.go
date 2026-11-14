@@ -12,7 +12,7 @@ import (
 )
 
 // PostgresSLAAlertFeatureFlagRepository backs the ADR-0058 operator kill switch (group_sla_alert_feature,
-// migration 000182): a single row, platform-wide, no tenant_id. Not tenant data, so it never goes through
+// migration 000184): a single row, platform-wide, no tenant_id. Not tenant data, so it never goes through
 // a tenant RLS session — the same tenant=uuid.Nil, isSystemAdmin=true shape used by
 // internal/hub/provisioning.Service.tx for other platform-wide state.
 type PostgresSLAAlertFeatureFlagRepository struct{ pool *pgxpool.Pool }

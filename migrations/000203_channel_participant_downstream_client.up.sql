@@ -1,4 +1,4 @@
--- ADR-0015 addendum 3: a empresa vinculada a um participante de grupo (migration 000197) nem sempre é
+-- ADR-0015 addendum 3: a empresa vinculada a um participante de grupo (migration 000199) nem sempre é
 -- cliente direto do tenant — pode ser cliente do Cliente (ex.: contato da Uplink, que é cliente da 4WNET,
 -- que é Cliente do tenant). is_downstream_client marca esse caso: a empresa vinculada é, ela mesma, um
 -- cliente do Cliente que o grupo já representa, não a própria empresa do Cliente.

@@ -69,7 +69,7 @@ func TestSLAAlertFeatureFlagRequiresAnActivePlatformOperator(t *testing.T) {
 	}
 }
 
-// Fresh install: off by default (migration 000182's seed row), exactly the OMNIRA_GROUP_SLA_ALERT_ENABLED
+// Fresh install: off by default (migration 000184's seed row), exactly the OMNIRA_GROUP_SLA_ALERT_ENABLED
 // default it replaces.
 func TestSLAAlertFeatureFlagDefaultsToDisabled(t *testing.T) {
 	e := newEnv(t)

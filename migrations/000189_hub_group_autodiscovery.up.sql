@@ -5,13 +5,13 @@
 -- of false, never setting enabled/enabled_by/enabled_at on an existing row -- that remains the ONE thing
 -- the Enable handler in internal/groups/adapters/http.go does).
 --
--- hub_group_catalog's RLS (migration 000183) has NO is_system_admin() bypass by design: a Hub member
+-- hub_group_catalog's RLS (migration 000185) has NO is_system_admin() bypass by design: a Hub member
 -- must always prove 'groups' access through has_hub_manage_access(), and there is deliberately no
 -- shortcut for "the session is a system admin". A background job has no human actor, so current_user_id()
 -- is NULL inside its session and has_hub_manage_access() would always fail -- correctly, there is nobody
 -- to authorize. This function is the narrow, explicit exception: SECURITY DEFINER, so it runs with the
 -- function owner's privileges (bypassing hub_group_catalog's RLS, the same way hub_discover_tenant_groups
--- already does for wa_groups' RLS, migration 000185) and re-proves authorization STRUCTURALLY, inside its
+-- already does for wa_groups' RLS, migration 000187) and re-proves authorization STRUCTURALLY, inside its
 -- own body, instead of trusting whatever triple the calling Go code already selected: a live
 -- hub_tenant_service_contracts row for THIS (hub, tenant) with 'groups' in management_scopes, re-checked
 -- at the moment of the call, not cached from an earlier read. There is no p_user_id parameter at all --
@@ -20,7 +20,7 @@
 --
 -- Fails closed to an EMPTY result (zero rows), never an error, when the contract is not live or lacks
 -- 'groups' -- same convention as hub_discover_tenant_groups/hub_discover_tenant_connections (migrations
--- 000185/000186) -- so a contract revoked between the worker's own eligibility query and this call simply
+-- 000187/000188) -- so a contract revoked between the worker's own eligibility query and this call simply
 -- writes nothing for that triple, which the worker treats as an expected race, not a failure.
 --
 -- Idempotent and non-destructive of human edits: ON CONFLICT updates ONLY last_seen_at/updated_at/version

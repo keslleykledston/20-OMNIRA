@@ -2,12 +2,12 @@
 -- operator actually needs when (as for K3G_Grupos today) every group already belongs to the same
 -- single tenant -- which CRM customer/partner/supplier this WhatsApp group is about, or whether it is
 -- purely internal (feedback from the owner, 2026-11-12). That classification already exists on the
--- TENANT side: wa_groups.purpose (migration 000176, extended by 000188 with 'partner'/'supplier') plus
--- the optional wa_groups.account_id -> customer_accounts link (migration 000177, ADR-0059 addendum 3).
+-- TENANT side: wa_groups.purpose (migration 000178, extended by 000190 with 'partner'/'supplier') plus
+-- the optional wa_groups.account_id -> customer_accounts link (migration 000179, ADR-0059 addendum 3).
 -- The write action stays exactly where it already is (the tenant's own Groups page, by someone with
 -- group.manage membership there) -- this migration only lets the Hub Organizer SHOW it, read-only.
 --
--- Same shape and same reasoning as hub_discover_tenant_groups (migration 000185): wa_groups/
+-- Same shape and same reasoning as hub_discover_tenant_groups (migration 000187): wa_groups/
 -- customer_accounts have their own RLS that a Hub actor's session does not satisfy (no
 -- has_active_membership on the origin tenant), so a plain join from the Hub's own session returns zero
 -- rows. SECURITY DEFINER bypasses that RLS on purpose and re-proves authorization STRUCTURALLY inside

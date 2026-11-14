@@ -59,7 +59,7 @@ type Config struct {
 	// HubAccessAPIEnabled mounts the people-and-permissions routes of ADR-0039 (hub admins only). Needs HubAPIEnabled.
 	HubAccessAPIEnabled bool
 	// GroupOrganizerAPIEnabled mounts the group catalog/links/relationships routes of ADR-0059 Gate 2. Needs HubAccessAPIEnabled
-	// (same mount point as pools/audit). The schema (migrations 000183/000184) exists and is harmless with this off: no route, no
+	// (same mount point as pools/audit). The schema (migrations 000185/000186) exists and is harmless with this off: no route, no
 	// effect. OFF by default; no contract gets the 'groups' management scope automatically either way.
 	GroupOrganizerAPIEnabled bool
 	// HubServeEnabled admits requests that declare `X-Omnira-Acting-As: hub:<id>` on the tenant routes (ADR-0040 phase 02). The data layer

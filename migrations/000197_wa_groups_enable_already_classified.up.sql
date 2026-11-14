@@ -1,5 +1,5 @@
 -- ADR-0059 addendum 10: groups classified or linked to a client BEFORE the auto-enable-on-classify/link
--- behavior existed (migration 000194) never got the retroactive benefit of it — their purpose/account was
+-- behavior existed (migration 000196) never got the retroactive benefit of it — their purpose/account was
 -- set under the old code, so enabling never fired. This is a one-time backfill for exactly that gap: a
 -- disabled group that has an explicit purpose/account/additional-account set, AND that was never itself
 -- enabled before (enabled_by IS NULL). The enabled_by IS NULL guard is what protects a group an admin

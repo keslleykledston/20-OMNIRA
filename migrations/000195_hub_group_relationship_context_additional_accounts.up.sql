@@ -1,7 +1,7 @@
 -- ADR-0059 addendum 8 (follow-up): the Hub Organizer's "Cliente do CRM" folders/Kanban and the
--- "Vincular cliente" action (migrations 000190/000191) only ever reflected wa_groups.account_id, the
+-- "Vincular cliente" action (migrations 000192/000193) only ever reflected wa_groups.account_id, the
 -- group's ONE primary client — a "Swap"/peering group now linked to a SECOND client via
--- wa_group_additional_accounts (migration 000192) stayed invisible in the Hub Organizer's other client's
+-- wa_group_additional_accounts (migration 000194) stayed invisible in the Hub Organizer's other client's
 -- folder. This extends the existing read-only bridge with the same additional-accounts list the tenant's
 -- own Groups page already shows (GroupAccountLink.tsx), as two parallel arrays (ids/names) since SQL has
 -- no composite-array literal as convenient as Go's []AccountRef — the Go layer (service.go) zips them
@@ -10,7 +10,7 @@
 -- exactly like the primary link already is (ADR-0059 addendum 7).
 --
 -- Postgres does not allow CREATE OR REPLACE to change a function's return columns, so the prior version
--- (000191) is dropped first. Same body/authorization otherwise.
+-- (000193) is dropped first. Same body/authorization otherwise.
 DROP FUNCTION IF EXISTS hub_group_catalog_relationship_context(UUID, UUID);
 
 CREATE FUNCTION hub_group_catalog_relationship_context(p_hub_id UUID, p_user_id UUID)

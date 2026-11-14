@@ -93,7 +93,7 @@ func TestGroupOrganizerAPI_UnauthenticatedIsUniform401(t *testing.T) {
 
 // TestGroupOrganizerAPI_ListLinksForHub_OneCallReturnsEveryGroupAndRespectsRLS is the regression test for
 // a bug found live in production: the Organizer page called ListLinks once PER catalog entry (N+1), which
-// autodiscovery (ADR-0059 addendum, migration 000187) exposed by growing a real catalog to dozens of
+// autodiscovery (ADR-0059 addendum, migration 000189) exposed by growing a real catalog to dozens of
 // groups on its own — that many concurrent requests queued the environment's DB pool and hung the page on
 // "carregando" indefinitely. ListLinksForHub (GET /groups/links) replaces it with one call that still
 // respects the exact same per-row RLS as ListLinks (hub_group_tenant_links_rw, keyed on the link's own
@@ -146,7 +146,7 @@ func TestGroupOrganizerAPI_ListLinksForHub_OneCallReturnsEveryGroupAndRespectsRL
 }
 
 // TestGroupOrganizerAPI_Classification_ReadsTenantPurposeAcrossOriginsAndFailsClosedOnRevoke proves the
-// read-only bridge added by migration 000189 (ADR-0059 addendum 5): the Hub Organizer shows each catalog
+// read-only bridge added by migration 000191 (ADR-0059 addendum 5): the Hub Organizer shows each catalog
 // entry's TENANT-side classification (wa_groups.purpose + the linked customer_accounts.name), which is
 // set from the tenant's own Groups page, never here. The SECURITY DEFINER function behind it bypasses
 // wa_groups'/customer_accounts' own RLS on purpose (a Hub actor's session has no has_active_membership on
@@ -298,7 +298,7 @@ func TestGroupOrganizerAPI_UpsertCatalogIsIdempotentByNaturalKeyAndRequiresOrigi
 		t.Fatalf("two upserts of the same identity created %d row(s), want 1 (no duplicate)", n)
 	}
 	// ADR-0059 addendum 9: the manual "Adicionar grupo ao catálogo" path gets the same self-link-to-own-
-	// origin-tenant default as autodiscovery (migration 000194) — one active 'operator' link, never
+	// origin-tenant default as autodiscovery (migration 000196) — one active 'operator' link, never
 	// duplicated by the second (idempotent) upsert above.
 	var role, status string
 	w.must(w.owner.QueryRow(w.ctx, `SELECT role, status FROM hub_group_tenant_links WHERE hub_group_id = $1 AND tenant_id = $2`,
@@ -311,8 +311,8 @@ func TestGroupOrganizerAPI_UpsertCatalogIsIdempotentByNaturalKeyAndRequiresOrigi
 	}
 }
 
-// TestGroupOrganizerAPI_DiscoverConnections proves the migration-000186 bridge found missing live in
-// production right after 000185 shipped: the group picker only ever fired once a valid connection UUID
+// TestGroupOrganizerAPI_DiscoverConnections proves the migration-000188 bridge found missing live in
+// production right after 000187 shipped: the group picker only ever fired once a valid connection UUID
 // was already typed in by hand, and nothing in the product showed the operator one to copy.
 func TestGroupOrganizerAPI_DiscoverConnections(t *testing.T) {
 	w := newWorld(t)
@@ -358,7 +358,7 @@ func TestGroupOrganizerAPI_DiscoverConnections(t *testing.T) {
 	}
 }
 
-// TestGroupOrganizerAPI_DiscoverGroups proves the migration-000185 bridge found missing live in
+// TestGroupOrganizerAPI_DiscoverGroups proves the migration-000187 bridge found missing live in
 // production: the "add to catalog" UI had nowhere to get a real provider_group_id/name from, and this
 // closes that gap without ever touching wa_groups.enabled or leaking across tenants.
 func TestGroupOrganizerAPI_DiscoverGroups(t *testing.T) {

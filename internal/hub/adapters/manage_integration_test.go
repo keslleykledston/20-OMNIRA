@@ -565,7 +565,7 @@ func TestOperatorDelegatesScopes_OnlyKnownOnesAndOnlyAnOperator(t *testing.T) {
 		}
 	}
 	// ADR-0059: 'groups' must be accepted here too — it was added to the DB CHECK constraint
-	// (migration 000183) but regressed by companies.ManageableScopes still listing only the
+	// (migration 000185) but regressed by companies.ManageableScopes still listing only the
 	// original two values, which silently refused every attempt to grant it (found live in
 	// production via the Instâncias screen).
 	if err := set(op, "groups"); err != nil {

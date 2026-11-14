@@ -1,8 +1,8 @@
 package adapters_test
 
-// ADR-0059 addendum (autodiscovery): hub_autodiscover_catalog_upsert (migration 000187) is the ONLY way a
+// ADR-0059 addendum (autodiscovery): hub_autodiscover_catalog_upsert (migration 000189) is the ONLY way a
 // background job -- no human actor, so current_user_id() is NULL and has_hub_manage_access() can never say
-// yes -- is allowed to write hub_group_catalog, because that table's RLS (migration 000183) deliberately
+// yes -- is allowed to write hub_group_catalog, because that table's RLS (migration 000185) deliberately
 // has NO is_system_admin() bypass. This proves, against a real PostgreSQL and through the application role
 // (omnira_app) exactly as internal/worker/hubgroupdiscovery calls it:
 //   - it refuses (fails closed to zero rows, never an error) when the (hub, tenant) contract never

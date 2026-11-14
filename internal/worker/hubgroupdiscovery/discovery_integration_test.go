@@ -4,7 +4,7 @@ package hubgroupdiscovery_test
 // (the job never talks to WAHA directly; it only depends on the small hubgroupdiscovery.Directory
 // interface). Proves: a contract without 'groups' never even gets a provider call; a new group is
 // written to wa_groups WITHOUT ever enabling it (ADR-0015) and to hub_group_catalog through the
-// SECURITY DEFINER function (migration 000187); an already-enabled group's enabled/enabled_by/enabled_at
+// SECURITY DEFINER function (migration 000189); an already-enabled group's enabled/enabled_by/enabled_at
 // are left untouched; one tenant's failure never stops the others; running the same cycle twice never
 // duplicates anything.
 //

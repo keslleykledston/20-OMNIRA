@@ -133,7 +133,7 @@ func (i *Intake) ProcessGroupMessage(ctx context.Context, conn channeldomain.Cha
 			senderID = &id
 		}
 		// Media (ADR-0015 addendum 2): only the opaque reference, never bytes here. Setting it on INSERT is
-		// what the wa_group_messages_media_enqueue trigger (migration 000198) watches for.
+		// what the wa_group_messages_media_enqueue trigger (migration 000200) watches for.
 		var mediaRef, mimeType string
 		if msg.Media != nil {
 			mediaRef, mimeType = msg.Media.MediaRef, msg.Media.MimeType

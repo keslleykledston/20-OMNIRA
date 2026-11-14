@@ -22,7 +22,7 @@ Status: **POSTGRES VERIFIED**. Sem API nem UI nesta fatia.
 | Build/vet/gofmt | idem | limpo |
 | Testes HTTP reais, Postgres real | `scripts/test-integration-one.sh ./internal/hub/adapters TestGroupOrganizerAPI` | 7/7 ok |
 | RLS do Gate 1 intacta | `scripts/test-integration-one.sh ./internal/hub/adapters TestHubGroupOrganizerRLS` | 7/7 ok |
-| Reversibilidade da migration 000184 | ciclo manual `up -> down -> up` em Postgres descartável | ok |
+| Reversibilidade da migration 000186 | ciclo manual `up -> down -> up` em Postgres descartável | ok |
 | Drift OpenAPI ↔ rota real | `go test ./internal/platform/httpserver/... -run TestEveryDocumentedOperationIsARegisteredRoute` | nenhum path do Gate 2 ficou de fora |
 | Regressão completa | suíte inteira de `internal/hub/adapters` | só a mesma falha pré-existente |
 

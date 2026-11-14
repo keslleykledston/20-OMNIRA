@@ -7,7 +7,7 @@
 //
 // Trust model, same shape as hubprojector/hubdistributor: the (hub, tenant, connection) triples processed
 // here come ONLY from a live hub_tenant_service_contracts row with 'groups' in management_scopes, and that
-// is re-checked again, structurally, inside hub_autodiscover_catalog_upsert's own SQL (migration 000187)
+// is re-checked again, structurally, inside hub_autodiscover_catalog_upsert's own SQL (migration 000189)
 // at write time -- never trusted from this Go code's own earlier read. A suspended tenant is frozen
 // (platformdb.LockTenantActive), exactly like the projector: nothing is written while it is suspended.
 //
@@ -216,7 +216,7 @@ func (j *Job) runTriple(ctx context.Context, t triple) error {
 }
 
 // upsertWaGroup makes sure the group is KNOWN to the tenant (wa_groups), so the existing discovery bridge
-// (hub_discover_tenant_groups, migration 000185) and the tenant's own Groups page can already see it --
+// (hub_discover_tenant_groups, migration 000187) and the tenant's own Groups page can already see it --
 // but it NEVER sets enabled/enabled_by/enabled_at. ADR-0015 is explicit: a group's messages are only ever
 // stored once an administrator clicks "Ativar" (internal/groups/adapters/http.go Handler.Enable); that
 // remains the ONLY place that ever sets enabled=true, and it is never called from here.
@@ -243,7 +243,7 @@ func (j *Job) upsertWaGroup(ctx context.Context, q platformdb.Querier, t triple,
 }
 
 // upsertCatalogEntry registers the group in the Hub's catalog through the SECURITY DEFINER function
-// (migration 000187): hub_group_catalog's RLS has no is_system_admin() bypass by design, so a system job
+// (migration 000189): hub_group_catalog's RLS has no is_system_admin() bypass by design, so a system job
 // cannot write it directly -- the function re-checks the live contract itself, structurally, instead.
 //
 // A result of zero rows means the contract lost 'groups' (or was revoked/expired) between

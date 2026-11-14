@@ -5,7 +5,7 @@
 // Y" — it grants nothing by itself.
 //
 // Authorization reuses has_hub_manage_access(tenant, user, 'groups', hub) (ADR-0038/migration 000103),
-// the same function the row-level policies of migration 000183 use. Unlike the control-plane services of
+// the same function the row-level policies of migration 000185 use. Unlike the control-plane services of
 // this module (companies, distribution, access), this package does NOT open its session as a system
 // admin: has_hub_manage_access requires p_user_id = current_user_id() unless the caller already is a
 // system admin ("the system-session shortcut was rejected on purpose", migration 000103), so every call
@@ -97,7 +97,7 @@ func (s *Service) tx(ctx context.Context, actor uuid.UUID, fn func(c context.Con
 }
 
 // authorize asks has_hub_manage_access again, live, in this transaction — the same question the RLS
-// policies of migration 000183 ask, not a shortcut around them.
+// policies of migration 000185 ask, not a shortcut around them.
 func authorize(ctx context.Context, q platformdb.Querier, tenant, actor, hub uuid.UUID) error {
 	var ok bool
 	if err := q.QueryRow(ctx, `SELECT has_hub_manage_access($1, $2, 'groups', $3)`, tenant, actor, hub).Scan(&ok); err != nil {
@@ -147,7 +147,7 @@ func scanCatalogEntry(row pgx.Row) (CatalogEntry, error) {
 }
 
 // ListCatalog returns the catalog entries this actor's 'groups' delegation makes visible — RLS alone
-// decides the set (hub_group_catalog_rw, migration 000183); this call adds nothing to it.
+// decides the set (hub_group_catalog_rw, migration 000185); this call adds nothing to it.
 func (s *Service) ListCatalog(ctx context.Context, actor, hub uuid.UUID, before *time.Time, limit int) ([]CatalogEntry, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -226,7 +226,7 @@ func (s *Service) UpsertCatalogEntry(ctx context.Context, actor, hub, sourceTena
 		}
 		writesTotal.Inc("catalog_upsert")
 		// ADR-0059 addendum 9: a catalog entry gets an active self-link to its OWN origin tenant
-		// automatically, role 'operator' — the same gap hub_autodiscover_catalog_upsert (migration 000194)
+		// automatically, role 'operator' — the same gap hub_autodiscover_catalog_upsert (migration 000196)
 		// closes for the background-discovery path. NOT EXISTS matches any row at all (active or revoked),
 		// so a prior deliberate revoke of this exact self-link is never silently undone.
 		tag, err := q.Exec(c, `
@@ -404,7 +404,7 @@ func (s *Service) ListLinks(ctx context.Context, actor, hub, groupID uuid.UUID) 
 //
 // Exists because the Organizer page used to call ListLinks once PER catalog entry (an N+1 of one HTTP
 // request per group): harmless while the catalog held a handful of manually-added groups, but autodiscovery
-// (ADR-0059 addendum, migration 000187) can grow the catalog to dozens of groups on its own, and that many
+// (ADR-0059 addendum, migration 000189) can grow the catalog to dozens of groups on its own, and that many
 // concurrent requests queued against this environment's small DB connection pool, found live in production
 // as the Organizer page hanging on "carregando" indefinitely. This collapses it back to one query.
 func (s *Service) ListLinksForHub(ctx context.Context, actor, hub uuid.UUID) ([]Link, error) {
@@ -437,14 +437,14 @@ type AccountRef struct {
 
 // RelationshipContext is the tenant-side classification of a catalog entry's real WhatsApp group
 // (wa_groups.purpose) plus the CRM customer_account(s) it is linked to, if any — read only, never
-// written here (that stays the tenant's own Groups page, see migration 000189/000190/000191/000193).
+// written here (that stays the tenant's own Groups page, see migration 000191/000192/000193/000195).
 // Purpose is always present (wa_groups defaults it to 'other'); AccountID/AccountDisplayName are nil when
 // the group has no account_id, which is the expected, unremarkable case for an
 // 'internal_management'/'internal_team' group. WaGroupID is always present when a row exists at all (the
 // query inner-joins wa_groups): it lets the Hub Organizer frontend address the real wa_groups row when it
 // calls the tenant's OWN existing PUT/POST .../groups/{id}/account(s) endpoints directly — a real action,
 // not routed through this package. AdditionalAccounts is every OTHER client the group also concerns
-// (wa_group_additional_accounts, migration 000192 — e.g. a "swap"/peering group); never the primary
+// (wa_group_additional_accounts, migration 000194 — e.g. a "swap"/peering group); never the primary
 // above, always present, empty when there are none.
 type RelationshipContext struct {
 	HubGroupID         uuid.UUID    `json:"hub_group_id"`
@@ -709,7 +709,7 @@ func (s *Service) TransferLink(ctx context.Context, actor, hub, groupID, from, t
 // ------------------------------------------------------------------ context resolver (Gate 4)
 
 // ResolveCandidate is one tenant this group is actively linked to AND that the caller may manage —
-// RLS (hub_group_tenant_links_rw, migration 000183) is the only filter applied: a tenant the actor
+// RLS (hub_group_tenant_links_rw, migration 000185) is the only filter applied: a tenant the actor
 // cannot manage is invisible to the query below, never merely hidden by an extra check here.
 type ResolveCandidate struct {
 	TenantID uuid.UUID `json:"tenant_id"`

@@ -7,8 +7,8 @@ import type { CustomerAccount, DirectoryCompany, RelationshipType } from './cont
 // area from conversations: read-only, no assignee/queue/SLA, and no phone number is ever served.
 export type GroupMessageType = 'text' | 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'location' | 'other'
 
-// Manual, closed-list work-purpose tag an administrator picks per group (migration 000176;
-// 'partner'/'supplier' added by migration 000188). Never guessed from participants — that is a
+// Manual, closed-list work-purpose tag an administrator picks per group (migration 000178;
+// 'partner'/'supplier' added by migration 000190). Never guessed from participants — that is a
 // different, automatic classification the backend keeps to itself.
 export type GroupPurpose =
   | 'client_management'

@@ -2878,7 +2878,7 @@ paths:
       summary: WhatsApp group metadata the caller may organize (ADR-0059, behind OMNIRA_GROUP_ORGANIZER_ENABLED)
       description: >
         Metadata only — never message content. Visible rows are exactly those whose ORIGIN tenant
-        delegates the `groups` management scope to the caller (RLS, migration 000183); this never reads
+        delegates the `groups` management scope to the caller (RLS, migration 000185); this never reads
         wa_group_messages and never implies wa_groups.enabled.
       parameters:
         - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2949,8 +2949,8 @@ paths:
       tags: [Hub]
       summary: Every group's tenant-side classification (purpose + linked CRM account), read only, in one call
       description: >
-        wa_groups.purpose (migration 000176/000188) plus the linked customer_accounts row, if any
-        (migration 000177) — set on the tenant's own Groups page, never here (ADR-0059 addendum 5/6).
+        wa_groups.purpose (migration 000178/000190) plus the linked customer_accounts row, if any
+        (migration 000179) — set on the tenant's own Groups page, never here (ADR-0059 addendum 5/6).
         Bridges wa_groups'/customer_accounts' own RLS the same way listHubGroupDiscoveredGroups does
         (SECURITY DEFINER, re-checking groups management access per catalog entry's own origin tenant).
         A catalog entry whose wa_groups row cannot be matched yet (never opened once in the tenant's own
@@ -7447,15 +7447,15 @@ components:
               name: { type: string }
         connection_id: { type: string, format: uuid, description: 'Which WhatsApp instance (channel connection) this group belongs to; a tenant may run more than one.' }
         connection_account: { type: string, description: 'That connection''s own account/number, for display (may be empty).' }
-        ai_observer_enabled: { type: boolean, description: 'Per-group opt-in for the AI observer (ADR-0055, migration 000178): suggests a classification per message for a human to review, never acts, never sends anything. Can only be true while `enabled` is also true.' }
+        ai_observer_enabled: { type: boolean, description: 'Per-group opt-in for the AI observer (ADR-0055, migration 000180): suggests a classification per message for a human to review, never acts, never sends anything. Can only be true while `enabled` is also true.' }
         is_alert_channel: { type: boolean, description: 'ADR-0058: at most one group per tenant may be this. The ONE exception to "nothing is sent to a group" — a real WhatsApp message is sent here when a conversation''s SLA breaches. Can only be true while `enabled` is also true, never while the group is linked to a customer account (account_id), and never unless `purpose` is `internal_management` or `internal_team`.' }
         last_message_at: { type: string, format: date-time, nullable: true }
         last_message: { type: object, nullable: true, allOf: [{ $ref: '#/components/schemas/GroupLastMessage' }] }
     GroupPurpose:
       type: string
       description: |
-        Manual, closed-list work-purpose tag an administrator picks per group (migration 000176; `partner`/`supplier`
-        added by migration 000188). Distinct from the automatic, participant-derived classification: never guessed,
+        Manual, closed-list work-purpose tag an administrator picks per group (migration 000178; `partner`/`supplier`
+        added by migration 000190). Distinct from the automatic, participant-derived classification: never guessed,
         always an explicit choice. Defaults to `other` until someone tags the group.
       enum: [client_management, client_support, internal_management, internal_team, partner, supplier, other]
     GroupList:

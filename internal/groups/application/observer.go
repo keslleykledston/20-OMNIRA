@@ -23,7 +23,7 @@ import (
 // PromptVersion is stored with every suggestion so a change of recipe is traceable.
 const PromptVersion = "group-observer-v4"
 
-// Categories is the closed list a suggestion's category must be one of (migration 000179's CHECK). Never
+// Categories is the closed list a suggestion's category must be one of (migration 000181's CHECK). Never
 // open-ended: a human reviewing suggestions in the Grupos tab sees a small, stable set of labels.
 var Categories = []string{"request", "complaint", "question", "info", "other"}
 
@@ -37,7 +37,7 @@ func validCategory(c string) bool {
 }
 
 const maxSummaryRunes = 140
-const maxActionRunes = 80 // matches the ~80-char guidance given to the model; migration 000180's CHECK allows up to 160
+const maxActionRunes = 80 // matches the ~80-char guidance given to the model; migration 000182's CHECK allows up to 160
 const maxBodyRunes = 1200 // the TARGET message's own share of the prompt budget (context gets the rest, see maxContextRunes)
 
 // ADR-0055 addendum 3: context window, not a new per-message rule. The observer still classifies exactly ONE

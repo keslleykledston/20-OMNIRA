@@ -48,7 +48,7 @@ tem testes adversariais (`TestHubRLS_*`).
 
 ### 2. Catálogo e vínculos ficam em tabelas novas, nunca em `wa_groups`
 
-Migrations aditivas (próximo número livre confirmado: **000183**):
+Migrations aditivas (próximo número livre confirmado: **000185**):
 
 **`hub_group_catalog`** — um registro de metadados por origem verificável:
 - `id UUID PK`, `hub_id`, `source_tenant_id`, `source_channel_connection_id`, `provider_group_id`
@@ -151,10 +151,10 @@ Para as tabelas novas, FORCE ROW LEVEL SECURITY com predicados baseados em
 Todos os 5 gates foram autorizados explicitamente pelo proprietário (Gates 1-3 um a um; Gates 4-5 em
 bloco, em 2026-11-11) e estão implementados. Evidências completas em `docs/adr/0059-evidence-matrix.md`.
 
-- **Gate 1** — commit `ddfcbf5`: migration 000183 (scope `'groups'` + `hub_group_catalog` +
+- **Gate 1** — commit `ddfcbf5`: migration 000185 (scope `'groups'` + `hub_group_catalog` +
   `hub_group_tenant_links` + `hub_tenant_relationships`, todas FORCE RLS), testes adversariais
   Postgres reais A/B/C. POSTGRES VERIFIED.
-- **Gate 2** — commit `496e825`: migration 000184 (recibos de idempotência), API HTTP de
+- **Gate 2** — commit `496e825`: migration 000186 (recibos de idempotência), API HTTP de
   catálogo/vínculos/relações, OpenAPI, auditoria em `audit_events`, feature flag
   `OMNIRA_GROUP_ORGANIZER_ENABLED` (OFF por padrão). HTTP VERIFIED.
 - **Gate 3** — commit `4084921`: tela `/admin/grupos` (Lista/Pastas/Kanban, **sem** drag-and-drop —

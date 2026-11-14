@@ -9,7 +9,7 @@
 -- 1) one-time, idempotent backfill for every catalog entry across every hub/tenant that has no link to
 --    its own origin tenant yet (never touches one that already has ANY link, active or revoked — a
 --    deliberate prior revoke is never silently undone);
--- 2) hub_autodiscover_catalog_upsert (migration 000187) now also ensures that self-link going forward,
+-- 2) hub_autodiscover_catalog_upsert (migration 000189) now also ensures that self-link going forward,
 --    for every future group the background worker discovers. The OTHER creation path (the Hub operator's
 --    own "Adicionar grupo ao catálogo", UpsertCatalogEntry in service.go) gets the equivalent logic in Go,
 --    in the same transaction — see that function's diff.

@@ -1,6 +1,6 @@
--- ADR-0059 addendum (second half): the group discovery bridge (migration 000185) still left the
+-- ADR-0059 addendum (second half): the group discovery bridge (migration 000187) still left the
 -- operator typing a connection_id UUID by hand into "ID da conexão (canal) na origem" before the group
--- dropdown could even fire — found live in production right after 000185 shipped. This function lets a
+-- dropdown could even fire — found live in production right after 000187 shipped. This function lets a
 -- Hub actor who already has 'groups' management access to a tenant see that tenant's WhatsApp channel
 -- connections (id + a safe label), instead of guessing a UUID, so the UI can offer a connection picker
 -- one step before the group picker.

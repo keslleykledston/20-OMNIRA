@@ -4,7 +4,7 @@
 -- schema itself, that this table never holds a second row.
 --
 -- No tenant_id — this is a PLATFORM-WIDE kill switch, independent of any tenant's own is_alert_channel
--- choice (wa_groups, migration 000181). RLS follows the exact same manual pattern as platform_operators
+-- choice (wa_groups, migration 000183). RLS follows the exact same manual pattern as platform_operators
 -- (migration 000099): FORCE ROW LEVEL SECURITY, restricted to is_system_admin() OR
 -- is_platform_operator(current_user_id()). The Go side (internal/groups/application.SLAAlertService)
 -- checks this on every SLA-breach event — never only once at worker startup — so flipping it takes
