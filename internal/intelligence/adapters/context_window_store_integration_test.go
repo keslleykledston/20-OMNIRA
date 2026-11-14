@@ -585,7 +585,13 @@ func TestMessageIDsReturnsTheWindowMembershipOldestFirst(t *testing.T) {
 	// wall-clock time would close the window immediately via the idle/max-age path, before the other 3 could join
 	// it. Still deliberately out of chronological order by a few milliseconds, to prove the cursor sorts by
 	// message_at, not insertion order.
-	base := time.Now().UTC()
+	//
+	// base sits 500ms in the past, not at time.Now(): the first message below gets base+40ms, and Policy.Evaluate
+	// rejects a snapshot whose FirstAt is after Touch's own "now" ("contextwindow: invalid snapshot") — on a fast
+	// enough host (a quick DB round trip, as seen on GitHub's runners), real time might not have advanced those 40ms
+	// by the time Touch runs, which isn't a flake but this test handing Touch a FirstAt still in the future. 500ms
+	// of margin keeps every offset below comfortably behind "now" while staying nowhere near the 30s idle window.
+	base := time.Now().UTC().Add(-500 * time.Millisecond)
 	ids := make([]uuid.UUID, 4)
 	for i := range ids {
 		ids[i] = e.message(a.id, a.conversation, "m")
