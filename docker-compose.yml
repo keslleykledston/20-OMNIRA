@@ -124,6 +124,10 @@ x-omnira-runtime: &omnira-runtime
   # Group AI observer (ADR-0055): suggest-only, per-group opt-in, own queue — separate from the topic switches
   # above on purpose (see ADR-0055 "Alternativas").
   OMNIRA_GROUP_AI_OBSERVER_ENABLED: ${OMNIRA_GROUP_AI_OBSERVER_ENABLED-}
+  # Group image/PDF interpretation (ADR-0015 addendum 2): off unless BOTH this flag and a tenant's own
+  # group_media_enabled opt-in (Configurações > Inteligência artificial externa) are true — same two-layer
+  # shape as the observer above, separate from OMNIRA_MULTIMODAL_ANALYSIS_ENABLED (1:1) on purpose.
+  OMNIRA_GROUP_MEDIA_ANALYSIS_ENABLED: ${OMNIRA_GROUP_MEDIA_ANALYSIS_ENABLED-}
   # Hub group organizer (ADR-0059): off unless a Hub contract is also explicitly granted the 'groups'
   # management scope — this flag alone grants nothing to any existing contract.
   OMNIRA_GROUP_ORGANIZER_ENABLED: ${OMNIRA_GROUP_ORGANIZER_ENABLED-}

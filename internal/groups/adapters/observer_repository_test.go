@@ -148,3 +148,88 @@ func TestObserverSaveCannotCrossTenants(t *testing.T) {
 		t.Fatalf("the failed cross-tenant save must have left nothing behind, got %d", n)
 	}
 }
+
+// ADR-0055 addendum 3: a text-less image message is claimable only once its vision analysis is 'done' — and
+// arrives with ImageCaption populated, never forced through as an empty Body.
+func TestObserverClaimFindsAnImageMessageOnlyAfterItsAnalysisIsDone(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, jid1, "Homologação", true)
+	e.exec(`UPDATE wa_groups SET ai_observer_enabled=true WHERE id=$1`, g)
+	imgID := e.msg(tenant, g, "img1", "", false, time.Now().UTC())
+	e.exec(`INSERT INTO wa_group_message_analysis(tenant_id, group_message_id, kind, status) VALUES($1,$2,'description','pending')`, tenant, imgID)
+
+	repo := NewPostgresObserverRepository(e.app)
+	got, err := repo.Claim(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("an image whose analysis is still pending must not be claimed: %+v", got)
+	}
+
+	e.exec(`UPDATE wa_group_message_analysis SET status='done', body='um roteador com a luz vermelha piscando' WHERE tenant_id=$1 AND group_message_id=$2`, tenant, imgID)
+	got, err = repo.Claim(context.Background(), 5)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("claim after analysis done: %v %+v", err, got)
+	}
+	if got[0].Body != "" || got[0].ImageCaption != "um roteador com a luz vermelha piscando" {
+		t.Fatalf("candidate = %+v", got[0])
+	}
+}
+
+// Context: newest-first, within the window, excludes the candidate itself and another group's/tenant's
+// messages, prefers the team alias, and falls back to a labeled image caption for an earlier image message.
+func TestObserverContextIsWindowedPerGroupAndTenantAndPrefersTheTeamAlias(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, connB := e.tenant()
+	gA := e.group(tenantA, connA, jid1, "A", true)
+	gA2 := e.group(tenantA, connA, jid2, "Outro grupo de A", true)
+	gB := e.group(tenantB, connB, jid1, "B", true)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	candidate := e.msg(tenantA, gA, "m-candidate", "e agora?", false, now)
+	recent1 := e.msg(tenantA, gA, "m1", "oi pessoal", false, now.Add(-5*time.Minute))
+	recent2 := e.msg(tenantA, gA, "m2", "o circuito caiu", false, now.Add(-2*time.Minute))
+	tooOld := e.msg(tenantA, gA, "m-old", "isso é de ontem", false, now.Add(-30*time.Hour))
+	e.msg(tenantA, gA2, "m-other-group", "mensagem de outro grupo", false, now.Add(-1*time.Minute))
+	e.msg(tenantB, gB, "m-other-tenant", "mensagem de outro tenant", false, now.Add(-1*time.Minute))
+	// An earlier image-only message contributes its caption, labeled.
+	imgID := e.msg(tenantA, gA, "m-img", "", false, now.Add(-3*time.Minute))
+	e.exec(`INSERT INTO wa_group_message_analysis(tenant_id, group_message_id, kind, status, body) VALUES($1,$2,'description','done','um prédio com fiação exposta')`, tenantA, imgID)
+	// The team gave recent1's author an alias — must win over the raw author_name.
+	pid := uuid.New()
+	e.exec(`INSERT INTO channel_participants(id,tenant_id,channel_connection_id,provider,external_participant_id,display_name,alias) VALUES($1,$2,$3,'waha','555@lid','Cliente','Felipe (Suporte K3G)')`,
+		pid, tenantA, connA.ID)
+	e.exec(`UPDATE wa_group_messages SET sender_channel_participant_id=$1 WHERE tenant_id=$2 AND id=$3`, pid, tenantA, recent1)
+
+	repo := NewPostgresObserverRepository(e.app)
+	got, err := repo.Context(context.Background(), tenantA, gA, candidate, now, now.Add(-24*time.Hour), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byMsg := map[string]string{}
+	for _, c := range got {
+		byMsg[c.Body] = c.AuthorName
+	}
+	if len(got) != 3 {
+		t.Fatalf("context must be exactly {recent1, recent2, img}, got %d: %+v", len(got), got)
+	}
+	if got[0].Body != "o circuito caiu" { // recent2 is the newest within the window
+		t.Fatalf("context must be newest-first, got %+v", got)
+	}
+	if name, ok := byMsg["oi pessoal"]; !ok || name != "Felipe (Suporte K3G)" {
+		t.Fatalf("the team alias must win over the raw author_name: %+v", byMsg)
+	}
+	if name, ok := byMsg["[imagem] um prédio com fiação exposta"]; !ok || name != "Cliente" {
+		t.Fatalf("an earlier image message must contribute its labeled caption: %+v", byMsg)
+	}
+	for _, excluded := range []string{"e agora?", "isso é de ontem", "mensagem de outro grupo", "mensagem de outro tenant"} {
+		if _, ok := byMsg[excluded]; ok {
+			t.Fatalf("context leaked something it must not: %q in %+v", excluded, byMsg)
+		}
+	}
+	_ = recent2
+	_ = tooOld
+}

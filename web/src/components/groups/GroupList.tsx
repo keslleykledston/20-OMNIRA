@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import { Badge } from '../primitives'
 import type { Group } from '../../lib/groups'
-import { GROUP_PURPOSE_BADGE_VARIANT, GROUP_PURPOSE_LABEL, groupPreview } from '../../lib/groupModel'
+import { GROUP_PURPOSE_BADGE_VARIANT, GROUP_PURPOSE_SHORT_LABEL, groupPreview } from '../../lib/groupModel'
 import { inboxTimeLabel } from '../../lib/inboxModel'
 
 interface Props {
@@ -25,30 +25,28 @@ export function GroupList({ groups, selectedId, onSelect, isLoading, showInstanc
             onClick={() => onSelect(g.id)}
             aria-current={selectedId === g.id ? 'true' : undefined}
             className={clsx(
-              'flex w-full items-center gap-2.5 px-3 py-2 text-left border-b border-border-subtle transition-colors',
+              'flex w-full items-center gap-2.5 px-3 py-1.5 text-left border-b border-border-subtle transition-colors',
               selectedId === g.id ? 'bg-accent-primary-soft' : 'hover:bg-surface-muted',
             )}
           >
-            <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-surface-tertiary text-sm font-semibold text-text-secondary">
+            <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-surface-tertiary text-sm font-semibold text-text-secondary">
               {g.name?.[0]?.toUpperCase() || '#'}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="flex items-baseline justify-between gap-2">
+              <span className="flex items-center gap-1.5">
                 <span className="truncate text-sm font-semibold text-text-primary">{g.name || 'Grupo sem nome'}</span>
-                <time dateTime={g.last_message_at ?? undefined} className="flex-shrink-0 text-[11px] tabular-nums text-text-tertiary">
+                <Badge variant={GROUP_PURPOSE_BADGE_VARIANT[g.purpose]} size="xs" className="flex-shrink-0">
+                  {GROUP_PURPOSE_SHORT_LABEL[g.purpose]}
+                </Badge>
+                <time dateTime={g.last_message_at ?? undefined} className="ml-auto flex-shrink-0 text-[11px] tabular-nums text-text-tertiary">
                   {inboxTimeLabel(g.last_message_at ?? undefined)}
                 </time>
               </span>
-              <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                <Badge variant={GROUP_PURPOSE_BADGE_VARIANT[g.purpose]} size="sm">
-                  {GROUP_PURPOSE_LABEL[g.purpose]}
-                </Badge>
-                {g.account_name && <span className="truncate text-[11px] text-text-tertiary">{g.account_name}</span>}
-                {showInstanceLabel && g.connection_account && (
-                  <span className="truncate text-[11px] text-text-tertiary">· {g.connection_account}</span>
-                )}
+              <span className="block truncate text-xs text-text-secondary">
+                {g.account_name && <span className="text-text-tertiary">{g.account_name} · </span>}
+                {showInstanceLabel && g.connection_account && <span className="text-text-tertiary">{g.connection_account} · </span>}
+                {groupPreview(g)}
               </span>
-              <span className="block truncate text-xs text-text-secondary">{groupPreview(g)}</span>
             </span>
           </button>
         </li>

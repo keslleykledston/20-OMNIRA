@@ -1126,14 +1126,27 @@ func (s *Server) RegisterGroupHandlers(dbPool *pgxpool.Pool, h *groupsadapters.H
 	const base = "/api/v1/tenants/{tenant_id}/groups"
 	s.mux.Handle("GET "+base, wrap(h.List))
 	s.mux.Handle("GET "+base+"/available", wrap(h.Available))
+	s.mux.Handle("GET "+base+"/accounts-summary", wrap(h.AccountsSummary))
 	s.mux.Handle("POST "+base, wrap(h.Enable))
 	s.mux.Handle("PATCH "+base+"/{group_id}", wrap(h.SetEnabled))
 	s.mux.Handle("GET "+base+"/{group_id}/messages", wrap(h.ListMessages))
 	s.mux.Handle("DELETE "+base+"/{group_id}/messages", wrap(h.DeleteHistory))
+	// ADR-0015 addendum 2: a group's cleared image/PDF, same security posture as the 1:1 media route.
+	s.mux.Handle("GET "+base+"/{group_id}/messages/{message_id}/media", wrap(h.Media))
 	s.mux.Handle("PUT "+base+"/{group_id}/account", wrap(h.LinkAccount))
 	s.mux.Handle("DELETE "+base+"/{group_id}/account", wrap(h.UnlinkAccount))
 	s.mux.Handle("POST "+base+"/{group_id}/accounts", wrap(h.AddAdditionalAccount))
 	s.mux.Handle("DELETE "+base+"/{group_id}/accounts/{account_id}", wrap(h.RemoveAdditionalAccount))
+	// ADR-0015 addendum: who writes in a group, identified without a phone (channel_participants, never
+	// contacts/account_id tied to the group — the same participant spans every group on the connection).
+	s.mux.Handle("GET "+base+"/{group_id}/participants", wrap(h.Participants))
+	s.mux.Handle("PUT "+base+"/participants/{participant_id}/details", wrap(h.SetParticipantAlias))
+	// company/link (not .../participants/{participant_id}/company): Go's ServeMux (1.22+) refuses the shorter
+	// shape as an unresolvable conflict with DELETE .../groups/{group_id}/accounts/{account_id} above — both are
+	// 3 segments with crossed literal/wildcard positions, so some request path (e.g. .../participants/accounts/
+	// company) would match both patterns at once. The extra segment breaks that tie by length, nothing else.
+	s.mux.Handle("PUT "+base+"/participants/{participant_id}/company/link", wrap(h.SetParticipantCompany))
+	s.mux.Handle("DELETE "+base+"/participants/{participant_id}/company/link", wrap(h.UnlinkParticipantCompany))
 }
 
 // RegisterSLAAlertFeatureFlagHandlers mounts the ADR-0058 operator kill switch's admin endpoint:

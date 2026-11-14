@@ -1,0 +1,1 @@
+ALTER TABLE wa_groups DROP CONSTRAINT wa_groups_alert_channel_internal_purpose_only;

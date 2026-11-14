@@ -81,7 +81,11 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		"POST " + tn + "/contacts/{contact_id}/accounts/{link_id}/primary": "contact.classify",
 		"GET " + tn + "/accounts":                                          "account.read",
 		// phase 04b: the instance's ERP directory and the ERP ticket of a conversation the agent holds
-		"GET " + tn + "/crm/companies":                             "contact.classify|ticket.create",
+		// ADR-0059 addendum 3: "group.manage" added so a Hub agent delegated only that key (a groups-only tenant,
+		// e.g. K3G_Grupos) can also read it while acting for the tenant, to link a group straight to a CRM
+		// company. Read-only (names/CNPJ of the delegated tenant's own active companies), re-scoped to that
+		// tenant by resolveServeContext on every request — reviewed, not a widening of what gets returned.
+		"GET " + tn + "/crm/companies":                             "contact.classify|group.manage|ticket.create",
 		"GET " + tn + "/contacts/{contact_id}/company-suggestions": "account.read",
 		"GET " + tn + "/conversations/{conversation_id}/ticket":    "ticket.create|ticket.read",
 		"POST " + tn + "/conversations/{conversation_id}/ticket":   "ticket.create",

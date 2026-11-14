@@ -13,9 +13,12 @@ import {
   sortGroupMessages,
 } from '../../lib/groupModel'
 import { groupErrorMessage, groupsAPI, type Group, type GroupMessage, type GroupPurpose } from '../../lib/groups'
+import { RELATIONSHIP_LABEL } from '../../lib/contacts'
 import { dayLabel } from '../../lib/inboxModel'
 import { getTenantId } from '../../lib/session'
 import { GroupAccountLink } from './GroupAccountLink'
+import { GroupMessageMedia } from './GroupMessageMedia'
+import { ParticipantProfileModal } from './ParticipantProfileModal'
 import clsx from 'clsx'
 
 interface Props {
@@ -36,6 +39,7 @@ export function GroupThread({ group, canManage, onBack }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [editingParticipant, setEditingParticipant] = useState<string | null>(null)
 
   const setPurpose = useMutation({
     mutationFn: (purpose: GroupPurpose) => groupsAPI.setPurpose(group.id, purpose),
@@ -95,7 +99,7 @@ export function GroupThread({ group, canManage, onBack }: Props) {
 
   return (
     <div className="flex h-full flex-col bg-surface">
-      <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-3">
           {onBack && (
             <button type="button" onClick={onBack} title="Voltar" className="rounded-control p-1 hover:bg-surface-muted lg:hidden">
@@ -110,7 +114,7 @@ export function GroupThread({ group, canManage, onBack }: Props) {
             </div>
           </div>
         </div>
-        <div className="flex flex-shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {canManage ? (
             <label className="flex items-center gap-1.5">
               <span className="sr-only">Classificação do grupo</span>
@@ -145,25 +149,30 @@ export function GroupThread({ group, canManage, onBack }: Props) {
               IA observadora
             </label>
           )}
-          {canManage && (
-            <label
-              className="flex items-center gap-1.5 text-xs text-text-secondary"
-              title={
-                group.account_id
-                  ? 'Um grupo vinculado a um cliente não pode ser o canal de alerta'
-                  : 'Canal de alerta: recebe uma mensagem real quando o SLA de uma conversa estoura. No máximo um grupo por conta, nunca um grupo de cliente.'
-              }
-            >
-              <input
-                type="checkbox"
-                checked={group.is_alert_channel}
-                disabled={setAlertChannel.isPending || !group.enabled || !!group.account_id}
-                onChange={(e) => setAlertChannel.mutate(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-border-subtle"
-              />
-              Canal de alerta
-            </label>
-          )}
+          {canManage && (() => {
+            const isInternal = group.purpose === 'internal_management' || group.purpose === 'internal_team'
+            return (
+              <label
+                className="flex items-center gap-1.5 text-xs text-text-secondary"
+                title={
+                  group.account_id
+                    ? 'Um grupo vinculado a um cliente não pode ser o canal de alerta'
+                    : !isInternal
+                      ? 'Canal de alerta exige um grupo classificado como Interno · Gestão ou Interno · Equipe'
+                      : 'Canal de alerta: recebe uma mensagem real quando o SLA de uma conversa estoura. No máximo um grupo por conta, nunca um grupo de cliente.'
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={group.is_alert_channel}
+                  disabled={setAlertChannel.isPending || !group.enabled || !!group.account_id || !isInternal}
+                  onChange={(e) => setAlertChannel.mutate(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-border-subtle"
+                />
+                Canal de alerta
+              </label>
+            )
+          })()}
           {canManage && (
             <Button size="sm" variant="tertiary" onClick={() => setConfirmDelete(true)} disabled={messages.length === 0 && !hasNextPage}>
               Apagar histórico
@@ -215,8 +224,36 @@ export function GroupThread({ group, canManage, onBack }: Props) {
                           m.from_me ? 'rounded-br-none bg-accent-primary-soft text-text-primary' : 'rounded-bl-none bg-surface-muted text-text-primary',
                         )}
                       >
-                        {newAuthor && !m.from_me && <p className="mb-0.5 text-xs font-semibold text-accent-primary">{authorLabel(m)}</p>}
-                        <p className={clsx('break-words whitespace-pre-wrap', !m.body.trim() && 'italic text-text-secondary')}>{messageText(m)}</p>
+                        {newAuthor && !m.from_me && (
+                          <p className="mb-0.5 flex items-center gap-1 text-xs font-semibold text-accent-primary">
+                            <span>{authorLabel(m)}</span>
+                            {m.company_name && (
+                              <span className="font-normal text-text-tertiary">
+                                · {m.company_name}
+                                {m.company_role && ` · ${RELATIONSHIP_LABEL[m.company_role]}`}
+                                {m.is_downstream_client && ' · Cliente'}
+                              </span>
+                            )}
+                            {canManage && m.participant_id && (
+                              <button
+                                type="button"
+                                title="Identificar participante"
+                                aria-label="Identificar participante"
+                                onClick={() => setEditingParticipant(m.participant_id)}
+                                className="rounded-control p-0.5 text-text-tertiary hover:bg-surface-hover hover:text-text-primary"
+                              >
+                                <Icon name="edit" size={12} />
+                              </button>
+                            )}
+                          </p>
+                        )}
+                        {m.body.trim() && (
+                          <p className="break-words whitespace-pre-wrap">{messageText(m)}</p>
+                        )}
+                        <GroupMessageMedia tenantId={tenantId} groupId={group.id} message={m} />
+                        {!m.body.trim() && m.message_type !== 'image' && m.message_type !== 'document' && (
+                          <p className="italic text-text-secondary">{messageText(m)}</p>
+                        )}
                         {canManage && m.suggestion && (
                           <div className="mt-1" title={m.suggestion.summary}>
                             <div className="flex items-center gap-1.5">
@@ -269,6 +306,14 @@ export function GroupThread({ group, canManage, onBack }: Props) {
         onConfirm={() => void deleteHistory()}
         onCancel={() => setConfirmDelete(false)}
       />
+      {canManage && (
+        <ParticipantProfileModal
+          open={!!editingParticipant}
+          groupId={group.id}
+          participantId={editingParticipant}
+          onClose={() => setEditingParticipant(null)}
+        />
+      )}
     </div>
   )
 }

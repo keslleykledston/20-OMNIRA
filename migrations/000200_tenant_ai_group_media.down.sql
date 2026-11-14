@@ -1,0 +1,2 @@
+ALTER TABLE tenant_ai_integrations DROP CONSTRAINT IF EXISTS tenant_ai_group_media_requires_enabled;
+ALTER TABLE tenant_ai_integrations DROP COLUMN IF EXISTS group_media_enabled;

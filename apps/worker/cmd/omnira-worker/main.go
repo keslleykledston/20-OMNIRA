@@ -479,6 +479,36 @@ func main() {
 		} else {
 			log.Printf("Image/PDF analysis disabled (OMNIRA_MULTIMODAL_ANALYSIS_ENABLED is not true)\n")
 		}
+		// Group chat images (ADR-0015 addendum 2): fetch + antivirus-clear a group's image/PDF attachments the
+		// SAME way 1:1 media already does — the same Fetcher/Scanner/Store, a second Processor against its own
+		// table (wa_group_message_media), never message_media. Runs whenever the inbound media pipeline itself
+		// runs: receiving and clearing a file is not an AI call, so it is not behind the AI opt-in below.
+		groupMediaRepo := groupsadapters.NewGroupMediaRepository(dbPool)
+		groupMediaProc, err := mediaapp.NewProcessor(groupMediaRepo, store, fetcher, av, mediaapp.DefaultConfig(), mediaCounters)
+		if err != nil {
+			log.Fatalf("group media processor error: %v", err)
+		}
+		go groupMediaProc.Run(workerCtx, 2*time.Second)
+		// Image/PDF reading of group attachments with the TENANT'S OWN Gemini key (ADR-0016, same opt-in and
+		// budget enforcement 1:1 vision already uses) — its own flag, separate from
+		// OMNIRA_MULTIMODAL_ANALYSIS_ENABLED: turning 1:1 vision on must never silently also start reading a
+		// tenant's group images, and vice versa.
+		if os.Getenv("OMNIRA_GROUP_MEDIA_ANALYSIS_ENABLED") == "true" {
+			groupCredCipher, cerr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
+			groupGemini, gerr := mediaadapters.NewGemini("")
+			if cerr != nil || gerr != nil {
+				log.Printf("Group image/PDF analysis disabled (credential cipher: %v, gemini adapter: %v)\n", cerr, gerr)
+			} else {
+				groupVision, verr := mediaapp.NewVisionProcessor(groupMediaRepo, groupMediaRepo, store, mediaadapters.NewTenantAIResolver(dbPool, groupCredCipher), groupGemini, aiusageadapters.NewPostgresLedger(dbPool), mediaCounters)
+				if verr != nil {
+					log.Fatalf("group vision processor error: %v", verr)
+				}
+				go groupVision.Run(workerCtx, 5*time.Second)
+				log.Printf("Group image/PDF analysis started (per-tenant Gemini opt-in, monthly budget enforced)\n")
+			}
+		} else {
+			log.Printf("Group image/PDF analysis disabled (OMNIRA_GROUP_MEDIA_ANALYSIS_ENABLED != true)\n")
+		}
 		go func() {
 			probe := func() {
 				pctx, cancel := context.WithTimeout(workerCtx, 8*time.Second)

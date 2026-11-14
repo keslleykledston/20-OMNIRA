@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import axios from 'axios'
 import GroupsPage from '../pages/GroupsPage'
 import { authorLabel, groupPreview, messageText, sortGroupMessages } from '../lib/groupModel'
-import type { AvailableGroup, Group, GroupMessage } from '../lib/groups'
+import type { AccountGroupsSummary, AvailableGroup, Group, GroupMessage, GroupParticipant } from '../lib/groups'
 import { renderAt, setSession } from './testUtils'
 
 vi.mock('axios')
@@ -36,6 +36,11 @@ const msg = (id: string, minAgo: number, over: Partial<GroupMessage> = {}): Grou
   body: `texto ${id}`,
   sent_at: new Date(Date.now() - minAgo * 60_000).toISOString(),
   suggestion: null,
+  participant_id: null,
+  company_name: null,
+  company_role: null,
+  is_downstream_client: null,
+  image_caption: null,
   ...over,
 })
 
@@ -47,12 +52,19 @@ interface Server {
   available?: AvailableGroup[]
   availableTotal?: number
   hubs?: Array<{ id: string; name: string; role: string; can_manage_groups?: boolean }>
+  accountsSummary?: AccountGroupsSummary[]
+  crmCompanies?: Array<{ id: string; name: string; cnpj?: string }>
+  localAccounts?: Array<{ id: string; name: string }>
+  participants?: GroupParticipant[]
 }
 
 function serve(s: Server) {
   const pageSize = s.pageSize ?? 100
   vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
     if (url.endsWith('/me/access')) return { data: { role_key: 'x', permissions: s.permissions } }
+    if (url.endsWith('/groups/accounts-summary')) return { data: { items: s.accountsSummary ?? [] } }
+    if (url.endsWith('/crm/companies')) return { data: { items: s.crmCompanies ?? [] } }
+    if (url.endsWith('/accounts')) return { data: { items: s.localAccounts ?? [] } }
     if (url.endsWith('/groups/available')) {
       const items = (s.available ?? []).filter((g) => !config?.params?.q || g.name.toLowerCase().includes(String(config.params.q).toLowerCase()))
       return { data: { items, count: items.length, total: s.availableTotal ?? items.length } }
@@ -64,6 +76,7 @@ function serve(s: Server) {
       const more = offset + pageSize < all.length
       return { data: { items, has_more: more, next_cursor: more ? String(offset + pageSize) : undefined } }
     }
+    if (/\/groups\/[^/]+\/participants$/.test(url)) return { data: { items: s.participants ?? [] } }
     if (url.endsWith('/groups')) return { data: { items: s.groups ?? [] } }
     if (url.endsWith('/hubs')) return { data: { items: s.hubs ?? [] } }
     return Promise.reject({ response: { status: 404 } })
@@ -152,7 +165,8 @@ describe('GroupsPage', () => {
     renderAt(<GroupsPage />)
     await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
     await screen.findByText('primeira')
-    const texts = ['primeira', '[Foto]', 'ok'].map((t) => screen.getByText(t))
+    // An empty-body image message shows the actual photo (ADR-0015 addendum 2), never a "[Foto]" placeholder.
+    const texts = [screen.getByText('primeira'), screen.getByAltText('Imagem do grupo'), screen.getByText('ok')]
     // document order = oldest -> newest
     expect(texts[0].compareDocumentPosition(texts[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(texts[1].compareDocumentPosition(texts[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -200,6 +214,252 @@ describe('GroupsPage', () => {
     await user.click(within(dialog.closest('[role="dialog"]') as HTMLElement).getByRole('button', { name: 'Apagar histórico' }))
     await waitFor(() => expect(axios.delete).toHaveBeenCalledTimes(1))
     expect(vi.mocked(axios.delete).mock.calls[0][0]).toMatch(/\/groups\/g-1\/messages$/)
+  })
+
+  it('"Canal de alerta" fica desabilitado num grupo que não é Interno · Gestão/Equipe (ADR-0058 addendum)', async () => {
+    const user = userEvent.setup()
+    serve({ permissions: MANAGE, groups: [group({ purpose: 'other' })], messages: [] })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
+    expect(await screen.findByRole('checkbox', { name: 'Canal de alerta' })).toBeDisabled()
+  })
+
+  it('"Canal de alerta" fica habilitado num grupo Interno · Gestão/Equipe (ADR-0058 addendum)', async () => {
+    const user = userEvent.setup()
+    serve({ permissions: MANAGE, groups: [group({ purpose: 'internal_team' })], messages: [] })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
+    expect(await screen.findByRole('checkbox', { name: 'Canal de alerta' })).toBeEnabled()
+  })
+})
+
+describe('GroupsPage — imagem no chat do grupo (ADR-0015 addendum 2)', () => {
+  it('mostra a imagem com a URL correta e a legenda que a IA já leu', async () => {
+    const user = userEvent.setup()
+    serve({
+      permissions: READ,
+      groups: [group()],
+      messages: [msg('m1', 1, { message_type: 'image', body: '', image_caption: 'um roteador com a luz vermelha piscando' })],
+    })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
+    const img = await screen.findByAltText('Imagem do grupo')
+    expect(img).toHaveAttribute('src', expect.stringContaining('/tenants/tenant-a-uuid/groups/g-1/messages/m1/media'))
+    expect(screen.getByText('um roteador com a luz vermelha piscando')).toBeInTheDocument()
+  })
+
+  it('sem legenda ainda (análise pendente), mostra só a imagem', async () => {
+    const user = userEvent.setup()
+    serve({ permissions: READ, groups: [group()], messages: [msg('m1', 1, { message_type: 'image', body: '' })] })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
+    await screen.findByAltText('Imagem do grupo')
+    expect(screen.queryByText('O que a IA leu na imagem')).not.toBeInTheDocument()
+  })
+
+  it('se a imagem falhar ao carregar, mostra um aviso em vez de quebrar', async () => {
+    const user = userEvent.setup()
+    serve({ permissions: READ, groups: [group()], messages: [msg('m1', 1, { message_type: 'image', body: '' })] })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
+    const img = await screen.findByAltText('Imagem do grupo')
+    fireEvent.error(img)
+    expect(await screen.findByText('Não foi possível carregar esta imagem.')).toBeInTheDocument()
+    expect(screen.queryByAltText('Imagem do grupo')).not.toBeInTheDocument()
+  })
+})
+
+describe('GroupsPage — identificar participante (ADR-0015 addendum: alias/empresa/função, sem telefone)', () => {
+  it('mostra empresa · função ao lado do autor quando já vinculado, e permite editar o alias', async () => {
+    const user = userEvent.setup()
+    serve({
+      permissions: MANAGE,
+      groups: [group()],
+      messages: [msg('m1', 5, { author_name: 'Felipe', participant_id: 'p-1', company_name: 'K3G Solutions', company_role: 'technical_contact' })],
+      participants: [{ id: 'p-1', display_name: 'Felipe', alias: null, company_account_id: 'acc-9', company_name: 'K3G Solutions', company_role: 'technical_contact', is_downstream_client: false, message_count: 1, last_seen_at: new Date().toISOString() }],
+    })
+    vi.mocked(axios.put).mockResolvedValue({ data: {} })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
+    await screen.findByText('Felipe')
+    expect(screen.getByText('· K3G Solutions · Contato técnico')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Identificar participante' }))
+    const alias = await screen.findByLabelText('Nome aparente')
+    await user.type(alias, 'Felipe (Suporte K3G)')
+    await user.click(screen.getByRole('button', { name: 'Salvar nome aparente' }))
+    await waitFor(() =>
+      expect(axios.put).toHaveBeenCalledWith(expect.stringContaining('/groups/participants/p-1/details'), { alias: 'Felipe (Suporte K3G)' }, expect.anything()),
+    )
+  })
+
+  // ADR-0015 addendum 3: a empresa vinculada pode ser cliente do Cliente (ex.: a Uplink, cliente da 4WNET).
+  it('marca a empresa vinculada como "Cliente" (cliente do Cliente) quando o checkbox é marcado', async () => {
+    const user = userEvent.setup()
+    serve({
+      permissions: MANAGE,
+      groups: [group()],
+      messages: [msg('m1', 5, { author_name: 'Contato', participant_id: 'p-2' })],
+      participants: [
+        { id: 'p-2', display_name: 'Contato', alias: null, company_account_id: null, company_name: null, company_role: null, is_downstream_client: false, message_count: 1, last_seen_at: new Date().toISOString() },
+      ],
+      localAccounts: [{ id: 'acc-up', name: 'Uplink' }],
+    })
+    vi.mocked(axios.put).mockResolvedValue({ data: {} })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
+    await screen.findByText('Contato')
+    await user.click(screen.getByRole('button', { name: 'Identificar participante' }))
+    // Espera os dados do participante assentarem antes de interagir — o efeito que inicializa alias/role/
+    // isDownstreamClient a partir da query reseta o checkbox se ela resolver depois do clique.
+    await waitFor(() => expect(screen.getByLabelText('Nome aparente')).toHaveAttribute('placeholder', 'Contato'))
+    await user.click(await screen.findByRole('checkbox', { name: /Cliente/ }))
+    await user.click(await screen.findByRole('button', { name: /Uplink/ }))
+    await user.click(screen.getByRole('button', { name: 'Vincular empresa' }))
+    await waitFor(() =>
+      expect(axios.put).toHaveBeenCalledWith(
+        expect.stringContaining('/groups/participants/p-2/company/link'),
+        { account_id: 'acc-up', role: 'other', is_downstream_client: true },
+        expect.anything(),
+      ),
+    )
+  })
+
+  // O vínculo pode ser editado no lugar (trocar a função / marcar-desmarcar "Cliente") sem precisar
+  // remover e refazer — a empresa já selecionada continua selecionada ao abrir o modal.
+  it('edita a função de um vínculo já existente sem precisar remover antes', async () => {
+    const user = userEvent.setup()
+    serve({
+      permissions: MANAGE,
+      groups: [group()],
+      messages: [msg('m1', 5, { author_name: 'Felipe', participant_id: 'p-1', company_name: 'K3G Solutions', company_role: 'technical_contact' })],
+      participants: [
+        { id: 'p-1', display_name: 'Felipe', alias: null, company_account_id: 'acc-9', company_name: 'K3G Solutions', company_role: 'technical_contact', is_downstream_client: false, message_count: 1, last_seen_at: new Date().toISOString() },
+      ],
+    })
+    vi.mocked(axios.put).mockResolvedValue({ data: {} })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
+    await screen.findByText('Felipe')
+    await user.click(screen.getByRole('button', { name: 'Identificar participante' }))
+    await waitFor(() => expect(screen.getByLabelText('Nome aparente')).toHaveAttribute('placeholder', 'Felipe'))
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Função' }), 'owner')
+    await user.click(screen.getByRole('button', { name: 'Editar função/Cliente desta empresa' }))
+    await waitFor(() =>
+      expect(axios.put).toHaveBeenCalledWith(
+        expect.stringContaining('/groups/participants/p-1/company/link'),
+        { account_id: 'acc-9', role: 'owner', is_downstream_client: false },
+        expect.anything(),
+      ),
+    )
+    // O modal continua aberto — editar não deve fechá-lo, só "Fechar"/X (bug relatado pelo usuário).
+    expect(await screen.findByText('Empresa salva.')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Identificar participante' })).toBeInTheDocument()
+    // "Remover" nunca foi chamado — a edição não passou por lá.
+    expect(vi.mocked(axios.delete)).not.toHaveBeenCalled()
+  })
+
+  it('não oferece "Identificar participante" sem group.manage', async () => {
+    const user = userEvent.setup()
+    serve({
+      permissions: READ,
+      groups: [group()],
+      messages: [msg('m1', 5, { author_name: 'Felipe', participant_id: 'p-1' })],
+    })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: /0 - K3G Solutions Oficial/ }))
+    await screen.findByText('Felipe')
+    expect(screen.queryByRole('button', { name: 'Identificar participante' })).not.toBeInTheDocument()
+  })
+})
+
+describe('GroupsPage — Organização (navegar primeiro por Cliente do CRM)', () => {
+  it('alternando para "Organização", lista os Clientes do CRM com a contagem de grupos e "Sem cliente vinculado"', async () => {
+    const user = userEvent.setup()
+    serve({
+      permissions: READ,
+      groups: [
+        group({ id: 'g-1', name: 'Clientes InfoRR', account_id: 'acc-1', account_name: 'InfoRR Consultoria' }),
+        group({ id: 'g-2', name: 'Suporte geral' }),
+      ],
+      accountsSummary: [{ account_id: 'acc-1', account_name: 'InfoRR Consultoria', group_count: 1 }],
+    })
+    renderAt(<GroupsPage />)
+    await screen.findByRole('button', { name: /Clientes InfoRR/ })
+    await user.click(screen.getByRole('radio', { name: 'Organização' }))
+    const infoRR = await screen.findByRole('button', { name: /InfoRR Consultoria/ })
+    expect(within(infoRR).getByText('1 grupo')).toBeInTheDocument()
+    const unlinked = screen.getByRole('button', { name: /Sem cliente vinculado/ })
+    expect(within(unlinked).getByText('1 grupo')).toBeInTheDocument()
+    // a visão "Mensagens" some; os grupos não aparecem soltos nesse primeiro nível
+    expect(screen.queryByRole('button', { name: /Clientes InfoRR/ })).not.toBeInTheDocument()
+  })
+
+  it('drill-down: clicar num cliente mostra só os grupos dele (primário + adicional, caso "swap"), e clicar num grupo abre a conversa de leitura de sempre', async () => {
+    const user = userEvent.setup()
+    serve({
+      permissions: READ,
+      groups: [
+        group({ id: 'g-1', name: 'Clientes InfoRR', account_id: 'acc-1', account_name: 'InfoRR Consultoria' }),
+        group({
+          id: 'g-2',
+          name: 'Swap - InfoRR x IP Fibra',
+          account_id: 'acc-1',
+          account_name: 'InfoRR Consultoria',
+          additional_accounts: [{ id: 'acc-2', name: 'IP Fibra' }],
+        }),
+        group({ id: 'g-3', name: 'Suporte geral' }),
+      ],
+      accountsSummary: [
+        { account_id: 'acc-1', account_name: 'InfoRR Consultoria', group_count: 2 },
+        { account_id: 'acc-2', account_name: 'IP Fibra', group_count: 1 },
+      ],
+      messages: [],
+    })
+    renderAt(<GroupsPage />)
+    await screen.findByRole('button', { name: /Clientes InfoRR/ })
+    await user.click(screen.getByRole('radio', { name: 'Organização' }))
+    await user.click(await screen.findByRole('button', { name: /IP Fibra/ }))
+    // IP Fibra só concerne o grupo "swap" (ligado como adicional), nunca "Clientes InfoRR" nem "Suporte geral"
+    expect(await screen.findByRole('button', { name: /Swap - InfoRR x IP Fibra/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Clientes InfoRR/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Suporte geral/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Swap - InfoRR x IP Fibra/ }))
+    expect(await screen.findByText(/Somente leitura/)).toBeInTheDocument()
+  })
+})
+
+describe('LinkGroupModal — "Vincular Grupo" (ativar + vincular cliente numa ação só)', () => {
+  it('escolhe um grupo do WhatsApp e depois um Cliente do CRM, e chama ativar e vincular em sequência, nas rotas já existentes', async () => {
+    const user = userEvent.setup()
+    serve({
+      permissions: MANAGE,
+      groups: [],
+      available: [{ provider_group_id: '120363000000000005@g.us', name: 'Nova Implantação', participant_count: 8, enabled: false, group_id: null }],
+      crmCompanies: [{ id: 'co-1', name: 'InfoRR Consultoria', cnpj: '123' }],
+    })
+    vi.mocked(axios.post).mockResolvedValue({ data: group({ id: 'new-group', name: 'Nova Implantação' }) })
+    vi.mocked(axios.put).mockResolvedValue({ data: {} })
+    renderAt(<GroupsPage />)
+    await user.click(await screen.findByRole('button', { name: 'Vincular Grupo' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Vincular Grupo' })
+    await within(dialog).findByText('Nova Implantação')
+    await user.click(within(dialog).getByRole('button', { name: 'Escolher' }))
+    await within(dialog).findByText('InfoRR Consultoria')
+    await user.click(within(dialog).getByRole('button', { name: /InfoRR Consultoria/ }))
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(axios.post).mock.calls[0][1]).toEqual({ provider_group_id: '120363000000000005@g.us' })
+    await waitFor(() => expect(axios.put).toHaveBeenCalledTimes(1))
+    expect(String(vi.mocked(axios.put).mock.calls[0][0])).toMatch(/\/groups\/new-group\/account$/)
+    expect(vi.mocked(axios.put).mock.calls[0][1]).toEqual({ directory_company_id: 'co-1' })
+  })
+
+  it('não oferece o botão sem group.manage', async () => {
+    serve({ permissions: READ, groups: [] })
+    renderAt(<GroupsPage />)
+    await screen.findByText('Nenhum grupo habilitado')
+    expect(screen.queryByRole('button', { name: 'Vincular Grupo' })).not.toBeInTheDocument()
   })
 })
 

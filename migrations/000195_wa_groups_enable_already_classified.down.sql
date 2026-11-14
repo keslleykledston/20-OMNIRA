@@ -1,0 +1,3 @@
+-- No-op: a down migration is a last-resort rollback, not a data-destructive undo. Reverting this would
+-- mean guessing which of the backfilled groups an admin has since come to rely on being read, and
+-- disabling live client-facing groups is a far worse failure mode than leaving a one-time data fix in place.

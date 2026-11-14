@@ -319,6 +319,13 @@ func parseGroupMessage(conn domain.ChannelConnection, payload webhookMessage, re
 		ReplyToExternalID: replyID,
 		SentAt:            time.Unix(int64(payload.Timestamp), int64((payload.Timestamp-float64(int64(payload.Timestamp)))*1e9)).UTC(),
 	}
+	if payload.HasMedia && payload.Media != nil {
+		result.Group.Media = &domain.InboundMedia{
+			Kind:     mediaKind(payload.Media.MIMEType),
+			MediaRef: firstNonEmpty(payload.Media.URL, payload.Media.Filename),
+			MimeType: payload.Media.MIMEType,
+		}
+	}
 	return result, nil
 }
 

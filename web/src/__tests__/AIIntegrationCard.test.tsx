@@ -14,7 +14,7 @@ const CONSENT = 'Ao ativar, as imagens e os PDFs escaneados serão enviados ao G
 function state(over: Partial<AIIntegration> = {}): AIIntegration {
   return {
     provider: 'gemini', enabled: false, model: 'gemini-2.5-flash', monthly_budget_usd: 10, key_configured: false,
-    consent_text: CONSENT, consent_version: 'v1', consent_current: false, ...over,
+    consent_text: CONSENT, consent_version: 'v1', consent_current: false, group_media_enabled: false, ...over,
   }
 }
 
@@ -35,8 +35,10 @@ function server(opts: { permissions: string[]; ai?: AIIntegration }) {
       ...(body.model ? { model: String(body.model) } : {}),
       ...(typeof body.monthly_budget_usd === 'number' ? { monthly_budget_usd: body.monthly_budget_usd } : {}),
       ...(typeof body.enabled === 'boolean' ? { enabled: body.enabled } : {}),
+      ...(typeof body.group_media_enabled === 'boolean' ? { group_media_enabled: body.group_media_enabled } : {}),
       ...(body.accept_external_ai ? { consent_current: true, consent_at: '2026-10-04T12:01:00Z', consent_by: 'adm@x.com' } : {}),
     }
+    if (body.enabled === false) current = { ...current, group_media_enabled: false } // same cascade the server enforces
     return { data: current }
   })
 }
@@ -152,5 +154,42 @@ describe('AIIntegrationCard', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Salvar chave' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/Somente administradores/)
     expect(screen.queryByText(/Chave salva/)).not.toBeInTheDocument()
+  })
+
+  // ADR-0015 addendum 2: group image interpretation rides the same key/budget, but is its own toggle.
+  it('o toggle de imagens de grupo fica desabilitado até a integração estar ativa', async () => {
+    server({ permissions: ADMIN, ai: state({ key_configured: true }) })
+    renderAt(<SettingsPage />)
+    const toggle = await screen.findByRole('checkbox', { name: /Também ler e interpretar imagens recebidas em grupos/ })
+    expect(toggle).toBeDisabled()
+    expect(screen.getByText('Ative a integração acima primeiro.')).toBeInTheDocument()
+  })
+
+  it('liga e desliga a interpretação de imagens de grupo com a integração já ativa', async () => {
+    const user = userEvent.setup()
+    server({ permissions: ADMIN, ai: state({ key_configured: true, enabled: true, consent_current: true }) })
+    renderAt(<SettingsPage />)
+    const toggle = await screen.findByRole('checkbox', { name: /Também ler e interpretar imagens recebidas em grupos/ })
+    expect(toggle).toBeEnabled()
+    expect(toggle).not.toBeChecked()
+
+    await user.click(toggle)
+    await waitFor(() => expect(vi.mocked(axios.put)).toHaveBeenCalledWith(expect.anything(), { group_media_enabled: true }, expect.anything()))
+    expect(await screen.findByText('Interpretação de imagens de grupo ativada.')).toBeInTheDocument()
+    expect(toggle).toBeChecked()
+
+    await user.click(toggle)
+    await waitFor(() => expect(vi.mocked(axios.put)).toHaveBeenCalledWith(expect.anything(), { group_media_enabled: false }, expect.anything()))
+    expect(await screen.findByText('Interpretação de imagens de grupo desativada.')).toBeInTheDocument()
+  })
+
+  it('desativar a integração desliga junto a interpretação de imagens de grupo', async () => {
+    const user = userEvent.setup()
+    server({ permissions: ADMIN, ai: state({ key_configured: true, enabled: true, consent_current: true, group_media_enabled: true }) })
+    renderAt(<SettingsPage />)
+    expect(await screen.findByRole('checkbox', { name: /Também ler e interpretar imagens recebidas em grupos/ })).toBeChecked()
+    await user.click(screen.getByRole('button', { name: 'Desativar' }))
+    await screen.findByText('Integração desativada.')
+    expect(screen.getByRole('checkbox', { name: /Também ler e interpretar imagens recebidas em grupos/ })).not.toBeChecked()
   })
 })

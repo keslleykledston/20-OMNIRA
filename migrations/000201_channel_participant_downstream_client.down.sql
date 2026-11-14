@@ -1,0 +1,2 @@
+ALTER TABLE channel_participants DROP CONSTRAINT IF EXISTS channel_participants_downstream_client_requires_account;
+ALTER TABLE channel_participants DROP COLUMN IF EXISTS is_downstream_client;

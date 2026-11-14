@@ -231,3 +231,68 @@ Proposta, em fatias pequenas, nesta ordem.
 - Testes: `scripts/test-archive-wa-groups.sh` (56 verificações em Postgres descartável, com falhas do USB injetadas e mutação da
   conferência da cópia), `scripts/test-archive-ops.sh` (verificador e poda dos dumps) e os testes em Go do teto e do pedido de limpeza.
 
+## Addendum: identificar quem fala num grupo (nome aparente, empresa, função) — sem tocar `contacts`
+
+Pedido do dono (2026-11-12): cadastrar quem participa dos grupos — nome aparente, empresa e função — para
+que a mesma pessoa (ex.: "Felipe, Suporte K3G") seja reconhecida em todos os grupos onde aparece.
+
+O plano inicial propunha resolver `author_jid` para um `contacts.phone_e164` (reaproveitando
+`contacts`/`contact_account_links`, já usados pela conversa 1:1). Isso foi **rejeitado**: contraria direto a
+tabela da Decisão acima (`contacts.phone_e164 obrigatório e único` × "Grupo não tem telefone") e, na prática,
+`author_jid` **é frequentemente um `@lid`** (o WhatsApp mascara o remetente num grupo por privacidade) — não
+há telefone real pra normalizar na maioria dos casos. Forçar o fluxo de `contacts` teria falhado silenciosamente
+pra boa parte dos participantes, exatamente os que se queria identificar.
+
+**Decisão:** o perfil (nome aparente, empresa, função) fica direto em `channel_participants` — a entidade que
+já identifica "quem escreveu" por `(tenant_id, channel_connection_id, provider, external_participant_id)`,
+sem exigir telefone e já estável entre grupos da mesma conexão (é exatamente o "em todos os Grupos" pedido).
+Nenhum telefone passa a ser guardado; `contacts`/`conversations`/`messages` continuam intocados, como a
+Decisão original já mandava.
+
+- `channel_participants` ganha `alias` (nome aparente, mesma semântica do `contacts.alias`: vazio = usa o
+  nome do WhatsApp), `company_account_id` (FK para `customer_accounts`, a "empresa" — uma empresa interna
+  do próprio tenant usa `account_type='internal'`, sem conceito novo) e `company_role` (mesmo vocabulário
+  fechado de `contact_account_links.relationship_type`, pelas mesmas razões de consistência). `company_role`
+  exige `company_account_id` (constraint).
+- O "papel" que a empresa exerce num grupo específico (Consultoria/Agente-Cliente/etc.) **não** é um campo
+  novo: já é dado pela classificação do próprio grupo (`wa_groups.purpose`/`account_id`, ADR-0059). O perfil
+  do participante é global ao tenant; o grupo já diz em que papel aquela empresa está ali.
+- Exposto só dentro da área de Grupos (`internal/groups/adapters/http.go`): listar quem já escreveu num
+  grupo, editar o alias e ligar/desligar a empresa. `group.manage` para editar, `group.read` para ver —
+  mesmas permissões já usadas no resto desta ADR. O `external_participant_id` (o JID/telefone cru) nunca é
+  servido por essas rotas, mesma regra de "o número só aparece onde for estritamente necessário".
+- **Menção (`@<número>`) resolvida pelo mesmo motivo.** Quando o remetente digita uma menção, o WhatsApp
+  guarda isso no corpo da mensagem como `@<dígitos>` — o mesmo número/`@lid` cru que esta ADR já evita
+  mostrar. `ListMessages` troca `@<dígitos>` por `@<nome>` sempre que os dígitos batem com um
+  `channel_participants` já conhecido NA MESMA conexão (nunca telefone, nunca busca externa); um número
+  desconhecido fica exatamente como foi digitado. `internal/groups/adapters/http.go`'s
+  `participantMentionNames`/`resolveMentions`.
+- **Retenção da imagem segue a do `internal/media` (60 dias), não a do texto (30 quente/12 meses frio,
+  Retenção acima).** `wa_group_message_media` é processada pelo MESMO `mediaapp.Processor` de 1:1 — inclusive
+  o expurgo automático (`ExpiredFiles`/`MarkPurged`, embutido no próprio `Processor.Run`) — sem nenhum job
+  novo. É uma inconsistência deliberada (reaproveitar o pipeline inteiro, inclusive seu prazo, em vez de
+  construir um expurgo próprio só para alinhar um número); revisar se isso incomodar na prática.
+
+## Addendum 3 — Cliente do Cliente (migration 000201)
+
+**Problema:** a empresa vinculada a um participante (addendum anterior) nem sempre é a própria empresa do
+Cliente — pode ser cliente DELA. Exemplo real: um contato escreve num grupo da 4WNET (Cliente do tenant);
+a empresa dele é a Uplink, que é cliente da 4WNET, não funcionária/representante dela. `company_role`
+(Funcionário/Proprietário/Contato técnico/.../Prestador) não cobre esse caso — nenhuma dessas opções diz
+"esta empresa é cliente do Cliente".
+
+**Decisão:** `channel_participants` ganha `is_downstream_client BOOLEAN NOT NULL DEFAULT FALSE` — um
+checkbox simples ("Cliente") ao lado do campo Empresa no modal "Identificar participante", marcado junto
+com a empresa vinculada. Exige `company_account_id` (constraint, mesmo padrão de `company_role`). Não reusa
+`customer_accounts.account_type` (`customer`/`partner`/`internal`/`other`): aquele campo classifica a conta
+em relação ao TENANT (K3G), não em relação ao Cliente que o grupo já representa — a Uplink não precisa ser
+cadastrada como "cliente direto" do tenant para a K3G, ela é cliente da 4WNET, então marcar sua
+`customer_accounts` como `customer` classificaria errado a relação com o próprio tenant. Um booleano
+contextual no participante evita inventar uma hierarquia nova entre contas.
+
+- Exposto em `GroupParticipant.is_downstream_client` e `GroupMessage.is_downstream_client` (nulo quando não
+  há empresa vinculada). Editado via o mesmo `PUT .../participants/{id}/company/link` que já seta
+  `account_id`/`role`; `DELETE .../company/link` zera também este campo.
+- UI: badge "· Cliente" ao lado do nome da empresa, tanto no chat (`GroupThread.tsx`) quanto no modal de
+  edição (`ParticipantProfileModal.tsx`).
+

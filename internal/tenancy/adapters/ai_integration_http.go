@@ -165,22 +165,26 @@ type aiState struct {
 	LastTestAt      *time.Time
 	LastTestOK      *bool
 	LastTestMessage string
+	// GroupMediaEnabled (ADR-0015 addendum 2): the SAME key/budget/consent above, but its OWN explicit
+	// decision to also read group images — never implied by Enabled alone.
+	GroupMediaEnabled bool
 }
 
 type aiResponse struct {
-	Provider       string        `json:"provider"`
-	Enabled        bool          `json:"enabled"`
-	Model          string        `json:"model"`
-	BudgetUSD      float64       `json:"monthly_budget_usd"`
-	KeyConfigured  bool          `json:"key_configured"`
-	KeySetAt       *string       `json:"key_set_at,omitempty"`
-	KeySetBy       *string       `json:"key_set_by,omitempty"`
-	ConsentText    string        `json:"consent_text"`
-	ConsentVersion string        `json:"consent_version"`
-	ConsentCurrent bool          `json:"consent_current"`
-	ConsentAt      *string       `json:"consent_at,omitempty"`
-	ConsentBy      *string       `json:"consent_by,omitempty"`
-	LastTest       *aiTestResult `json:"last_test,omitempty"`
+	Provider          string        `json:"provider"`
+	Enabled           bool          `json:"enabled"`
+	Model             string        `json:"model"`
+	BudgetUSD         float64       `json:"monthly_budget_usd"`
+	KeyConfigured     bool          `json:"key_configured"`
+	KeySetAt          *string       `json:"key_set_at,omitempty"`
+	KeySetBy          *string       `json:"key_set_by,omitempty"`
+	ConsentText       string        `json:"consent_text"`
+	ConsentVersion    string        `json:"consent_version"`
+	ConsentCurrent    bool          `json:"consent_current"`
+	ConsentAt         *string       `json:"consent_at,omitempty"`
+	ConsentBy         *string       `json:"consent_by,omitempty"`
+	LastTest          *aiTestResult `json:"last_test,omitempty"`
+	GroupMediaEnabled bool          `json:"group_media_enabled"`
 }
 
 type aiTestResult struct {
@@ -214,6 +218,7 @@ func (h *AIIntegrationHandler) toResponse(s aiState) aiResponse {
 		ConsentText: AIConsentText, ConsentVersion: AIConsentVersion,
 		ConsentCurrent: s.ConsentVersion != nil && *s.ConsentVersion == AIConsentVersion && s.ConsentAt != nil,
 		ConsentAt:      rfc(s.ConsentAt), ConsentBy: s.ConsentByEmail,
+		GroupMediaEnabled: s.GroupMediaEnabled,
 	}
 	if s.LastTestAt != nil {
 		out.LastTest = &aiTestResult{At: *rfc(s.LastTestAt), OK: s.LastTestOK != nil && *s.LastTestOK, Message: s.LastTestMessage}
@@ -232,13 +237,13 @@ func (h *AIIntegrationHandler) load(ctx context.Context, q platformdb.Querier, t
 	var s aiState
 	err := q.QueryRow(ctx, `
 		SELECT t.enabled, t.model, t.monthly_budget_usd::float8, t.secret_ciphertext IS NOT NULL, t.secret_set_at, ku.email,
-		       t.consent_version, t.consent_at, cu.email, t.last_test_at, t.last_test_ok, t.last_test_message
+		       t.consent_version, t.consent_at, cu.email, t.last_test_at, t.last_test_ok, t.last_test_message, t.group_media_enabled
 		FROM tenant_ai_integrations t
 		LEFT JOIN users ku ON ku.id = t.secret_set_by
 		LEFT JOIN users cu ON cu.id = t.consent_by
 		WHERE t.tenant_id = $1 AND t.provider = $2`+suffix, tenant, aiProvider).
 		Scan(&s.Enabled, &s.Model, &s.BudgetUSD, &s.KeySet, &s.KeySetAt, &s.KeySetByEmail,
-			&s.ConsentVersion, &s.ConsentAt, &s.ConsentByEmail, &s.LastTestAt, &s.LastTestOK, &s.LastTestMessage)
+			&s.ConsentVersion, &s.ConsentAt, &s.ConsentByEmail, &s.LastTestAt, &s.LastTestOK, &s.LastTestMessage, &s.GroupMediaEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return defaultAIState(), false, nil
 	}
@@ -266,11 +271,12 @@ func writeAIJSON(w http.ResponseWriter, status int, v any) {
 }
 
 type aiPutRequest struct {
-	Enabled          *bool    `json:"enabled"`
-	Model            *string  `json:"model"`
-	BudgetUSD        *float64 `json:"monthly_budget_usd"`
-	APIKey           *string  `json:"api_key"`
-	AcceptExternalAI *bool    `json:"accept_external_ai"`
+	Enabled           *bool    `json:"enabled"`
+	Model             *string  `json:"model"`
+	BudgetUSD         *float64 `json:"monthly_budget_usd"`
+	APIKey            *string  `json:"api_key"`
+	AcceptExternalAI  *bool    `json:"accept_external_ai"`
+	GroupMediaEnabled *bool    `json:"group_media_enabled"`
 }
 
 // Put applies a partial update. Every invariant is checked before anything is written, in one transaction.
@@ -334,6 +340,19 @@ func (h *AIIntegrationHandler) Put(w http.ResponseWriter, r *http.Request) {
 			consentRecorded = true
 		}
 	}
+	if req.GroupMediaEnabled != nil {
+		if *req.GroupMediaEnabled && !next.Enabled {
+			http.Error(w, "ative a integração de IA antes de ligar a interpretação de imagens de grupo", http.StatusUnprocessableEntity)
+			return
+		}
+		next.GroupMediaEnabled = *req.GroupMediaEnabled
+	}
+	// ADR-0015 addendum 2: the group toggle rides on the SAME key/budget/consent above — turning the base
+	// integration off always turns it off too (never left stranded true with nothing underneath it), even
+	// when this request did not mention it at all.
+	if !next.Enabled {
+		next.GroupMediaEnabled = false
+	}
 
 	now := h.now().UTC()
 	uid := tc.ActorID
@@ -347,10 +366,11 @@ func (h *AIIntegrationHandler) Put(w http.ResponseWriter, r *http.Request) {
 			  consent_version   = CASE WHEN $10 THEN $11::text ELSE consent_version END,
 			  consent_at        = CASE WHEN $10 THEN $8::timestamptz ELSE consent_at END,
 			  consent_by        = CASE WHEN $10 THEN $9::uuid ELSE consent_by END,
+			  group_media_enabled = $12,
 			  updated_at = $8::timestamptz
 			WHERE tenant_id = $1 AND provider = $2`,
 			tc.TenantID, aiProvider, next.Enabled, next.Model, next.BudgetUSD,
-			keyChanged, newCipher, now, uid, consentRecorded, AIConsentVersion)
+			keyChanged, newCipher, now, uid, consentRecorded, AIConsentVersion, next.GroupMediaEnabled)
 	} else {
 		// A brand-new row: values are written as they are (the CHECK sees the final row).
 		var secretAt *time.Time
@@ -366,10 +386,10 @@ func (h *AIIntegrationHandler) Put(w http.ResponseWriter, r *http.Request) {
 		}
 		_, err = q.Exec(ctx, `
 			INSERT INTO tenant_ai_integrations (tenant_id, provider, enabled, model, monthly_budget_usd,
-			       secret_ciphertext, secret_set_at, secret_set_by, consent_version, consent_at, consent_by, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+			       secret_ciphertext, secret_set_at, secret_set_by, consent_version, consent_at, consent_by, updated_at, group_media_enabled)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 			tc.TenantID, aiProvider, next.Enabled, next.Model, next.BudgetUSD,
-			newCipher, secretAt, secretBy, consentVersion, consentAt, consentBy, now)
+			newCipher, secretAt, secretBy, consentVersion, consentAt, consentBy, now, next.GroupMediaEnabled)
 	}
 	if err != nil {
 		http.Error(w, "failed to save the integration", http.StatusInternalServerError)
@@ -524,6 +544,8 @@ func (h *AIIntegrationHandler) record(r *http.Request, tc *tenancydomain.TenantC
 	ev.SetMetadata("key_changed", keyChanged)
 	ev.SetMetadata("key_configured", next.KeySet)
 	ev.SetMetadata("consent_recorded", consent)
+	ev.SetMetadata("group_media_enabled_from", prev.GroupMediaEnabled)
+	ev.SetMetadata("group_media_enabled_to", next.GroupMediaEnabled)
 	if consent {
 		ev.SetMetadata("consent_version", AIConsentVersion)
 	}

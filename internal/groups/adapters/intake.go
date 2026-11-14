@@ -132,18 +132,24 @@ func (i *Intake) ProcessGroupMessage(ctx context.Context, conn channeldomain.Cha
 			}
 			senderID = &id
 		}
+		// Media (ADR-0015 addendum 2): only the opaque reference, never bytes here. Setting it on INSERT is
+		// what the wa_group_messages_media_enqueue trigger (migration 000198) watches for.
+		var mediaRef, mimeType string
+		if msg.Media != nil {
+			mediaRef, mimeType = msg.Media.MediaRef, msg.Media.MimeType
+		}
 		tag, err := q.Exec(scoped, `
 			INSERT INTO wa_group_messages
 			  (tenant_id, group_id, provider_message_id, author_jid, author_name, from_me, message_type, body, sent_at,
-			   sender_channel_participant_id, reply_to_external_message_id, reply_to_group_message_id)
+			   sender_channel_participant_id, reply_to_external_message_id, reply_to_group_message_id, media_ref, mime_type)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
 			  CASE WHEN $11 = '' THEN NULL ELSE (
 			    SELECT g.id FROM wa_group_messages g
 			    WHERE g.tenant_id = $1 AND g.group_id = $2 AND (g.provider_message_id = $11 OR split_part(g.provider_message_id, '_', 3) = $11)
-			    ORDER BY g.sent_at DESC LIMIT 1) END)
+			    ORDER BY g.sent_at DESC LIMIT 1) END, $12, $13)
 			ON CONFLICT (tenant_id, group_id, provider_message_id) DO NOTHING`,
 			conn.TenantID, groupID, msg.ProviderMessageID, msg.AuthorJID, msg.AuthorName, msg.FromMe, msg.Type, msg.Text, msg.SentAt,
-			senderID, msg.ReplyToExternalID)
+			senderID, msg.ReplyToExternalID, mediaRef, mimeType)
 		if err != nil {
 			return err
 		}

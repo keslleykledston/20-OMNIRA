@@ -650,6 +650,9 @@ func TestGroupAlertChannelIsValidatedAuditedAndTenantScoped(t *testing.T) {
 	account := e.account(tenantA, "Cliente A")
 	gid := e.group(tenantA, connA, jid1, "Canal interno", true)
 	gid2 := e.group(tenantA, connA, jid2, "Outro grupo", true)
+	// Both start classified as internal so this test's assertions stay about the "only one" and
+	// "never client-linked" rules — the purpose restriction itself (ADR-0058 addendum) gets its own test.
+	e.exec(`UPDATE wa_groups SET purpose='internal_management' WHERE id IN ($1,$2)`, gid, gid2)
 
 	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
 	setEnabled := func(tenant, user, gid uuid.UUID, body string) *httptest.ResponseRecorder {
@@ -723,6 +726,49 @@ func TestGroupAlertChannelIsValidatedAuditedAndTenantScoped(t *testing.T) {
 	// Tenant B: A's group id behaves exactly like an unknown one.
 	if rec := setEnabled(tenantB, adminB, gid, `{"is_alert_channel":true}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("B toggling A's group alert channel: %d, want 404", rec.Code)
+	}
+}
+
+// ADR-0058 addendum: the alert channel must be an internal group (Interno · Gestão or Interno · Equipe) —
+// never client/partner/supplier, even when unlinked to any customer account. Checked against the purpose
+// the request ends up with, so classifying and enabling the alert channel in the very same call works.
+func TestGroupAlertChannelRequiresInternalPurpose(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	gid := e.group(tenantA, connA, jid1, "Grupo de cliente", true) // purpose default 'other'
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	setEnabled := func(body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenantA, admin, http.MethodPatch, "/", body, map[string]string{"group_id": gid.String()}, h.SetEnabled)
+	}
+
+	// Default purpose ('other'): refused.
+	if rec := setEnabled(`{"is_alert_channel":true}`); rec.Code != http.StatusConflict {
+		t.Fatalf("alert channel on purpose=other: %d %s, want 409", rec.Code, rec.Body.String())
+	}
+
+	// A client/partner/supplier purpose: also refused.
+	for _, p := range []string{"client_management", "client_support", "partner", "supplier"} {
+		e.exec(`UPDATE wa_groups SET purpose=$2 WHERE id=$1`, gid, p)
+		if rec := setEnabled(`{"is_alert_channel":true}`); rec.Code != http.StatusConflict {
+			t.Fatalf("alert channel on purpose=%s: %d, want 409", p, rec.Code)
+		}
+	}
+
+	// internal_team/internal_management: allowed. Classifying AND enabling in the same request also works
+	// (checked against the request's resulting purpose, not the one already stored).
+	e.exec(`UPDATE wa_groups SET purpose='other', is_alert_channel=false WHERE id=$1`, gid)
+	var it groupItem
+	rec := setEnabled(`{"purpose":"internal_team","is_alert_channel":true}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &it) != nil || !it.IsAlertChannel || it.Purpose != "internal_team" {
+		t.Fatalf("classify+enable in one request: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Already the alert channel: reclassifying away from internal while keeping it true is refused too
+	// (the request would end with is_alert_channel=true and a non-internal purpose).
+	if rec := setEnabled(`{"purpose":"other"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("reclassify away from internal while still the alert channel: %d, want 409", rec.Code)
 	}
 }
 
@@ -871,6 +917,66 @@ func TestGroupAccountLinkIsValidatedAuditedAndTenantScoped(t *testing.T) {
 	}
 }
 
+// TestGroupClassifyingOrLinkingAutoEnablesAGroupAutodiscoveryLeftDisabled proves a gap found live in
+// production: autodiscovery (migration 000187) can catalog a group and leave it fully addressable
+// (wa_group_id known) while enabled stays false (ADR-0015's own "nobody decided anything yet" default) —
+// and the Hub Organizer's "Vincular cliente"/Kanban drag act on a group directly by id, bypassing List's
+// own "g.enabled" filter entirely. The result, found live: a group fully classified AND linked to a client
+// that was still never actually being read. Classifying (purpose) or linking a client (primary or
+// additional) on a disabled group IS itself the administrator's explicit choice ADR-0015 asks for, so it
+// now also flips enabled — audited as group.enabled same as the dedicated endpoint — UNLESS the very same
+// request also sets enabled explicitly (a deliberate "classify but keep off" is never overridden).
+func TestGroupClassifyingOrLinkingAutoEnablesAGroupAutodiscoveryLeftDisabled(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	account := e.account(tenantA, "InfoRR Consultoria")
+	other := e.account(tenantA, "IP Fibra")
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	enabledAudits := func(gid uuid.UUID) int {
+		return e.count(`SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND resource_id=$2 AND action='group.enabled'`, tenantA, gid.String())
+	}
+
+	// Setting purpose on a disabled group enables it too.
+	g1 := e.group(tenantA, connA, jid1, "Grupo autodescoberto 1", false)
+	var it groupItem
+	rec := call(t, e.app, tenantA, admin, http.MethodPatch, "/", `{"purpose":"client_support"}`, map[string]string{"group_id": g1.String()}, h.SetEnabled)
+	if json.Unmarshal(rec.Body.Bytes(), &it); rec.Code != http.StatusOK || !it.Enabled || it.Purpose != "client_support" {
+		t.Fatalf("set purpose on disabled group: %d %s", rec.Code, rec.Body.String())
+	}
+	if enabledAudits(g1) != 1 {
+		t.Fatalf("auto-enable via purpose must be audited as group.enabled: got %d", enabledAudits(g1))
+	}
+
+	// Explicit enabled:false in the SAME request is never overridden.
+	g1b := e.group(tenantA, connA, "120363000000000011@g.us", "Grupo autodescoberto 1b", false)
+	rec = call(t, e.app, tenantA, admin, http.MethodPatch, "/", `{"purpose":"client_support","enabled":false}`, map[string]string{"group_id": g1b.String()}, h.SetEnabled)
+	if json.Unmarshal(rec.Body.Bytes(), &it); rec.Code != http.StatusOK || it.Enabled {
+		t.Fatalf("explicit enabled:false must never be overridden: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Linking the primary client on a disabled group enables it too.
+	g2 := e.group(tenantA, connA, jid2, "Grupo autodescoberto 2", false)
+	rec = call(t, e.app, tenantA, admin, http.MethodPut, "/", `{"account_id":"`+account.String()+`"}`, map[string]string{"group_id": g2.String()}, h.LinkAccount)
+	if json.Unmarshal(rec.Body.Bytes(), &it); rec.Code != http.StatusOK || !it.Enabled {
+		t.Fatalf("link account on disabled group: %d %s", rec.Code, rec.Body.String())
+	}
+	if enabledAudits(g2) != 1 {
+		t.Fatalf("auto-enable via account link must be audited as group.enabled: got %d", enabledAudits(g2))
+	}
+
+	// Adding an ADDITIONAL client on a disabled group enables it too (same reasoning, same gap).
+	g3 := e.group(tenantA, connA, jid3, "Grupo autodescoberto 3", false)
+	rec = call(t, e.app, tenantA, admin, http.MethodPost, "/", `{"account_id":"`+other.String()+`"}`, map[string]string{"group_id": g3.String()}, h.AddAdditionalAccount)
+	if json.Unmarshal(rec.Body.Bytes(), &it); rec.Code != http.StatusOK || !it.Enabled {
+		t.Fatalf("add additional account on disabled group: %d %s", rec.Code, rec.Body.String())
+	}
+	if enabledAudits(g3) != 1 {
+		t.Fatalf("auto-enable via additional account must be audited as group.enabled: got %d", enabledAudits(g3))
+	}
+}
+
 // TestGroupAdditionalAccountsAllowMoreThanOneClientPerGroup proves ADR-0059 addendum 8: some groups (a
 // "swap"/peering group between two of the tenant's own clients, where the tenant operates on behalf of
 // both) genuinely concern more than one CRM client at once. The additional-accounts table is a pure N:N
@@ -974,6 +1080,63 @@ func TestGroupAdditionalAccountsAllowMoreThanOneClientPerGroup(t *testing.T) {
 	}
 	if rec := remove(tenantA, admin, g, other); rec.Code != http.StatusOK || audits("group.additional_account_unlinked") != 1 {
 		t.Fatalf("repeat remove: %d, audits=%d, want no new audit", rec.Code, audits("group.additional_account_unlinked"))
+	}
+}
+
+// AccountsSummary powers the tenant's "Organização" browser (Grupos > Organização): one row per active CRM
+// client with how many groups concern it, counting BOTH the primary link (account_id) and additional links
+// (wa_group_additional_accounts) — same two places List/scanGroup already look, just aggregated. Adversarial
+// Tenant A/B proof: tenant B's client and groups must never leak into A's counts, a disabled group must not
+// count (mirrors List's own "g.enabled" filter — the Organização browser would otherwise show a group the
+// Mensagens view can never actually open), and a client with no group yet still appears, at zero.
+func TestGroupsAccountsSummaryCountsPrimaryAndAdditionalEnabledGroupsTenantScoped(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, connB := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+
+	accInfoRR := e.account(tenantA, "InfoRR Consultoria")
+	accIPFibra := e.account(tenantA, "IP Fibra")
+	accIdle := e.account(tenantA, "Cliente Sem Grupo")
+	accB := e.account(tenantB, "Cliente B")
+
+	gPrimary := e.group(tenantA, connA, "120363000000000101@g.us", "Clientes InfoRR", true)
+	gSwap := e.group(tenantA, connA, "120363000000000102@g.us", "Swap - InfoRR x IP Fibra", true)
+	gDisabled := e.group(tenantA, connA, "120363000000000103@g.us", "Desativado", false)
+	gB := e.group(tenantB, connB, "120363000000000104@g.us", "Grupo B", true)
+
+	e.exec(`UPDATE wa_groups SET account_id=$1 WHERE id=$2`, accInfoRR, gPrimary)
+	e.exec(`UPDATE wa_groups SET account_id=$1 WHERE id=$2`, accInfoRR, gSwap)
+	e.exec(`INSERT INTO wa_group_additional_accounts(tenant_id,group_id,account_id) VALUES($1,$2,$3)`, tenantA, gSwap, accIPFibra)
+	e.exec(`UPDATE wa_groups SET account_id=$1 WHERE id=$2`, accInfoRR, gDisabled)
+	e.exec(`UPDATE wa_groups SET account_id=$1 WHERE id=$2`, accB, gB)
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	rec := call(t, e.app, tenantA, admin, http.MethodGet, "/", "", nil, h.AccountsSummary)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Items []accountSummaryItem `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[uuid.UUID]int{}
+	for _, it := range resp.Items {
+		byID[it.AccountID] = it.GroupCount
+	}
+	if _, present := byID[accB]; present {
+		t.Fatalf("tenant A's summary must never include tenant B's account: %v", resp.Items)
+	}
+	if got := byID[accInfoRR]; got != 2 {
+		t.Fatalf("InfoRR (primary on 2 ENABLED groups; the disabled one must not count): got %d, want 2", got)
+	}
+	if got := byID[accIPFibra]; got != 1 {
+		t.Fatalf("IP Fibra (additional on the swap group only): got %d, want 1", got)
+	}
+	if got, ok := byID[accIdle]; !ok || got != 0 {
+		t.Fatalf("Cliente Sem Grupo must still appear, with 0: got %d, present=%v", got, ok)
 	}
 }
 
@@ -1205,5 +1368,267 @@ func TestGroupAuthorsShowTheTeamsAliasWhenTheParticipantIsAKnownContact(t *testi
 	}
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &gl) != nil || len(gl.Items) == 0 || gl.Items[0].LastMessage == nil || gl.Items[0].LastMessage.AuthorName != "João Silva (ACME)" {
 		t.Fatalf("group list = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ADR-0015 addendum: who writes in a group is identified on channel_participants (alias/company/role),
+// never contacts — author_jid is often an opaque @lid, not a real phone.
+func TestGroupParticipantsListsWhoWroteAndIsTenantScoped(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, _ := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	gid := e.group(tenantA, connA, jid1, "Oficial", true)
+	intake := NewIntake(e.app, channeladapters.NewPostgresWebhookEventStore(e.app))
+	now := time.Now().UTC().Truncate(time.Second)
+	for i, a := range []struct{ jid, name string }{{"111@lid", "Felipe"}, {"222@lid", "Maria"}} {
+		m := groupMsg(connA, jid1, "gp-"+a.jid, "oi", now.Add(time.Duration(i)*time.Minute))
+		m.AuthorJID, m.AuthorName = a.jid, a.name
+		if _, _, err := intake.ProcessGroupMessage(e.ctx, connA, "k"+a.jid, "message.any", "d"+a.jid, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	rec := call(t, e.app, tenantA, admin, http.MethodGet, "/", "", map[string]string{"group_id": gid.String()}, h.Participants)
+	var page struct {
+		Items []groupParticipantItem `json:"items"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+		t.Fatalf("participants = %d %s", rec.Code, rec.Body.String())
+	}
+	names := map[string]bool{}
+	for _, it := range page.Items {
+		names[it.DisplayName] = true
+		if it.Alias != nil || it.CompanyAccountID != nil {
+			t.Fatalf("fresh participant already has a profile: %+v", it)
+		}
+	}
+	if !names["Felipe"] || !names["Maria"] {
+		t.Fatalf("participants = %v", names)
+	}
+
+	// Tenant B: an unknown group id behaves exactly like one that doesn't exist.
+	if rec := call(t, e.app, tenantB, e.member(tenantB, "tenant_admin", "active"), http.MethodGet, "/", "", map[string]string{"group_id": gid.String()}, h.Participants); rec.Code != http.StatusNotFound {
+		t.Fatalf("B listing A's group participants: %d, want 404", rec.Code)
+	}
+}
+
+// Alias: nome aparente override, same convention as contacts.alias (empty clears it back to the WhatsApp
+// name). Company: links to a customer_accounts row with a closed-vocabulary role, same shape as the group's
+// own LinkAccount (account_id XOR directory_company_id) and contact_account_links.relationship_type.
+func TestGroupParticipantAliasAndCompanyEditingIsValidatedAuditedAndTenantScoped(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, _ := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	agent := e.member(tenantA, "tenant_agent", "active")
+	adminB := e.member(tenantB, "tenant_admin", "active")
+	account := e.account(tenantA, "K3G Solutions")
+	gid := e.group(tenantA, connA, jid1, "Oficial", true)
+	intake := NewIntake(e.app, channeladapters.NewPostgresWebhookEventStore(e.app))
+	m := groupMsg(connA, jid1, "gpc-1", "oi", time.Now().UTC())
+	m.AuthorJID, m.AuthorName = "111@lid", "Felipe"
+	if _, _, err := intake.ProcessGroupMessage(e.ctx, connA, "kgpc1", "message.any", "dgpc1", m); err != nil {
+		t.Fatal(err)
+	}
+	var pid uuid.UUID
+	if err := e.seed.QueryRow(e.ctx, `SELECT id FROM channel_participants WHERE tenant_id=$1 AND external_participant_id='111@lid'`, tenantA).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	setAlias := func(tenant, user uuid.UUID, body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodPut, "/", body, map[string]string{"participant_id": pid.String()}, h.SetParticipantAlias)
+	}
+	setCompany := func(tenant, user uuid.UUID, body string) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodPut, "/", body, map[string]string{"participant_id": pid.String()}, h.SetParticipantCompany)
+	}
+	unlinkCompany := func(tenant, user uuid.UUID) *httptest.ResponseRecorder {
+		return call(t, e.app, tenant, user, http.MethodDelete, "/", "", map[string]string{"participant_id": pid.String()}, h.UnlinkParticipantCompany)
+	}
+	audits := func(action string) int {
+		return e.count(`SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND action=$2`, tenantA, action)
+	}
+
+	// Permission: group.manage only, for both alias and company.
+	if rec := setAlias(tenantA, agent, `{"alias":"Felipe (Suporte K3G)"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("agent setting alias: %d, want 403", rec.Code)
+	}
+	if rec := setCompany(tenantA, agent, `{"account_id":"`+account.String()+`"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("agent setting company: %d, want 403", rec.Code)
+	}
+
+	// Alias set, reflected, audited.
+	var it groupParticipantItem
+	rec := setAlias(tenantA, admin, `{"alias":"Felipe (Suporte K3G)"}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &it) != nil || it.Alias == nil || *it.Alias != "Felipe (Suporte K3G)" {
+		t.Fatalf("set alias: %d %s", rec.Code, rec.Body.String())
+	}
+	if audits("group.participant_alias_set") != 1 {
+		t.Fatalf("group.participant_alias_set audits = %d", audits("group.participant_alias_set"))
+	}
+	// Reflected on the message thread too.
+	rec = call(t, e.app, tenantA, admin, http.MethodGet, "/", "", map[string]string{"group_id": gid.String()}, h.ListMessages)
+	var msgs struct {
+		Items []struct {
+			AuthorName string `json:"author_name"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(rec.Body.Bytes(), &msgs) != nil || len(msgs.Items) != 1 || msgs.Items[0].AuthorName != "Felipe (Suporte K3G)" {
+		t.Fatalf("message author after alias = %+v", msgs)
+	}
+	// Empty alias clears it back to the WhatsApp name.
+	if rec := setAlias(tenantA, admin, `{"alias":""}`); rec.Code != http.StatusOK {
+		t.Fatalf("clear alias: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := e.count(`SELECT count(*) FROM channel_participants WHERE id=$1 AND alias IS NULL`, pid); got != 1 {
+		t.Fatal("empty alias must clear it")
+	}
+
+	// Invalid role: refused.
+	if rec := setCompany(tenantA, admin, `{"account_id":"`+account.String()+`","role":"ceo"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid role: %d, want 400", rec.Code)
+	}
+	// Neither/both account_id and directory_company_id: refused.
+	if rec := setCompany(tenantA, admin, `{}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("neither account ref: %d, want 400", rec.Code)
+	}
+
+	// Company set, reflected, audited.
+	rec = setCompany(tenantA, admin, `{"account_id":"`+account.String()+`","role":"technical_contact"}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &it) != nil || it.CompanyAccountID == nil || *it.CompanyAccountID != account ||
+		it.CompanyName == nil || *it.CompanyName != "K3G Solutions" || it.CompanyRole == nil || *it.CompanyRole != "technical_contact" || it.IsDownstreamClient {
+		t.Fatalf("set company: %d %s", rec.Code, rec.Body.String())
+	}
+	if audits("group.participant_company_linked") != 1 {
+		t.Fatalf("group.participant_company_linked audits = %d", audits("group.participant_company_linked"))
+	}
+
+	// ADR-0015 addendum 3: the linked company can itself be a client of the Client (ex.: Uplink, cliente da
+	// 4WNET) — a second call with the checkbox checked.
+	rec = setCompany(tenantA, admin, `{"account_id":"`+account.String()+`","role":"technical_contact","is_downstream_client":true}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &it) != nil || !it.IsDownstreamClient {
+		t.Fatalf("set company as downstream client: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Unlink clears account, role AND the downstream-client flag, audited.
+	rec = unlinkCompany(tenantA, admin)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &it) != nil || it.CompanyAccountID != nil || it.CompanyRole != nil || it.IsDownstreamClient {
+		t.Fatalf("unlink company: %d %s", rec.Code, rec.Body.String())
+	}
+	if audits("group.participant_company_unlinked") != 1 {
+		t.Fatalf("group.participant_company_unlinked audits = %d", audits("group.participant_company_unlinked"))
+	}
+
+	// Tenant B: A's participant id behaves exactly like an unknown one.
+	if rec := setAlias(tenantB, adminB, `{"alias":"x"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("B setting A's participant alias: %d, want 404", rec.Code)
+	}
+	if rec := setCompany(tenantB, adminB, `{"account_id":"`+account.String()+`"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("B setting A's participant company: %d, want 404", rec.Code)
+	}
+}
+
+// Resolve @mentions in a group message's own body (a phone/lid number the sender typed) to the known
+// participant's name — the UUID of the contact behind the registered number, never the number itself.
+func TestListMessagesResolvesAtMentionsToKnownParticipantsOfTheSameConnectionOnly(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, connB := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	gidA := e.group(tenantA, connA, jid1, "Oficial", true)
+	gidB := e.group(tenantB, connB, jid1, "Oficial B", true)
+
+	mentioned := uuid.New()
+	e.exec(`INSERT INTO channel_participants(id,tenant_id,channel_connection_id,provider,external_participant_id,display_name,alias) VALUES($1,$2,$3,'waha','5511999990000@s.whatsapp.net','Diego','Diego Santana')`,
+		mentioned, tenantA, connA.ID)
+	// Same digits registered on tenant B's OWN connection — must never leak into A's resolution or vice versa.
+	e.exec(`INSERT INTO channel_participants(id,tenant_id,channel_connection_id,provider,external_participant_id,display_name) VALUES($1,$2,$3,'waha','5511999990000@s.whatsapp.net','Outro')`,
+		uuid.New(), tenantB, connB.ID)
+
+	e.exec(`INSERT INTO wa_group_messages(id,tenant_id,group_id,provider_message_id,author_name,message_type,body,sent_at) VALUES($1,$2,$3,'m1','Felipe','text','@5511999990000 bom dia, tudo certo?',now())`,
+		uuid.New(), tenantA, gidA)
+	e.exec(`INSERT INTO wa_group_messages(id,tenant_id,group_id,provider_message_id,author_name,message_type,body,sent_at) VALUES($1,$2,$3,'m1','Felipe','text','@5511999990000 bom dia',now())`,
+		uuid.New(), tenantB, gidB)
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	rec := call(t, e.app, tenantA, admin, http.MethodGet, "/", "", map[string]string{"group_id": gidA.String()}, h.ListMessages)
+	var page struct {
+		Items []struct {
+			Body string `json:"body"`
+		} `json:"items"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
+		t.Fatalf("messages = %d %s", rec.Code, rec.Body.String())
+	}
+	if page.Items[0].Body != "@Diego Santana bom dia, tudo certo?" {
+		t.Fatalf("mention not resolved: %q", page.Items[0].Body)
+	}
+
+	// Tenant B: the SAME digits resolve against B's OWN connection, never A's name.
+	adminB := e.member(tenantB, "tenant_admin", "active")
+	rec = call(t, e.app, tenantB, adminB, http.MethodGet, "/", "", map[string]string{"group_id": gidB.String()}, h.ListMessages)
+	page.Items = nil
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
+		t.Fatalf("B messages = %d %s", rec.Code, rec.Body.String())
+	}
+	if page.Items[0].Body != "@Outro bom dia" {
+		t.Fatalf("B's mention must resolve against B's OWN connection: %q", page.Items[0].Body)
+	}
+
+	// An unknown number is left exactly as written.
+	e.exec(`INSERT INTO wa_group_messages(id,tenant_id,group_id,provider_message_id,author_name,message_type,body,sent_at) VALUES($1,$2,$3,'m2','Felipe','text','@0000000000000 quem é?',now())`,
+		uuid.New(), tenantA, gidA)
+	rec = call(t, e.app, tenantA, admin, http.MethodGet, "/", "", map[string]string{"group_id": gidA.String()}, h.ListMessages)
+	page.Items = nil
+	if json.Unmarshal(rec.Body.Bytes(), &page) != nil {
+		t.Fatal("decode")
+	}
+	found := false
+	for _, it := range page.Items {
+		if it.Body == "@0000000000000 quem é?" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("an unknown mentioned id must be left as written: %+v", page.Items)
+	}
+}
+
+// ListMessages surfaces the vision step's already-done caption for an image message (ADR-0015 addendum 2) —
+// nil while there is nothing done yet, never guessed.
+func TestListMessagesSurfacesTheDoneImageCaption(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	admin := e.member(tenantA, "tenant_admin", "active")
+	gid := e.group(tenantA, connA, jid1, "Oficial", true)
+	withCaption := uuid.New()
+	e.exec(`INSERT INTO wa_group_messages(id,tenant_id,group_id,provider_message_id,author_name,message_type,body,sent_at) VALUES($1,$2,$3,'m1','Rafael','image','',now())`, withCaption, tenantA, gid)
+	e.exec(`INSERT INTO wa_group_message_analysis(tenant_id,group_message_id,kind,status,body) VALUES($1,$2,'description','done','um roteador com a luz vermelha piscando')`, tenantA, withCaption)
+	pending := uuid.New()
+	e.exec(`INSERT INTO wa_group_messages(id,tenant_id,group_id,provider_message_id,author_name,message_type,body,sent_at) VALUES($1,$2,$3,'m2','Rafael','image','',now()+interval '1 minute')`, pending, tenantA, gid)
+	e.exec(`INSERT INTO wa_group_message_analysis(tenant_id,group_message_id,kind,status) VALUES($1,$2,'description','pending')`, tenantA, pending)
+
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{})
+	rec := call(t, e.app, tenantA, admin, http.MethodGet, "/", "", map[string]string{"group_id": gid.String()}, h.ListMessages)
+	var page struct {
+		Items []struct {
+			ID           string  `json:"id"`
+			ImageCaption *string `json:"image_caption"`
+		} `json:"items"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+		t.Fatalf("messages = %d %s", rec.Code, rec.Body.String())
+	}
+	byID := map[string]*string{}
+	for _, it := range page.Items {
+		byID[it.ID] = it.ImageCaption
+	}
+	if c := byID[withCaption.String()]; c == nil || *c != "um roteador com a luz vermelha piscando" {
+		t.Fatalf("done caption = %v", c)
+	}
+	if c := byID[pending.String()]; c != nil {
+		t.Fatalf("pending analysis must not surface a caption, got %v", *c)
 	}
 }

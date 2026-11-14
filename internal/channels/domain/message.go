@@ -69,6 +69,9 @@ type InboundGroupMessage struct {
 	SentAt            time.Time
 	// ReplyToExternalID: id (no provedor) da mensagem do grupo que esta respondeu/citou, se houver.
 	ReplyToExternalID string
+	// Media (ADR-0015 addendum 2): o MESMO shape de InboundMessage.Media, nunca os bytes aqui — só a
+	// referência opaca do provider. Nil quando a mensagem não tem anexo.
+	Media *InboundMedia
 }
 
 // ProviderGroup é um grupo como o provedor o lista (usado só para o administrador escolher).

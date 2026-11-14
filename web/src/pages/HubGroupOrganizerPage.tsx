@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import clsx from 'clsx';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   GROUP_LINK_ROLE_LABEL,
@@ -13,9 +14,9 @@ import {
   type HubSummary,
 } from '../lib/hub';
 import { GROUP_PURPOSE_BADGE_VARIANT, GROUP_PURPOSE_LABEL, GROUP_PURPOSE_OPTIONS } from '../lib/groupModel';
-import { groupErrorMessage, groupsAPI, type GroupAccountRef, type GroupPurpose } from '../lib/groups';
+import { groupErrorMessage, groupsAPI, type AccountRef, type GroupAccountRef, type GroupPurpose } from '../lib/groups';
 import { handleUnauthorized, isUnauthorized } from '../lib/session';
-import { Badge, Button, ConfirmDialog, DropdownMenu, EmptyState, ErrorState, LoadingState, Modal, PageHeader, StatusBadge, Tabs, TenantBadge, type MenuAction } from '../components/primitives';
+import { Badge, Button, ConfirmDialog, DropdownMenu, EmptyState, ErrorState, Icon, IconButton, LoadingState, Modal, PageHeader, StatusBadge, Tabs, TenantBadge, type MenuAction } from '../components/primitives';
 import { useMyHubs } from '../hooks/useMyHubs';
 import { useDebounced } from '../hooks/useDebounced';
 
@@ -24,8 +25,13 @@ import { useDebounced } from '../hooks/useDebounced';
 // é organização de METADADOS. Vincular/transferir/revogar e a pasta compartilhada Alpha↔Beta são sempre o que o
 // servidor devolve (RLS por linha); esta tela não decide isso, só reflete.
 //
-// Decisão D-12 (aprovada): sem arrastar-e-soltar nesta fatia. Mover um grupo entre pastas é uma ação explícita de
-// menu/teclado, que chama a MESMA rota de vínculo/transferência do Gate 2 — nunca um efeito colateral de clique.
+// Decisão D-12 revista (owner, 2026-11-12): o Kanban (só o Kanban — Pastas continua só clique/menu) agora aceita
+// arrastar-e-soltar entre colunas de Classificação ou de Cliente do CRM, chamando a MESMA rota direta que o botão
+// "Vincular cliente"/"Alterar cliente" já usa (ADR-0059 addendum 7) — nenhum caminho novo, nenhuma ponte de
+// permissão nova. Colunas derivadas (a pasta compartilhada Alpha↔Beta, D-07) nunca são origem nem destino de um
+// drop: elas refletem uma relação comercial + vínculos de Tenant, não um cliente/classificação que se "solte" ali.
+// Um cartão só é arrastável quando wa_group_id é conhecido (mesma condição do botão "Vincular cliente") e soltar
+// na MESMA coluna em que o cartão já aparece é sempre um no-op silencioso (nunca uma chamada "idêntica" ao servidor).
 
 type View = 'list' | 'folders' | 'kanban';
 type Tenant = { id: string; name: string };
@@ -103,14 +109,28 @@ const UNLINKED_ACCOUNT_KEY = '__unlinked__';
 // poderiam coincidentemente ter uma conta com o mesmo nome, então a chave da pasta combina tenant +
 // account_id. Só leitura aqui — "colocar o grupo dentro" continua sendo vincular a conta na tela de
 // Grupos do próprio tenant (mesma decisão do Organizador não ganhar uma ponte de escrita nova).
+//
+// Um grupo "Swap" (ADR-0059 addendum 8) concerne MAIS DE UM cliente ao mesmo tempo (ex.: parceria entre
+// dois clientes do mesmo tenant) — ele aparece em CADA pasta de cliente (a do account_id primário e a de
+// cada additional_accounts), nunca só na primeira. Isso é o único caso em que o mesmo cartão de grupo
+// aparece em mais de uma pasta/coluna desta visão.
 function buildAccountFolders(data: OrganizerData): Folder[] {
   const byAccount = new Map<string, Folder>();
-  for (const entry of data.catalog) {
-    const c = data.classificationByGroup[entry.id];
-    const key = c?.account_id ? `${entry.source_tenant_id}::${c.account_id}` : UNLINKED_ACCOUNT_KEY;
-    const name = c?.account_id ? (c.account_display_name ?? '(conta sem nome)') : 'Sem conta vinculada no CRM';
+  const put = (key: string, name: string, entry: GroupCatalogEntry) => {
     if (!byAccount.has(key)) byAccount.set(key, { key, name, kind: 'account', entries: [] });
     byAccount.get(key)!.entries.push(entry);
+  };
+  for (const entry of data.catalog) {
+    const c = data.classificationByGroup[entry.id];
+    const accounts = [
+      ...(c?.account_id ? [{ id: c.account_id, name: c.account_display_name ?? '(conta sem nome)' }] : []),
+      ...(c?.additional_accounts ?? []),
+    ];
+    if (accounts.length === 0) {
+      put(UNLINKED_ACCOUNT_KEY, 'Sem conta vinculada no CRM', entry);
+      continue;
+    }
+    for (const acc of accounts) put(`${entry.source_tenant_id}::${acc.id}`, acc.name, entry);
   }
   // A pasta "sem conta" sempre por último; as demais em ordem alfabética do nome do cliente.
   return [...byAccount.values()].sort((a, b) =>
@@ -223,7 +243,17 @@ function HubGroupOrganizer({ hub, showHeading }: { hub: HubSummary; showHeading:
       ) : view === 'folders' ? (
         <FoldersView groupFolders={groupFolders} sharedFolders={sharedFolders} onLink={setLinkFor} onLinkAccount={setAccountFor} linkActions={linkActions} data={d} onRevokeRelationship={setRevokeRel} />
       ) : (
-        <KanbanView groupFolders={groupFolders} sharedFolders={sharedFolders} onLink={setLinkFor} onLinkAccount={setAccountFor} linkActions={linkActions} data={d} />
+        <KanbanView
+          groupFolders={groupFolders}
+          sharedFolders={sharedFolders}
+          onLink={setLinkFor}
+          onLinkAccount={setAccountFor}
+          linkActions={linkActions}
+          data={d}
+          groupBy={groupBy}
+          tenantId={(entry) => entry.source_tenant_id}
+          onMoved={invalidate}
+        />
       )}
 
       <AddCatalogEntryModal hubId={hub.id} tenants={d.tenants} open={addOpen} onClose={() => setAddOpen(false)} onDone={() => { setAddOpen(false); invalidate(); }} />
@@ -242,7 +272,9 @@ function HubGroupOrganizer({ hub, showHeading }: { hub: HubSummary; showHeading:
         <LinkCRMAccountModal
           entry={accountFor}
           waGroupId={d.classificationByGroup[accountFor.id]?.wa_group_id ?? null}
+          currentAccountId={d.classificationByGroup[accountFor.id]?.account_id}
           currentAccountName={d.classificationByGroup[accountFor.id]?.account_display_name}
+          additionalAccounts={d.classificationByGroup[accountFor.id]?.additional_accounts ?? []}
           open
           onClose={() => setAccountFor(null)}
           onDone={() => { setAccountFor(null); invalidate(); }}
@@ -296,24 +328,38 @@ function EntryClassificationBadge({ entry, data }: { entry: GroupCatalogEntry; d
     <span className="flex flex-wrap items-center gap-1.5">
       <Badge variant={GROUP_PURPOSE_BADGE_VARIANT[c.purpose]} size="sm">{GROUP_PURPOSE_LABEL[c.purpose]}</Badge>
       {c.account_display_name && <span className="truncate text-xs text-text-tertiary">{c.account_display_name}</span>}
+      {(c.additional_accounts ?? []).map((a) => (
+        <span key={a.id} className="truncate text-xs text-text-tertiary">+ {a.name}</span>
+      ))}
     </span>
   );
 }
 
-// Abre o LinkCRMAccountModal — a AÇÃO de verdade (chama o PUT .../groups/{id}/account já existente do
-// tenant, ver groups.ts's linkAccountFor). Só fica ativo quando wa_group_id está presente: o catálogo
-// autodescobre o grupo antes de ele ter sido aberto alguma vez na tela de Grupos do tenant, e sem isso não
-// há wa_groups.id para endereçar (ver EntryClassificationBadge, mesma condição).
+// Abre o LinkCRMAccountModal — a AÇÃO de verdade (chama o PUT/POST .../groups/{id}/account(s) já
+// existentes do tenant, ver groups.ts's linkAccountFor/addAdditionalAccountFor). Só fica ativo quando
+// wa_group_id está presente: o catálogo autodescobre o grupo antes de ele ter sido aberto alguma vez na
+// tela de Grupos do tenant, e sem isso não há wa_groups.id para endereçar (ver EntryClassificationBadge,
+// mesma condição).
 function LinkAccountButton({ entry, data, onLinkAccount, size = 'sm' }: {
   entry: GroupCatalogEntry; data: OrganizerData; onLinkAccount: (e: GroupCatalogEntry) => void; size?: 'sm';
 }) {
   const c = data.classificationByGroup[entry.id];
-  const label = c?.account_display_name ? 'Alterar cliente' : 'Vincular cliente';
+  const isChange = !!c?.account_display_name;
+  const label = isChange ? 'Alterar cliente' : 'Vincular cliente';
   if (!c) {
     return (
       <Button variant="tertiary" size={size} disabled title="Abra este grupo pelo menos uma vez na tela de Grupos do tenant antes de vincular um cliente aqui.">
         {label}
       </Button>
+    );
+  }
+  // Já vinculado: vira um ícone de edição só (reduz espaço do cartão); "Vincular cliente" (ainda sem
+  // cliente) continua em texto, já que é a própria chamada à ação.
+  if (isChange) {
+    return (
+      <IconButton variant="tertiary" size={size} title={label} aria-label={label} onClick={() => onLinkAccount(entry)}>
+        <Icon name="edit" size={14} />
+      </IconButton>
     );
   }
   return <Button variant="tertiary" size={size} onClick={() => onLinkAccount(entry)}>{label}</Button>;
@@ -358,17 +404,19 @@ function ListView({ data, tenantName, onLink, onLinkAccount, linkActions }: {
   );
 }
 
-function EntryCard({ entry, data, tenantName, linkActions, onLink, onLinkAccount }: {
+function EntryCard({ entry, data, tenantName, linkActions, onLink, onLinkAccount, draggable, onDragStart }: {
   entry: GroupCatalogEntry; data: OrganizerData; tenantName: (id: string) => string; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[]; onLink: (e: GroupCatalogEntry) => void; onLinkAccount: (e: GroupCatalogEntry) => void;
+  draggable?: boolean; onDragStart?: (e: React.DragEvent) => void;
 }) {
   return (
-    <div className="space-y-2 rounded-card border border-border-subtle bg-surface p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="font-medium text-text-primary">{entry.display_name || '(sem nome)'}</div>
-          <div className="text-xs text-text-tertiary">{entry.provider_group_id}</div>
-        </div>
-        <div className="flex flex-shrink-0 gap-1">
+    <div
+      draggable={draggable}
+      onDragStart={onDragStart}
+      className={clsx('space-y-1.5 rounded-card border border-border-subtle bg-surface p-2', draggable && 'cursor-grab active:cursor-grabbing')}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0 truncate font-medium text-text-primary">{entry.display_name || '(sem nome)'}</div>
+        <div className="flex flex-shrink-0 items-center gap-1">
           <LinkAccountButton entry={entry} data={data} onLinkAccount={onLinkAccount} />
           <Button variant="tertiary" size="sm" onClick={() => onLink(entry)}>Vincular…</Button>
         </div>
@@ -442,28 +490,85 @@ function FoldersView({ groupFolders, sharedFolders, data, onLink, onLinkAccount,
   );
 }
 
-// Kanban SEM arrastar-e-soltar (D-12): colunas são só uma projeção de leitura das mesmas pastas; mover um cartão é
-// sempre pelo menu "Vincular…"/"Transferir…" de cada cartão, que chama a mesma rota HTTP da visão de Lista/Pastas.
-function KanbanView({ groupFolders, sharedFolders, data, onLink, onLinkAccount, linkActions }: {
-  groupFolders: Folder[]; sharedFolders: Folder[]; data: OrganizerData;
+// Kanban COM arrastar-e-soltar entre colunas de Classificação ou de Cliente do CRM (D-12 revista, ver o
+// comentário no topo do arquivo) — chama a MESMA rota direta (groupsAPI...For) que "Vincular cliente"/
+// "Alterar cliente" já usa, nunca um caminho novo. Um cartão só é arrastável quando a classificação tem
+// wa_group_id (mesma condição do botão); colunas derivadas (pasta compartilhada, kind 'shared') nunca
+// aceitam nem originam um drop — são sempre o reflexo de uma relação comercial + vínculos de Tenant, não
+// algo que se "solte" ali. Soltar na própria coluna onde o cartão já está listado é sempre um no-op.
+function KanbanView({ groupFolders, sharedFolders, data, groupBy, tenantId, onLink, onLinkAccount, linkActions, onMoved }: {
+  groupFolders: Folder[]; sharedFolders: Folder[]; data: OrganizerData; groupBy: GroupBy; tenantId: (entry: GroupCatalogEntry) => string;
   onLink: (e: GroupCatalogEntry) => void; onLinkAccount: (e: GroupCatalogEntry) => void; linkActions: (entry: GroupCatalogEntry, link: GroupLink) => MenuAction[];
+  onMoved: () => void;
 }) {
   const tenantName = (id: string) => data.tenants.find((t) => t.id === id)?.name ?? id;
   const columns: Folder[] = [...groupFolders, ...sharedFolders];
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const move = useMutation({
+    mutationFn: ({ entry, target }: { entry: GroupCatalogEntry; target: Folder }) => {
+      const c = data.classificationByGroup[entry.id];
+      if (!c) throw new Error('missing wa_group_id');
+      const tenant = tenantId(entry);
+      if (groupBy === 'classification') return groupsAPI.setPurposeFor(tenant, c.wa_group_id, target.key as GroupPurpose);
+      if (target.key === UNLINKED_ACCOUNT_KEY) return groupsAPI.unlinkAccountFor(tenant, c.wa_group_id);
+      return groupsAPI.linkAccountFor(tenant, c.wa_group_id, { accountId: target.key.split('::')[1] });
+    },
+    onSuccess: onMoved,
+    onError: (err) => { if (isUnauthorized(err)) handleUnauthorized(); else setError(groupErrorMessage(err)); },
+  });
+
+  const handleDrop = (target: Folder) => (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOverKey(null);
+    if (target.kind === 'shared') return;
+    const entryId = e.dataTransfer.getData('text/plain');
+    const entry = data.catalog.find((x) => x.id === entryId);
+    if (!entry || target.entries.some((x) => x.id === entryId)) return; // sem entry, ou já está nessa coluna
+    move.mutate({ entry, target });
+  };
+
   return (
-    <div className="flex gap-4 overflow-x-auto pb-4" role="list" aria-label="Quadro de grupos por pasta">
-      {columns.map((col) => (
-        <div key={col.key} role="listitem" aria-label={`Coluna ${col.name}`} className="w-72 flex-shrink-0 space-y-2 rounded-card border border-border-subtle bg-surface-muted p-3">
-          <div className="flex items-center justify-between">
-            <FolderHeading folder={col} />
-            <span className="text-xs text-text-tertiary">{col.entries.length}</span>
+    <div className="space-y-2">
+      {error && <p role="alert" className="text-sm text-status-danger">{error}</p>}
+      <div className="flex gap-4 overflow-x-auto pb-4" role="list" aria-label="Quadro de grupos por pasta">
+        {columns.map((col) => (
+          <div
+            key={col.key}
+            role="listitem"
+            aria-label={`Coluna ${col.name}`}
+            onDragOver={col.kind !== 'shared' ? (e) => { e.preventDefault(); setDragOverKey(col.key); } : undefined}
+            onDragLeave={() => setDragOverKey((k) => (k === col.key ? null : k))}
+            onDrop={handleDrop(col)}
+            className={clsx(
+              'w-72 flex-shrink-0 space-y-2 rounded-card border p-3 transition-colors',
+              dragOverKey === col.key ? 'border-accent-primary bg-accent-primary-soft/40' : 'border-border-subtle bg-surface-muted',
+            )}
+          >
+            <div className="flex items-center justify-between">
+              <FolderHeading folder={col} />
+              <span className="text-xs text-text-tertiary">{col.entries.length}</span>
+            </div>
+            <div className="space-y-2">
+              {col.entries.map((entry) => (
+                <EntryCard
+                  key={entry.id}
+                  entry={entry}
+                  data={data}
+                  tenantName={tenantName}
+                  linkActions={linkActions}
+                  onLink={onLink}
+                  onLinkAccount={onLinkAccount}
+                  draggable={col.kind !== 'shared' && !!data.classificationByGroup[entry.id]?.wa_group_id}
+                  onDragStart={(e) => e.dataTransfer.setData('text/plain', entry.id)}
+                />
+              ))}
+              {col.entries.length === 0 && <p className="text-xs text-text-tertiary">Nenhum grupo nesta pasta.</p>}
+            </div>
           </div>
-          <div className="space-y-2">
-            {col.entries.map((entry) => <EntryCard key={entry.id} entry={entry} data={data} tenantName={tenantName} linkActions={linkActions} onLink={onLink} onLinkAccount={onLinkAccount} />)}
-            {col.entries.length === 0 && <p className="text-xs text-text-tertiary">Nenhum grupo nesta pasta.</p>}
-          </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
@@ -657,21 +762,26 @@ function CreateLinkModal({ hubId, entry, tenants, open, onClose, onDone }: { hub
 }
 
 type AccountOption = { key: string; label: string; detail?: string; ref: GroupAccountRef };
+type LinkAccountMode = 'primary' | 'additional';
 
-// A AÇÃO de verdade por trás da coluna "Classificação (CRM)": chama diretamente o endpoint
-// PUT/DELETE .../tenants/{tenant_id}/groups/{id}/account que a própria tela de Grupos do tenant já usa
-// (groups.ts's linkAccountFor/unlinkAccountFor/crmDirectoryFor/localAccountsFor — variantes com tenantId
-// explícito, nunca lidas de getTenantId()/localStorage). Nenhuma ponte de permissão nova: autoriza um
-// membro real do tenant (group.manage) exatamente como a tela de Grupos já autoriza — só muda de onde o
-// pedido parte. Mesma busca mesclada (diretório do CRM + contas locais) de GroupAccountLink.tsx.
-function LinkCRMAccountModal({ entry, waGroupId, currentAccountName, open, onClose, onDone }: {
-  entry: GroupCatalogEntry; waGroupId: string | null; currentAccountName?: string; open: boolean; onClose: () => void; onDone: () => void;
+// A AÇÃO de verdade por trás da coluna "Classificação (CRM)": chama diretamente os endpoints
+// PUT/DELETE .../account e POST/DELETE .../accounts que a própria tela de Grupos do tenant já usa
+// (groups.ts's linkAccountFor/unlinkAccountFor/addAdditionalAccountFor/removeAdditionalAccountFor/
+// crmDirectoryFor/localAccountsFor — variantes com tenantId explícito, nunca lidas de
+// getTenantId()/localStorage). Nenhuma ponte de permissão nova: autoriza um membro real do tenant
+// (group.manage) exatamente como a tela de Grupos já autoriza — só muda de onde o pedido parte. Mesma
+// busca mesclada (diretório do CRM + contas locais) e mesmo padrão de "modo" (principal vs. adicional) de
+// GroupAccountLink.tsx — o cliente primário (account_id) nunca é tocado pela ação "Adicionar outro
+// cliente" (ADR-0059 addendum 8, caso "Swap").
+function LinkCRMAccountModal({ entry, waGroupId, currentAccountId, currentAccountName, additionalAccounts, open, onClose, onDone }: {
+  entry: GroupCatalogEntry; waGroupId: string | null; currentAccountId?: string; currentAccountName?: string; additionalAccounts: AccountRef[]; open: boolean; onClose: () => void; onDone: () => void;
 }) {
   const tenantId = entry.source_tenant_id;
+  const [mode, setMode] = useState<LinkAccountMode>('primary');
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
   const debouncedQuery = useDebounced(query, 300);
-  useEffect(() => { if (open) { setQuery(''); setError(null); } }, [open]);
+  useEffect(() => { if (open) { setMode('primary'); setQuery(''); setError(null); } }, [open]);
 
   const directory = useQuery({
     queryKey: ['hub-group-account-directory', tenantId],
@@ -685,6 +795,14 @@ function LinkCRMAccountModal({ entry, waGroupId, currentAccountName, open, onClo
     enabled: open,
   });
 
+  // Um cliente já vinculado (primário ou adicional) nunca aparece na busca de novo — nem para trocar o
+  // primário por um que já é adicional, nem o contrário: a mesma conta não deve acabar nas duas colunas.
+  const alreadyLinked = useMemo(() => {
+    const ids = new Set(additionalAccounts.map((a) => a.id));
+    if (currentAccountId) ids.add(currentAccountId);
+    return ids;
+  }, [currentAccountId, additionalAccounts]);
+
   const options = useMemo<AccountOption[]>(() => {
     const dirItems = directory.data?.items ?? [];
     const seen = new Set(dirItems.map((c) => c.name.trim().toLowerCase()));
@@ -695,11 +813,12 @@ function LinkCRMAccountModal({ entry, waGroupId, currentAccountName, open, onClo
     const local = (localAccounts.data?.items ?? [])
       .filter((a) => !seen.has(a.name.trim().toLowerCase()))
       .map((a): AccountOption => ({ key: `a:${a.id}`, label: a.name, detail: 'Conta local', ref: { accountId: a.id } }));
-    return [...dir, ...local];
-  }, [directory.data, localAccounts.data, query]);
+    return [...dir, ...local].filter((o) => !('accountId' in o.ref && alreadyLinked.has(o.ref.accountId)));
+  }, [directory.data, localAccounts.data, query, alreadyLinked]);
 
   const link = useMutation({
-    mutationFn: (ref: GroupAccountRef) => groupsAPI.linkAccountFor(tenantId, waGroupId as string, ref),
+    mutationFn: (ref: GroupAccountRef) =>
+      mode === 'additional' ? groupsAPI.addAdditionalAccountFor(tenantId, waGroupId as string, ref) : groupsAPI.linkAccountFor(tenantId, waGroupId as string, ref),
     onSuccess: onDone,
     onError: (err) => { if (isUnauthorized(err)) handleUnauthorized(); else setError(groupErrorMessage(err)); },
   });
@@ -708,7 +827,12 @@ function LinkCRMAccountModal({ entry, waGroupId, currentAccountName, open, onClo
     onSuccess: onDone,
     onError: (err) => { if (isUnauthorized(err)) handleUnauthorized(); else setError(groupErrorMessage(err)); },
   });
-  const busy = link.isPending || unlink.isPending || !waGroupId;
+  const removeAdditional = useMutation({
+    mutationFn: (accountId: string) => groupsAPI.removeAdditionalAccountFor(tenantId, waGroupId as string, accountId),
+    onSuccess: onDone,
+    onError: (err) => { if (isUnauthorized(err)) handleUnauthorized(); else setError(groupErrorMessage(err)); },
+  });
+  const busy = link.isPending || unlink.isPending || removeAdditional.isPending || !waGroupId;
 
   return (
     <Modal
@@ -717,13 +841,16 @@ function LinkCRMAccountModal({ entry, waGroupId, currentAccountName, open, onClo
       description={`"${entry.display_name || entry.provider_group_id}" passa a representar este cliente — o mesmo contexto usado para atendimento e, futuramente, abertura de chamado.`}
       onClose={onClose}
       footer={<>
-        {currentAccountName && (
+        {mode === 'primary' && currentAccountName && (
           <Button variant="tertiary" size="sm" onClick={() => unlink.mutate()} disabled={busy} isLoading={unlink.isPending}>Remover vínculo</Button>
         )}
         <Button variant="secondary" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
       </>}
     >
       <div className="space-y-3">
+        <p className="text-xs font-medium text-text-secondary">
+          {mode === 'additional' ? 'Buscando um cliente ADICIONAL (o principal continua o mesmo)' : 'Cliente principal'}
+        </p>
         <input
           autoFocus
           type="text"
@@ -755,6 +882,43 @@ function LinkCRMAccountModal({ entry, waGroupId, currentAccountName, open, onClo
             ))
           )}
         </ul>
+        {mode === 'primary' && (
+          <div className="space-y-1.5 border-t border-border-subtle pt-3">
+            <p className="text-xs font-medium text-text-secondary">
+              Outros clientes deste grupo (ex.: grupo de parceria/swap entre dois clientes)
+            </p>
+            {additionalAccounts.length > 0 && (
+              <ul className="flex flex-wrap items-center gap-1.5">
+                {additionalAccounts.map((a) => (
+                  <li key={a.id} className="flex items-center gap-1 rounded-control border border-border-subtle px-2 py-1">
+                    <span className="text-xs text-text-primary">{a.name}</span>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => removeAdditional.mutate(a.id)}
+                      className="text-xs text-status-danger underline disabled:opacity-50"
+                    >
+                      Remover
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button
+              type="button"
+              disabled={!waGroupId}
+              onClick={() => { setMode('additional'); setQuery(''); }}
+              className="text-xs text-accent-primary underline disabled:opacity-50"
+            >
+              + Adicionar outro cliente
+            </button>
+          </div>
+        )}
+        {mode === 'additional' && (
+          <button type="button" className="text-xs text-text-secondary underline" onClick={() => { setMode('primary'); setQuery(''); }}>
+            ← Voltar ao cliente principal
+          </button>
+        )}
         {error && <p role="alert" className="text-sm text-status-danger">{error}</p>}
       </div>
     </Modal>

@@ -99,6 +99,15 @@ func TestHubAutodiscoverCatalogUpsert_CreatesWhenAuthorized(t *testing.T) {
 	if name != "Nome Autodescoberto" {
 		t.Fatalf("display_name = %q, want %q", name, "Nome Autodescoberto")
 	}
+	// ADR-0059 addendum 9: a newly-discovered catalog entry gets an active self-link to its OWN origin
+	// tenant automatically, role 'operator' — so it shows up linked in the Hub Organizer without anyone
+	// first clicking "Vincular a um Tenant" by hand, 34 times over.
+	var role, status string
+	w.must(w.owner.QueryRow(w.ctx, `SELECT role, status FROM hub_group_tenant_links WHERE hub_group_id = $1 AND tenant_id = $2`,
+		res.id, w.tenant["A"]).Scan(&role, &status))
+	if role != "operator" || status != "active" {
+		t.Fatalf("self-link = role=%q status=%q, want role=operator status=active", role, status)
+	}
 }
 
 func TestHubAutodiscoverCatalogUpsert_IdempotentAcrossRuns(t *testing.T) {
@@ -121,6 +130,39 @@ func TestHubAutodiscoverCatalogUpsert_IdempotentAcrossRuns(t *testing.T) {
 	w.must(w.owner.QueryRow(w.ctx, `SELECT count(*) FROM hub_group_catalog WHERE id = $1`, first.id).Scan(&n))
 	if n != 1 {
 		t.Fatalf("expected exactly 1 row after two idempotent calls, got %d", n)
+	}
+	w.must(w.owner.QueryRow(w.ctx, `SELECT count(*) FROM hub_group_tenant_links WHERE hub_group_id = $1 AND tenant_id = $2`,
+		first.id, w.tenant["A"]).Scan(&n))
+	if n != 1 {
+		t.Fatalf("expected exactly 1 self-link after two idempotent calls, got %d", n)
+	}
+}
+
+// TestHubAutodiscoverCatalogUpsert_NeverRelinksARevokedSelfLink proves the self-link addition (ADR-0059
+// addendum 9) never undoes a Hub operator's own deliberate decision: once a self-link has been explicitly
+// revoked, a later autodiscovery pass over the SAME group must never recreate it — the NOT EXISTS guard
+// matches ANY row for (hub_group_id, tenant_id), active or revoked, not just an active one.
+func TestHubAutodiscoverCatalogUpsert_NeverRelinksARevokedSelfLink(t *testing.T) {
+	w := newWorld(t)
+	conn := w.channelConnection("A")
+	w.groupsScope("A")
+
+	first := w.autodiscover("A", conn, "222220000000007@g.us", "Nome")
+	if !first.found || !first.created {
+		t.Fatalf("first call: expected a created row, got found=%v created=%v", first.found, first.created)
+	}
+	w.exec(`UPDATE hub_group_tenant_links SET status = 'revoked', revoked_at = now() WHERE hub_group_id = $1 AND tenant_id = $2`,
+		first.id, w.tenant["A"])
+
+	second := w.autodiscover("A", conn, "222220000000007@g.us", "Nome")
+	if !second.found || second.created {
+		t.Fatalf("second call: expected an UPDATE (created=false), got found=%v created=%v", second.found, second.created)
+	}
+	var status string
+	w.must(w.owner.QueryRow(w.ctx, `SELECT status FROM hub_group_tenant_links WHERE hub_group_id = $1 AND tenant_id = $2`,
+		first.id, w.tenant["A"]).Scan(&status))
+	if status != "revoked" {
+		t.Fatalf("a deliberately revoked self-link must stay revoked, got status=%q", status)
 	}
 }
 

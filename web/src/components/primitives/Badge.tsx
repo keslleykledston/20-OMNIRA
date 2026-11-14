@@ -2,7 +2,7 @@ import React from 'react';
 import clsx from 'clsx';
 
 type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'info';
-type BadgeSize = 'sm' | 'md';
+type BadgeSize = 'xs' | 'sm' | 'md';
 
 interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   children: React.ReactNode;
@@ -18,6 +18,7 @@ export function Badge({
   ...props
 }: BadgeProps) {
   const sizeStyles = {
+    xs: 'px-1.5 py-0.5 text-[10px]',
     sm: 'px-2 py-1 text-xs',
     md: 'px-3 py-1.5 text-sm',
   }[size];

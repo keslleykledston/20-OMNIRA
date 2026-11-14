@@ -25,6 +25,9 @@ export interface AIIntegration {
   consent_at?: string
   consent_by?: string
   last_test?: AITest
+  // ADR-0015 addendum 2: also read WhatsApp GROUP images/PDFs with this same key/budget/consent. Its own
+  // explicit decision — never implied by `enabled` alone, and always false again once `enabled` turns false.
+  group_media_enabled: boolean
 }
 
 export interface AIIntegrationUpdate {
@@ -33,6 +36,7 @@ export interface AIIntegrationUpdate {
   monthly_budget_usd?: number
   api_key?: string
   accept_external_ai?: boolean
+  group_media_enabled?: boolean
 }
 
 const base = () => `${API_BASE}/tenants/${getTenantId()}/integrations/ai`

@@ -723,6 +723,41 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '409': { description: "No active WhatsApp connection, or more than one", content: { text/plain: { schema: { type: string } } } }
         '502': { $ref: '#/components/responses/Text502' }
+  /tenants/{tenant_id}/groups/accounts-summary:
+    get:
+      operationId: listGroupAccountsSummary
+      tags: [Groups]
+      summary: Every active CRM client with how many of the tenant's enabled groups concern it
+      description: |
+        Requires `group.read`. One row per active `customer_accounts` row (ADR-0018), counting a group whether it
+        is linked as the PRIMARY client (`account_id`) or as one of its OTHER clients (`additional_accounts`,
+        ADR-0059 addendum 8) — never double-counted when both happen to name the same account (the server already
+        refuses that combination). A disabled group never counts, matching `GET .../groups`'s own filter. A client
+        with no linked group yet still appears, with `group_count: 0`. Powers the tenant's own "Organização"
+        browser (a client-first way to navigate groups) — never an Atendimento/ticket count, which does not exist
+        yet for groups.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: The tenant's active CRM clients with their linked-group count
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [account_id, account_name, group_count]
+                      properties:
+                        account_id: { type: string, format: uuid }
+                        account_name: { type: string }
+                        group_count: { type: integer }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
   /tenants/{tenant_id}/groups/{group_id}:
     patch:
       operationId: setGroupEnabled
@@ -793,6 +828,29 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/groups/{group_id}/messages/{message_id}/media:
+    get:
+      operationId: getGroupMessageMedia
+      tags: [Groups]
+      summary: A group message's cleared image/PDF (ADR-0015 addendum 2)
+      description: |
+        Requires `group.read`. Only ever serves the cleared (antivirus-passed) file — never quarantine. Same
+        security posture as the 1:1 media route (`GET /messages/{message_id}/media`): sandboxed CSP, an
+        `X-Media-Status` header reporting the lifecycle (`pending`/`quarantined`/`infected`/`rejected`/
+        `failed`/`source_gone`/`purged` answer with a status code and no body; only `clean` serves the file).
+        A raster image or PDF is served inline; the response is otherwise identical in shape.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { name: message_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The file, content: { 'image/jpeg': {}, 'image/png': {}, 'image/webp': {}, 'image/gif': {}, 'application/pdf': {}, 'application/octet-stream': {} } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { description: No media row for this message, content: { text/plain: { schema: { type: string } } } }
+        '409': { description: Still pending/quarantined (being checked), content: { text/plain: { schema: { type: string } } } }
+        '410': { description: Source gone or purged, content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/groups/{group_id}/account:
     put:
       operationId: linkGroupAccount
@@ -900,6 +958,107 @@ paths:
       responses:
         '200': { description: The group, content: { application/json: { schema: { $ref: '#/components/schemas/GroupItem' } } } }
         '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/groups/{group_id}/participants:
+    get:
+      operationId: listGroupParticipants
+      tags: [Groups]
+      summary: Who has ever written in this group (ADR-0015 addendum)
+      description: |
+        Requires `group.read`. One row per `channel_participants` ever seen as the author of one of this
+        group's messages, newest-seen first. Identity here is NEVER a phone: `author_jid` is often an opaque
+        `@lid` (WhatsApp's own privacy masking), so this is deliberately NOT the same identity as `contacts` —
+        the external_participant_id (the provider's raw JID) is never served, same rule as the rest of this
+        ADR. The same participant is shared by every group on the same WhatsApp connection, so an alias or
+        company set here shows up in all of them.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      responses:
+        '200':
+          description: The participants
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/GroupParticipant' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/groups/participants/{participant_id}/details:
+    put:
+      operationId: setGroupParticipantAlias
+      tags: [Groups]
+      summary: Set (or clear) a participant's "nome aparente"
+      description: |
+        Requires `group.manage`. Same convention as `contacts.alias`: an empty (or blank) alias CLEARS it and
+        the provider's own display name shows again. Audited as `group.participant_alias_set`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: participant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [alias], additionalProperties: false, properties: { alias: { type: string, maxLength: 200 } } }
+      responses:
+        '200': { description: The participant, content: { application/json: { schema: { $ref: '#/components/schemas/GroupParticipant' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Alias too long, content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/groups/participants/{participant_id}/company/link:
+    put:
+      operationId: setGroupParticipantCompany
+      tags: [Groups]
+      summary: Set which company this participant represents, and their role there
+      description: |
+        Requires `group.manage`. Same `account_id`/`directory_company_id` XOR shape as `PUT .../groups/{group_id}/account`
+        (exactly one required). `role` is optional, same closed vocabulary as `contact_account_links.relationship_type`
+        (consistency over a free-text label) — requires an account to also be set. `is_downstream_client` (ADR-0015
+        addendum 3, defaults to false) marks that the linked company is itself a client of the Client the group
+        represents (ex.: Uplink, cliente da 4WNET), not the Client's own staff — also requires an account to be set.
+        Audited as `group.participant_company_linked`. The trailing `/link` (rather than ending at `/company`) is a
+        routing detail, not a modeling one: Go's `net/http.ServeMux` refuses the shorter path as an unresolvable
+        conflict with `DELETE .../groups/{group_id}/accounts/{account_id}` (both 3 segments with crossed
+        literal/wildcard positions); the extra segment breaks the tie by length alone.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: participant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              description: 'Exactly one of account_id or directory_company_id; role and is_downstream_client are optional.'
+              properties:
+                account_id: { type: string, format: uuid }
+                directory_company_id: { type: string }
+                role: { type: string, enum: [employee, owner, technical_contact, billing_contact, administrative_contact, representative, contractor, other] }
+                is_downstream_client: { type: boolean, default: false }
+      responses:
+        '200': { description: The participant, content: { application/json: { schema: { $ref: '#/components/schemas/GroupParticipant' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'directory_company_id unknown or inactive in the directory', content: { text/plain: { schema: { type: string } } } }
+        '502': { description: Company directory failed, content: { text/plain: { schema: { type: string } } } }
+        '503': { description: Company directory not configured or unavailable, content: { text/plain: { schema: { type: string } } } }
+    delete:
+      operationId: unlinkGroupParticipantCompany
+      tags: [Groups]
+      summary: Remove a participant's company/role link
+      description: |
+        Requires `group.manage`. Idempotent; audited as `group.participant_company_unlinked`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: participant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The participant, content: { application/json: { schema: { $ref: '#/components/schemas/GroupParticipant' } } } }
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
@@ -6486,13 +6645,22 @@ components:
         updated_at: { type: string, format: date-time }
     HubGroupRelationshipContext:
       type: object
-      required: [hub_group_id, wa_group_id, purpose]
+      required: [hub_group_id, wa_group_id, purpose, additional_accounts]
       properties:
         hub_group_id: { type: string, format: uuid }
-        wa_group_id: { type: string, format: uuid, description: The real wa_groups.id, to address the tenant's own PUT .../groups/{id}/account directly }
+        wa_group_id: { type: string, format: uuid, description: 'The real wa_groups.id, to address the tenant''s own PUT/POST .../groups/{id}/account(s) directly' }
         purpose: { $ref: '#/components/schemas/GroupPurpose' }
-        account_id: { type: string, format: uuid, description: Absent when the group has no linked customer_accounts row }
+        account_id: { type: string, format: uuid, description: Absent when the group has no linked customer_accounts row (its primary client) }
         account_display_name: { type: string, description: Absent under the same condition as account_id }
+        additional_accounts:
+          type: array
+          description: 'Every OTHER client this group also concerns (ADR-0059 addendum 8, e.g. a "swap"/peering group) — never the primary above, always present (empty when there are none).'
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
     HubGroupContextResolution:
       type: object
       required: [status]
@@ -7280,7 +7448,7 @@ components:
         connection_id: { type: string, format: uuid, description: 'Which WhatsApp instance (channel connection) this group belongs to; a tenant may run more than one.' }
         connection_account: { type: string, description: 'That connection''s own account/number, for display (may be empty).' }
         ai_observer_enabled: { type: boolean, description: 'Per-group opt-in for the AI observer (ADR-0055, migration 000178): suggests a classification per message for a human to review, never acts, never sends anything. Can only be true while `enabled` is also true.' }
-        is_alert_channel: { type: boolean, description: 'ADR-0058: at most one group per tenant may be this. The ONE exception to "nothing is sent to a group" — a real WhatsApp message is sent here when a conversation''s SLA breaches. Can only be true while `enabled` is also true, and never while the group is linked to a customer account (account_id).' }
+        is_alert_channel: { type: boolean, description: 'ADR-0058: at most one group per tenant may be this. The ONE exception to "nothing is sent to a group" — a real WhatsApp message is sent here when a conversation''s SLA breaches. Can only be true while `enabled` is also true, never while the group is linked to a customer account (account_id), and never unless `purpose` is `internal_management` or `internal_team`.' }
         last_message_at: { type: string, format: date-time, nullable: true }
         last_message: { type: object, nullable: true, allOf: [{ $ref: '#/components/schemas/GroupLastMessage' }] }
     GroupPurpose:
@@ -7326,8 +7494,10 @@ components:
         At least one of `enabled`/`purpose`/`ai_observer_enabled`/`is_alert_channel` must be set; any subset may
         be set together. `ai_observer_enabled` and `is_alert_channel` can never end up true while `enabled` ends
         up false in the same request (400) — nothing cascades silently. `is_alert_channel` additionally refuses
-        (409) a group already linked to a customer account, or a tenant that already has a different alert
-        channel group (ADR-0058).
+        (409) a group already linked to a customer account, a group whose resulting `purpose` is not
+        `internal_management`/`internal_team` (ADR-0058 addendum — checked against `purpose` as it ends up
+        after this same request, so classifying and setting the alert channel in one call works), or a tenant
+        that already has a different alert channel group (ADR-0058).
       minProperties: 1
       additionalProperties: false
       properties:
@@ -7346,15 +7516,34 @@ components:
         confidence: { type: number, minimum: 0, maximum: 1 }
     GroupMessage:
       type: object
-      required: [id, author_name, from_me, message_type, body, sent_at, suggestion]
+      required: [id, author_name, from_me, message_type, body, sent_at, suggestion, participant_id, company_name, company_role, is_downstream_client, image_caption]
       properties:
         id: { type: string, format: uuid }
-        author_name: { type: string, description: 'Free label chosen by the sender; never an identity. No phone number is stored or served.' }
+        author_name: { type: string, description: 'The participant''s alias when set (ADR-0015 addendum), else the sender''s own free label. Never an identity; no phone number is stored or served.' }
         from_me: { type: boolean }
         message_type: { type: string, enum: [text, image, video, audio, document, sticker, location, other] }
-        body: { type: string }
+        body: { type: string, description: 'An "@<digits>" mention the sender typed is replaced with "@<nome>" when the digits match a known participant of this group''s own connection (ADR-0015 addendum); an unmatched one is left exactly as written. Never a phone lookup: only ever compared against channel_participants already on file.' }
         sent_at: { type: string, format: date-time }
         suggestion: { type: object, nullable: true, allOf: [{ $ref: '#/components/schemas/GroupMessageSuggestion' }], description: 'Null until the AI observer has classified this message (or when the group never opted in).' }
+        participant_id: { type: string, format: uuid, nullable: true, description: 'Addresses PUT/DELETE .../groups/participants/{participant_id}/... (ADR-0015 addendum). Null only when the message carries no usable author id.' }
+        company_name: { type: string, nullable: true, description: 'The author''s linked company (channel_participants.company_account_id), when set.' }
+        company_role: { type: string, nullable: true, enum: [employee, owner, technical_contact, billing_contact, administrative_contact, representative, contractor, other] }
+        is_downstream_client: { type: boolean, nullable: true, description: 'ADR-0015 addendum 3: the linked company is itself a client of the Client the group represents (ex.: Uplink, cliente da 4WNET), not the Client''s own staff. Null exactly when company_name is null.' }
+        image_caption: { type: string, nullable: true, description: 'ADR-0015 addendum 2: the vision step''s already-done description of this message''s own image/PDF (the tenant''s own Gemini key/budget, ADR-0016). Null while pending, on a text message, or when analysis never completed — never guessed.' }
+    GroupParticipant:
+      type: object
+      description: 'ADR-0015 addendum. Identified WITHOUT a phone: author_jid is often an opaque @lid. The external_participant_id (the provider''s raw JID) is never served.'
+      required: [id, display_name, alias, company_account_id, company_name, company_role, is_downstream_client, message_count, last_seen_at]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string, description: 'The provider''s own label (channel_participants.display_name) — a free label chosen by the sender, never an identity.' }
+        alias: { type: string, nullable: true, description: 'The "nome aparente" override, same convention as contacts.alias.' }
+        company_account_id: { type: string, format: uuid, nullable: true }
+        company_name: { type: string, nullable: true }
+        company_role: { type: string, nullable: true, enum: [employee, owner, technical_contact, billing_contact, administrative_contact, representative, contractor, other] }
+        is_downstream_client: { type: boolean, description: 'ADR-0015 addendum 3: the linked company is itself a client of the Client (ex.: Uplink, cliente da 4WNET), not the Client''s own staff/representative. Always false while no company is linked.' }
+        message_count: { type: integer, minimum: 0, description: 'How many of this group''s stored messages this participant authored.' }
+        last_seen_at: { type: string, format: date-time }
     GroupMessagePage:
       type: object
       required: [items, has_more, count, limit]
@@ -7531,7 +7720,7 @@ components:
         limit: { type: integer }
     AIIntegration:
       type: object
-      required: [provider, enabled, model, monthly_budget_usd, key_configured, consent_text, consent_version, consent_current]
+      required: [provider, enabled, model, monthly_budget_usd, key_configured, consent_text, consent_version, consent_current, group_media_enabled]
       properties:
         provider: { type: string, enum: [gemini] }
         enabled: { type: boolean }
@@ -7546,6 +7735,7 @@ components:
         consent_at: { type: string, format: date-time }
         consent_by: { type: string }
         last_test: { $ref: '#/components/schemas/AIIntegrationTest' }
+        group_media_enabled: { type: boolean, description: 'ADR-0015 addendum 2: also read WhatsApp GROUP images/PDFs with this same key/budget/consent. Its own explicit decision — never implied by `enabled` alone, and always false again the moment `enabled` turns false.' }
     AIIntegrationUpdate:
       type: object
       additionalProperties: false
@@ -7555,6 +7745,7 @@ components:
         monthly_budget_usd: { type: number, minimum: 0, maximum: 10000 }
         api_key: { type: string, writeOnly: true, minLength: 20, maxLength: 200, pattern: '^[A-Za-z0-9_.-]{20,200}$' }
         accept_external_ai: { type: boolean }
+        group_media_enabled: { type: boolean, description: 'Requires the resulting `enabled` to be true (in this same request or already set) — 422 otherwise.' }
     AIIntegrationTest:
       type: object
       required: [at, ok, message]

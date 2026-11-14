@@ -10,6 +10,18 @@ export const GROUP_PURPOSE_LABEL: Record<GroupPurpose, string> = {
   other: 'Outros',
 }
 
+// Versão enxuta do rótulo, só para o selo ao lado do nome na lista de grupos (GroupList) — economiza espaço
+// sem perder a distinção Cliente/Interno, que a cor sozinha não garante acessível.
+export const GROUP_PURPOSE_SHORT_LABEL: Record<GroupPurpose, string> = {
+  client_management: 'Cli · Gestão',
+  client_support: 'Cli · Atend.',
+  internal_management: 'Int · Gestão',
+  internal_team: 'Int · Equipe',
+  partner: 'Parceiro',
+  supplier: 'Fornecedor',
+  other: 'Outros',
+}
+
 export const GROUP_PURPOSE_BADGE_VARIANT: Record<GroupPurpose, 'default' | 'success' | 'warning' | 'info'> = {
   client_management: 'info',
   client_support: 'success',

@@ -43,6 +43,8 @@ export type IconName =
   | 'plug'
   | 'reconcile'
   | 'logout'
+  | 'edit'
+  | 'trash'
 
 const paths: Record<IconName, string> = {
   'shield-check': 'M12 3 4 7v5c0 4.4 3.4 8.4 8 9 4.6-.6 8-4.6 8-9V7l-8-4Zm-3.5 9 2.5 2.5 4.5-5',
@@ -85,6 +87,8 @@ const paths: Record<IconName, string> = {
   whatsapp: 'M21 11.5a8.5 8.5 0 0 1-12.3 7.6L4 20.5l1.5-4.6A8.5 8.5 0 1 1 21 11.5Zm-12 -2.2c0 3.2 2.6 5.8 5.8 5.8.6 0 1-.4 1-.9v-.9c0-.4-.3-.7-.7-.7-.3 0-.6.1-.9.2l-1.3-1.3c.1-.3.2-.6.2-.9 0-.4-.3-.7-.7-.7h-.9c-.5 0-.9.4-.9 1Z',
   sparkles: 'M12 3v4m0 10v4M5 12h4m6 0h4M7 7l2 2M15 15l2 2M17 7l-2 2M9 15l-2 2',
   logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
+  edit: 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4Z',
+  trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3',
 }
 
 interface IconProps {

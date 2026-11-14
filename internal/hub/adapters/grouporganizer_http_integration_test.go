@@ -166,6 +166,11 @@ func TestGroupOrganizerAPI_Classification_ReadsTenantPurposeAcrossOriginsAndFail
 	w.exec(`INSERT INTO customer_accounts (id, tenant_id, name) VALUES ($1, $2, 'InfoRR Consultoria')`, accountA, w.tenant["A"])
 	w.exec(`UPDATE wa_groups SET purpose = 'client_support', account_id = $1 WHERE tenant_id = $2 AND provider_group_id = '551199990000020@g.us'`,
 		accountA, w.tenant["A"])
+	// ADR-0059 addendum 8: groupA ALSO concerns a second client (a "swap"/peering group) — must surface
+	// in additional_accounts alongside, never instead of, the primary above.
+	accountA2 := uuid.New()
+	w.exec(`INSERT INTO customer_accounts (id, tenant_id, name) VALUES ($1, $2, 'IP Fibra')`, accountA2, w.tenant["A"])
+	w.exec(`INSERT INTO wa_group_additional_accounts (tenant_id, group_id, account_id) VALUES ($1, $2, $3)`, w.tenant["A"], waGroupA, accountA2)
 
 	groupB := w.catalogEntry("", "B", connB, "551199990000021@g.us", "Grupo B")
 	w.waGroup("B", connB, "551199990000021@g.us", "Fornecedor de Trânsito", true)
@@ -204,12 +209,23 @@ func TestGroupOrganizerAPI_Classification_ReadsTenantPurposeAcrossOriginsAndFail
 	if a["purpose"] != "client_support" || a["account_display_name"] != "InfoRR Consultoria" || a["account_id"] != accountA.String() || a["wa_group_id"] != waGroupA.String() {
 		t.Fatalf("groupA classification: got %v, want purpose=client_support account=InfoRR Consultoria account_id=%s wa_group_id=%s", a, accountA, waGroupA)
 	}
+	aExtra, _ := a["additional_accounts"].([]any)
+	if len(aExtra) != 1 {
+		t.Fatalf("groupA additional_accounts: got %v, want exactly one (IP Fibra)", a["additional_accounts"])
+	}
+	aExtraItem := aExtra[0].(map[string]any)
+	if aExtraItem["id"] != accountA2.String() || aExtraItem["name"] != "IP Fibra" {
+		t.Fatalf("groupA additional_accounts[0]: got %v, want id=%s name=IP Fibra", aExtraItem, accountA2)
+	}
 	b, ok := byGroup[groupB.String()]
 	if !ok {
 		t.Fatalf("owner must see groupB's classification: %v", items)
 	}
 	if b["purpose"] != "supplier" {
 		t.Fatalf("groupB classification: got %v, want purpose=supplier", b)
+	}
+	if bExtra, _ := b["additional_accounts"].([]any); len(bExtra) != 0 {
+		t.Fatalf("groupB additional_accounts: got %v, want empty (never absent either)", b["additional_accounts"])
 	}
 	if _, has := b["account_display_name"]; has && b["account_display_name"] != nil {
 		t.Fatalf("groupB has no linked account: got account_display_name=%v, want absent/null", b["account_display_name"])
@@ -280,6 +296,18 @@ func TestGroupOrganizerAPI_UpsertCatalogIsIdempotentByNaturalKeyAndRequiresOrigi
 	}
 	if n := w.count(`SELECT count(*) FROM hub_group_catalog WHERE hub_id = $1 AND source_tenant_id = $2`, w.hub, w.tenant["A"]); n != 1 {
 		t.Fatalf("two upserts of the same identity created %d row(s), want 1 (no duplicate)", n)
+	}
+	// ADR-0059 addendum 9: the manual "Adicionar grupo ao catálogo" path gets the same self-link-to-own-
+	// origin-tenant default as autodiscovery (migration 000194) — one active 'operator' link, never
+	// duplicated by the second (idempotent) upsert above.
+	var role, status string
+	w.must(w.owner.QueryRow(w.ctx, `SELECT role, status FROM hub_group_tenant_links WHERE hub_group_id = $1 AND tenant_id = $2`,
+		groupID, w.tenant["A"]).Scan(&role, &status))
+	if role != "operator" || status != "active" {
+		t.Fatalf("self-link = role=%q status=%q, want role=operator status=active", role, status)
+	}
+	if n := w.count(`SELECT count(*) FROM hub_group_tenant_links WHERE hub_group_id = $1 AND tenant_id = $2`, groupID, w.tenant["A"]); n != 1 {
+		t.Fatalf("two upserts of the same identity created %d self-link row(s), want 1 (no duplicate)", n)
 	}
 }
 

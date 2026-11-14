@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import HubGroupOrganizerPage from '../pages/HubGroupOrganizerPage';
@@ -162,6 +162,87 @@ describe('HubGroupOrganizerPage', () => {
     );
   });
 
+  it('mostra também o(s) cliente(s) adicional(is) do grupo na classificação, junto com o principal (ADR-0059 addendum 8)', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, purpose: 'partner', account_display_name: 'InfoRR Consultoria', additional_accounts: [{ id: 'acc-2', name: 'IP Fibra' }] }];
+    renderAt(<HubGroupOrganizerPage />);
+    const alphaRow = (await screen.findByText('Clientes Alpha')).closest('tr')!;
+    expect(within(alphaRow).getByText('InfoRR Consultoria')).toBeInTheDocument();
+    expect(within(alphaRow).getByText('+ IP Fibra')).toBeInTheDocument();
+  });
+
+  it('pastas: Cliente do CRM mostra um grupo "swap" nas pastas dos DOIS clientes (primário + adicionais), nunca só na primeira (ADR-0059 addendum 8)', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, purpose: 'partner', account_id: 'acc-1', account_display_name: 'InfoRR Consultoria', additional_accounts: [{ id: 'acc-2', name: 'IP Fibra' }] }];
+    renderAt(<HubGroupOrganizerPage />);
+    await userEvent.click(await screen.findByRole('tab', { name: /^Pastas/ }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Cliente do CRM' }));
+    const infoRRFolder = await screen.findByLabelText('Pasta InfoRR Consultoria');
+    expect(within(infoRRFolder).getByText('Clientes Alpha')).toBeInTheDocument();
+    const ipFibraFolder = screen.getByLabelText('Pasta IP Fibra');
+    expect(within(ipFibraFolder).getByText('Clientes Alpha')).toBeInTheDocument();
+  });
+
+  it('vincular cliente do CRM: "+ Adicionar outro cliente" chama POST .../accounts, nunca o PUT do vínculo principal', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, wa_group_id: 'wa-alpha', purpose: 'other', account_id: 'acc-1', account_display_name: 'InfoRR Consultoria', additional_accounts: [] }];
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/hubs')) return { data: { items: hubs } };
+      if (u.endsWith('/managed')) return { data: { items: managed } };
+      if (u.endsWith('/groups/catalog')) return { data: { items: catalog } };
+      if (u.endsWith('/groups/relationships')) return { data: { items: relationships } };
+      if (u.endsWith('/groups/discover-connections')) return { data: { items: discoveredConnections } };
+      if (u.endsWith('/groups/discover')) return { data: { items: discovered } };
+      if (u.endsWith('/groups/links')) return { data: { items: Object.values(linksByGroup).flat() } };
+      if (u.endsWith('/groups/classification')) return { data: { items: classification } };
+      if (u.endsWith('/tenants/A/crm/companies')) return { data: { items: [{ id: 'co-2', name: 'IP Fibra', cnpj: '456' }] } };
+      if (u.endsWith('/tenants/A/accounts')) return { data: { items: [] } };
+      const linksMatch = /\/groups\/catalog\/([^/]+)\/links$/.exec(u);
+      if (linksMatch) return { data: { items: linksByGroup[linksMatch[1]] ?? [] } };
+      return Promise.reject({ response: { status: 404 } });
+    });
+    vi.mocked(axios.post).mockResolvedValue({ data: {} });
+
+    renderAt(<HubGroupOrganizerPage />);
+    const alphaRow = (await screen.findByText('Clientes Alpha')).closest('tr')!;
+    await userEvent.click(within(alphaRow).getByRole('button', { name: 'Alterar cliente' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Vincular ao Cliente do CRM' });
+    await userEvent.click(within(dialog).getByRole('button', { name: '+ Adicionar outro cliente' }));
+    await userEvent.click(await within(dialog).findByRole('button', { name: /IP Fibra/ }));
+    await waitFor(() =>
+      expect(axios.post).toHaveBeenCalledWith(expect.stringContaining('/tenants/A/groups/wa-alpha/accounts'), { directory_company_id: 'co-2' }, expect.anything()),
+    );
+  });
+
+  it('vincular cliente do CRM: "Remover" num cliente adicional chama DELETE .../accounts/{id}, nunca o vínculo principal', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, wa_group_id: 'wa-alpha', purpose: 'other', account_id: 'acc-1', account_display_name: 'InfoRR Consultoria', additional_accounts: [{ id: 'acc-2', name: 'IP Fibra' }] }];
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/hubs')) return { data: { items: hubs } };
+      if (u.endsWith('/managed')) return { data: { items: managed } };
+      if (u.endsWith('/groups/catalog')) return { data: { items: catalog } };
+      if (u.endsWith('/groups/relationships')) return { data: { items: relationships } };
+      if (u.endsWith('/groups/discover-connections')) return { data: { items: discoveredConnections } };
+      if (u.endsWith('/groups/discover')) return { data: { items: discovered } };
+      if (u.endsWith('/groups/links')) return { data: { items: Object.values(linksByGroup).flat() } };
+      if (u.endsWith('/groups/classification')) return { data: { items: classification } };
+      if (u.endsWith('/tenants/A/crm/companies')) return { data: { items: [] } };
+      if (u.endsWith('/tenants/A/accounts')) return { data: { items: [] } };
+      const linksMatch = /\/groups\/catalog\/([^/]+)\/links$/.exec(u);
+      if (linksMatch) return { data: { items: linksByGroup[linksMatch[1]] ?? [] } };
+      return Promise.reject({ response: { status: 404 } });
+    });
+    vi.mocked(axios.delete).mockResolvedValue({ data: {} });
+
+    renderAt(<HubGroupOrganizerPage />);
+    const alphaRow = (await screen.findByText('Clientes Alpha')).closest('tr')!;
+    await userEvent.click(within(alphaRow).getByRole('button', { name: 'Alterar cliente' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Vincular ao Cliente do CRM' });
+    expect(within(dialog).getByText('IP Fibra')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remover' }));
+    await waitFor(() =>
+      expect(axios.delete).toHaveBeenCalledWith(expect.stringContaining('/tenants/A/groups/wa-alpha/accounts/acc-2'), expect.anything()),
+    );
+  });
+
   it('vincular cliente do CRM: desabilitado quando o grupo ainda não tem wa_groups (nunca aberto na tela de Grupos do tenant)', async () => {
     classification = [];
     renderAt(<HubGroupOrganizerPage />);
@@ -179,8 +260,8 @@ describe('HubGroupOrganizerPage', () => {
     expect(within(shared).queryByText('Clientes Alpha')).toBeNull();
   });
 
-  it('kanban agrupa por classificação (Cliente/Parceiro/Fornecedor/Interno), não por Tenant; sem drag-and-drop, mover é só pelo menu "Vincular…"', async () => {
-    classification = [{ hub_group_id: GROUP_ALPHA, purpose: 'client_support', account_display_name: 'InfoRR Consultoria' }];
+  it('kanban agrupa por classificação (Cliente/Parceiro/Fornecedor/Interno), não por Tenant; cartão só é arrastável com wa_group_id conhecido', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, wa_group_id: 'wa-alpha', purpose: 'client_support', account_display_name: 'InfoRR Consultoria' }];
     renderAt(<HubGroupOrganizerPage />);
     await userEvent.click(await screen.findByRole('tab', { name: 'Kanban' }));
     const board = await screen.findByRole('list', { name: 'Quadro de grupos por pasta' });
@@ -189,8 +270,88 @@ describe('HubGroupOrganizerPage', () => {
     const otherCol = within(board).getByLabelText('Coluna Outros');
     expect(within(otherCol).getByText('Suporte geral')).toBeInTheDocument();
     expect(within(board).queryByLabelText('Coluna ISP Roraima')).toBeNull();
-    // nenhum elemento é arrastável (draggable), em nenhuma visão
-    expect(document.querySelectorAll('[draggable="true"]').length).toBe(0);
+    // Clientes Alpha tem wa_group_id (classificado) — arrastável; Suporte geral nunca foi aberto no tenant — não é.
+    expect(within(alphaCol).getByText('Clientes Alpha').closest('[draggable]')).toHaveAttribute('draggable', 'true');
+    expect(within(otherCol).getByText('Suporte geral').closest('[draggable]')).toHaveAttribute('draggable', 'false');
+  });
+
+  it('kanban: arrastar um cartão para outra coluna de Classificação chama o PATCH de purpose já existente, no tenant certo', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, wa_group_id: 'wa-alpha', purpose: 'other', additional_accounts: [] }];
+    vi.mocked(axios.patch).mockResolvedValue({ data: {} });
+    renderAt(<HubGroupOrganizerPage />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Kanban' }));
+    const board = await screen.findByRole('list', { name: 'Quadro de grupos por pasta' });
+    const card = within(board).getByText('Clientes Alpha').closest('[draggable]') as HTMLElement;
+    const targetCol = within(board).getByLabelText('Coluna Cliente · Atendimento');
+    const dataTransfer = { getData: vi.fn().mockReturnValue(GROUP_ALPHA), setData: vi.fn() };
+    fireEvent.dragStart(card, { dataTransfer });
+    fireEvent.dragOver(targetCol, { dataTransfer });
+    fireEvent.drop(targetCol, { dataTransfer });
+    await waitFor(() => expect(axios.patch).toHaveBeenCalledTimes(1));
+    expect(String(vi.mocked(axios.patch).mock.calls[0][0])).toBe('/api/v1/tenants/A/groups/wa-alpha');
+    expect(vi.mocked(axios.patch).mock.calls[0][1]).toEqual({ purpose: 'client_support' });
+  });
+
+  it('kanban: soltar na MESMA coluna em que o cartão já está é um no-op, nunca uma chamada ao servidor', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, wa_group_id: 'wa-alpha', purpose: 'client_support', additional_accounts: [] }];
+    renderAt(<HubGroupOrganizerPage />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Kanban' }));
+    const board = await screen.findByRole('list', { name: 'Quadro de grupos por pasta' });
+    const card = within(board).getByText('Clientes Alpha').closest('[draggable]') as HTMLElement;
+    const sameCol = within(board).getByLabelText('Coluna Cliente · Atendimento');
+    const dataTransfer = { getData: vi.fn().mockReturnValue(GROUP_ALPHA), setData: vi.fn() };
+    fireEvent.dragStart(card, { dataTransfer });
+    fireEvent.drop(sameCol, { dataTransfer });
+    expect(axios.patch).not.toHaveBeenCalled();
+  });
+
+  it('kanban: nunca aceita um drop na pasta compartilhada (derivada de relação comercial + vínculos, D-07) — nenhuma chamada ao servidor', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, wa_group_id: 'wa-alpha', purpose: 'other', additional_accounts: [] }];
+    renderAt(<HubGroupOrganizerPage />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Kanban' }));
+    const board = await screen.findByRole('list', { name: 'Quadro de grupos por pasta' });
+    const card = within(board).getByText('Clientes Alpha').closest('[draggable]') as HTMLElement;
+    const sharedCol = within(board).getByLabelText('Coluna ISP Roraima ↔ NorteNet');
+    const dataTransfer = { getData: vi.fn().mockReturnValue(GROUP_ALPHA), setData: vi.fn() };
+    fireEvent.dragStart(card, { dataTransfer });
+    fireEvent.drop(sharedCol, { dataTransfer });
+    expect(axios.patch).not.toHaveBeenCalled();
+    expect(axios.put).not.toHaveBeenCalled();
+  });
+
+  it('kanban: agrupando por Cliente do CRM, arrastar para a pasta de outro cliente chama o vínculo de conta já existente (PUT .../account)', async () => {
+    classification = [
+      { hub_group_id: GROUP_ALPHA, wa_group_id: 'wa-alpha', purpose: 'other', account_id: 'acc-1', account_display_name: 'InfoRR Consultoria', additional_accounts: [] },
+      { hub_group_id: GROUP_SHARED, wa_group_id: 'wa-shared', purpose: 'other', account_id: 'acc-2', account_display_name: 'IP Fibra', additional_accounts: [] },
+    ];
+    vi.mocked(axios.put).mockResolvedValue({ data: {} });
+    renderAt(<HubGroupOrganizerPage />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Kanban' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Cliente do CRM' }));
+    const board = await screen.findByRole('list', { name: 'Quadro de grupos por pasta' });
+    const card = within(board).getByText('Clientes Alpha').closest('[draggable]') as HTMLElement;
+    const targetCol = within(board).getByLabelText('Coluna IP Fibra');
+    const dataTransfer = { getData: vi.fn().mockReturnValue(GROUP_ALPHA), setData: vi.fn() };
+    fireEvent.dragStart(card, { dataTransfer });
+    fireEvent.drop(targetCol, { dataTransfer });
+    await waitFor(() =>
+      expect(axios.put).toHaveBeenCalledWith(expect.stringContaining('/tenants/A/groups/wa-alpha/account'), { account_id: 'acc-2' }, expect.anything()),
+    );
+  });
+
+  it('kanban: agrupando por Cliente do CRM, arrastar para "Sem conta vinculada" chama o desvínculo já existente (DELETE .../account)', async () => {
+    classification = [{ hub_group_id: GROUP_ALPHA, wa_group_id: 'wa-alpha', purpose: 'other', account_id: 'acc-1', account_display_name: 'InfoRR Consultoria', additional_accounts: [] }];
+    vi.mocked(axios.delete).mockResolvedValue({ data: {} });
+    renderAt(<HubGroupOrganizerPage />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Kanban' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Cliente do CRM' }));
+    const board = await screen.findByRole('list', { name: 'Quadro de grupos por pasta' });
+    const card = within(board).getByText('Clientes Alpha').closest('[draggable]') as HTMLElement;
+    const unlinkedCol = within(board).getByLabelText('Coluna Sem conta vinculada no CRM');
+    const dataTransfer = { getData: vi.fn().mockReturnValue(GROUP_ALPHA), setData: vi.fn() };
+    fireEvent.dragStart(card, { dataTransfer });
+    fireEvent.drop(unlinkedCol, { dataTransfer });
+    await waitFor(() => expect(axios.delete).toHaveBeenCalledWith(expect.stringContaining('/tenants/A/groups/wa-alpha/account'), expect.anything()));
   });
 
   it('vincular: pede confirmação explícita e manda Idempotency-Key — nada dispara sem o clique final', async () => {

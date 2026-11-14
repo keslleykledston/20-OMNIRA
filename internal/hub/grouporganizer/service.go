@@ -225,6 +225,25 @@ func (s *Service) UpsertCatalogEntry(ctx context.Context, actor, hub, sourceTena
 			return err
 		}
 		writesTotal.Inc("catalog_upsert")
+		// ADR-0059 addendum 9: a catalog entry gets an active self-link to its OWN origin tenant
+		// automatically, role 'operator' — the same gap hub_autodiscover_catalog_upsert (migration 000194)
+		// closes for the background-discovery path. NOT EXISTS matches any row at all (active or revoked),
+		// so a prior deliberate revoke of this exact self-link is never silently undone.
+		tag, err := q.Exec(c, `
+			INSERT INTO hub_group_tenant_links (hub_id, hub_group_id, tenant_id, role, assigned_by)
+			SELECT $1, $2, $3, 'operator', $4
+			WHERE NOT EXISTS (SELECT 1 FROM hub_group_tenant_links WHERE hub_group_id = $2 AND tenant_id = $3)`,
+			hub, out.ID, sourceTenant, actor)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			if err := audit(c, q, actor, "hub.group_organizer.link.created", "hub_group_tenant_link", out.ID,
+				map[string]any{"hub_id": hub, "hub_group_id": out.ID, "tenant_id": sourceTenant, "role": "operator", "via": "auto_self_link"}); err != nil {
+				return err
+			}
+			writesTotal.Inc("link_create")
+		}
 		return nil
 	})
 	return out, err
@@ -409,20 +428,31 @@ func (s *Service) ListLinksForHub(ctx context.Context, actor, hub uuid.UUID) ([]
 	return out, err
 }
 
+// AccountRef is a customer_account named just for display — used for a group's additional (non-primary)
+// clients (ADR-0059 addendum 8), mirroring internal/groups/adapters/http.go's own accountRef shape.
+type AccountRef struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
 // RelationshipContext is the tenant-side classification of a catalog entry's real WhatsApp group
-// (wa_groups.purpose) plus the CRM customer_account it is linked to, if any — read only, never written
-// here (that stays the tenant's own Groups page, see migration 000189/000190/000191). Purpose is always
-// present (wa_groups defaults it to 'other'); AccountID/AccountDisplayName are nil when the group has no
-// account_id, which is the expected, unremarkable case for an 'internal_management'/'internal_team' group.
-// WaGroupID is always present when a row exists at all (the query inner-joins wa_groups): it lets the Hub
-// Organizer frontend address the real wa_groups row when it calls the tenant's OWN existing
-// PUT .../groups/{id}/account endpoint directly — a real action, not routed through this package.
+// (wa_groups.purpose) plus the CRM customer_account(s) it is linked to, if any — read only, never
+// written here (that stays the tenant's own Groups page, see migration 000189/000190/000191/000193).
+// Purpose is always present (wa_groups defaults it to 'other'); AccountID/AccountDisplayName are nil when
+// the group has no account_id, which is the expected, unremarkable case for an
+// 'internal_management'/'internal_team' group. WaGroupID is always present when a row exists at all (the
+// query inner-joins wa_groups): it lets the Hub Organizer frontend address the real wa_groups row when it
+// calls the tenant's OWN existing PUT/POST .../groups/{id}/account(s) endpoints directly — a real action,
+// not routed through this package. AdditionalAccounts is every OTHER client the group also concerns
+// (wa_group_additional_accounts, migration 000192 — e.g. a "swap"/peering group); never the primary
+// above, always present, empty when there are none.
 type RelationshipContext struct {
-	HubGroupID         uuid.UUID  `json:"hub_group_id"`
-	WaGroupID          uuid.UUID  `json:"wa_group_id"`
-	Purpose            string     `json:"purpose"`
-	AccountID          *uuid.UUID `json:"account_id,omitempty"`
-	AccountDisplayName *string    `json:"account_display_name,omitempty"`
+	HubGroupID         uuid.UUID    `json:"hub_group_id"`
+	WaGroupID          uuid.UUID    `json:"wa_group_id"`
+	Purpose            string       `json:"purpose"`
+	AccountID          *uuid.UUID   `json:"account_id,omitempty"`
+	AccountDisplayName *string      `json:"account_display_name,omitempty"`
+	AdditionalAccounts []AccountRef `json:"additional_accounts"`
 }
 
 // RelationshipContextForHub reads every catalog entry's tenant-side classification in one call (same N+1
@@ -432,7 +462,8 @@ type RelationshipContext struct {
 func (s *Service) RelationshipContextForHub(ctx context.Context, actor, hub uuid.UUID) ([]RelationshipContext, error) {
 	out := []RelationshipContext{}
 	err := s.tx(ctx, actor, func(c context.Context, q platformdb.Querier) error {
-		rows, err := q.Query(c, `SELECT hub_group_id, wa_group_id, purpose, account_id, account_display_name
+		rows, err := q.Query(c, `SELECT hub_group_id, wa_group_id, purpose, account_id, account_display_name,
+		                               additional_account_ids, additional_account_names
 		                        FROM hub_group_catalog_relationship_context($1, $2)`, hub, actor)
 		if err != nil {
 			return err
@@ -440,8 +471,15 @@ func (s *Service) RelationshipContextForHub(ctx context.Context, actor, hub uuid
 		defer rows.Close()
 		for rows.Next() {
 			var e RelationshipContext
-			if err := rows.Scan(&e.HubGroupID, &e.WaGroupID, &e.Purpose, &e.AccountID, &e.AccountDisplayName); err != nil {
+			var extraIDs []uuid.UUID
+			var extraNames []string
+			if err := rows.Scan(&e.HubGroupID, &e.WaGroupID, &e.Purpose, &e.AccountID, &e.AccountDisplayName,
+				&extraIDs, &extraNames); err != nil {
 				return err
+			}
+			e.AdditionalAccounts = make([]AccountRef, len(extraIDs))
+			for i, id := range extraIDs {
+				e.AdditionalAccounts[i] = AccountRef{ID: id, Name: extraNames[i]}
 			}
 			out = append(out, e)
 		}

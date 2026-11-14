@@ -22,7 +22,7 @@ func TestAlertChannelForConversationFindsTheConfiguredGroup(t *testing.T) {
 	e := newEnv(t)
 	tenant, conn := e.tenant()
 	gid := e.group(tenant, conn, jid1, "Canal interno", true)
-	e.exec(`UPDATE wa_groups SET is_alert_channel=true WHERE id=$1`, gid)
+	e.exec(`UPDATE wa_groups SET is_alert_channel=true, purpose='internal_management' WHERE id=$1`, gid)
 	conv := e.conversation(tenant, conn.ID)
 
 	repo := NewPostgresAlertChannelRepository(e.app)
@@ -63,7 +63,7 @@ func TestAlertChannelForConversationNeverCrossesTenants(t *testing.T) {
 	e := newEnv(t)
 	tenantA, connA := e.tenant()
 	gidA := e.group(tenantA, connA, jid1, "Canal A", true)
-	e.exec(`UPDATE wa_groups SET is_alert_channel=true WHERE id=$1`, gidA)
+	e.exec(`UPDATE wa_groups SET is_alert_channel=true, purpose='internal_management' WHERE id=$1`, gidA)
 
 	tenantB, connB := e.tenant()
 	convB := e.conversation(tenantB, connB.ID)
@@ -80,7 +80,7 @@ func TestAlertChannelForConversationIsSilentForASuspendedTenant(t *testing.T) {
 	e := newEnv(t)
 	tenant, conn := e.tenant()
 	gid := e.group(tenant, conn, jid1, "Canal interno", true)
-	e.exec(`UPDATE wa_groups SET is_alert_channel=true WHERE id=$1`, gid)
+	e.exec(`UPDATE wa_groups SET is_alert_channel=true, purpose='internal_management' WHERE id=$1`, gid)
 	conv := e.conversation(tenant, conn.ID)
 	e.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, tenant)
 

@@ -400,6 +400,16 @@ func main() {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}
 	groupsHandler := groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory)
+	// ADR-0015 addendum 2: the SAME cleared-files-only reader shape 1:1 media already uses (mediaadapters.Reader),
+	// against wa_group_message_media instead. Without a media directory a group's media route answers 503, same
+	// as the 1:1 one answers 404 without it.
+	if cfg.MediaDir != "" {
+		if store, err := mediaadapters.OpenFileStore(cfg.MediaDir); err == nil {
+			groupsHandler.WithMediaReader(groupsadapters.NewGroupMediaReader(dbPool, store))
+		} else {
+			log.Printf("groups: media store unavailable, group image/PDF downloads disabled: %v", err)
+		}
+	}
 	srv.RegisterGroupHandlers(dbPool, groupsHandler)
 	srv.RegisterSLAAlertFeatureFlagHandlers(dbPool, groupsadapters.NewSLAAlertFeatureFlagHandler(dbPool))
 	if cfg.ServiceContextEnabled {

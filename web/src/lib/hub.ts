@@ -2,7 +2,7 @@ import axios from 'axios'
 import { API_BASE } from './config'
 import { authHeaders } from './session'
 import { MAX_ATTACHMENT_BYTES, type UploadedAttachment } from './attachments'
-import type { GroupPurpose } from './groups'
+import type { AccountRef, GroupPurpose } from './groups'
 
 // Mirrors the Hub schemas in contracts/openapi/omnira-v1.yaml (GET /hubs, /hubs/{id}/inbox, /hubs/{id}/inbox/{item}, POST .../claim and .../messages).
 // The Hub API is feature-flagged on the server: when it is off the routes do not exist and /hubs answers 404.
@@ -531,6 +531,9 @@ export interface GroupRelationshipContext {
   purpose: GroupPurpose
   account_id?: string
   account_display_name?: string
+  // Every OTHER client this group also concerns (ADR-0059 addendum 8, e.g. a "swap"/peering group) —
+  // never the primary above, always present, empty when there are none.
+  additional_accounts: AccountRef[]
 }
 
 export interface GroupLink {

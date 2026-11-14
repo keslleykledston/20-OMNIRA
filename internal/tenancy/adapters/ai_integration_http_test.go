@@ -313,3 +313,56 @@ func TestAITestCallsTheProviderWithTheKeyInAHeaderAndReturnsOnlySafeMessages(t *
 		}
 	}
 }
+
+// ADR-0015 addendum 2: group image interpretation shares the same key/budget/consent as 1:1 vision, but is
+// its own explicit decision — never implied by enabling 1:1 alone, and never left stranded true if the base
+// integration is turned off.
+func TestAIGroupMediaRidesTheSameKeyButIsItsOwnDecision(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	h := aiHandler(t, app)
+	a := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+
+	// Cannot turn on group media before the base integration is enabled.
+	if rec := callAI(t, app, h.Put, a.tenantID, admin, http.MethodPut, `{"group_media_enabled":true}`); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("group_media before enabled = %d, want 422", rec.Code)
+	}
+
+	rec := callAI(t, app, h.Put, a.tenantID, admin, http.MethodPut, `{"api_key":"`+testKey+`","enabled":true,"accept_external_ai":true}`)
+	if got := aiBody(t, rec); rec.Code != 200 || !got.Enabled || got.GroupMediaEnabled {
+		t.Fatalf("enable base integration = %d %+v", rec.Code, got)
+	}
+
+	// Enabling the base integration and group media in the SAME request works.
+	rec = callAI(t, app, h.Put, a.tenantID, admin, http.MethodPut, `{"group_media_enabled":true}`)
+	got := aiBody(t, rec)
+	if rec.Code != 200 || !got.GroupMediaEnabled {
+		t.Fatalf("enable group media = %d %+v", rec.Code, got)
+	}
+	if v := aiGroupMediaEnabled(t, seed, a.tenantID); !v {
+		t.Fatal("database must reflect group_media_enabled=true")
+	}
+
+	// Turning the base integration off cascades: group media never stays stranded true underneath it.
+	rec = callAI(t, app, h.Put, a.tenantID, admin, http.MethodPut, `{"enabled":false}`)
+	got = aiBody(t, rec)
+	if rec.Code != 200 || got.Enabled || got.GroupMediaEnabled {
+		t.Fatalf("disable base integration = %d %+v", rec.Code, got)
+	}
+	if v := aiGroupMediaEnabled(t, seed, a.tenantID); v {
+		t.Fatal("database must cascade group_media_enabled to false")
+	}
+
+	// The CHECK constraint refuses the invalid state on its own too.
+	if _, err := seed.Exec(context.Background(), `UPDATE tenant_ai_integrations SET enabled=false, group_media_enabled=true WHERE tenant_id=$1`, a.tenantID); err == nil {
+		t.Fatal("the CHECK constraint must refuse group_media_enabled without enabled")
+	}
+}
+
+func aiGroupMediaEnabled(t *testing.T, seed *pgxpool.Pool, tenant uuid.UUID) (v bool) {
+	t.Helper()
+	if err := seed.QueryRow(context.Background(), `SELECT group_media_enabled FROM tenant_ai_integrations WHERE tenant_id=$1`, tenant).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}

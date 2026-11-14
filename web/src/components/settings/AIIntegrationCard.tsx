@@ -248,6 +248,29 @@ export default function AIIntegrationCard() {
             )}
           </section>
 
+          <section aria-labelledby="ai-group-media-title" className="flex flex-col gap-2">
+            <h3 id="ai-group-media-title" className="text-sm font-semibold text-text-primary">Imagens em grupos do WhatsApp</h3>
+            <label className="flex items-start gap-2 text-sm text-text-primary">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={data.group_media_enabled}
+                disabled={busy || !data.enabled}
+                onChange={(e) => {
+                  const checked = e.target.checked
+                  update.mutate(
+                    { group_media_enabled: checked },
+                    { onSuccess: (n) => apply(n, checked ? 'Interpretação de imagens de grupo ativada.' : 'Interpretação de imagens de grupo desativada.') },
+                  )
+                }}
+              />
+              <span>
+                Também ler e interpretar imagens recebidas em grupos do WhatsApp, com a mesma chave e orçamento acima.
+                {!data.enabled && <span className="block text-xs text-text-tertiary">Ative a integração acima primeiro.</span>}
+              </span>
+            </label>
+          </section>
+
           {message && (
             <p role={message.kind === 'error' ? 'alert' : 'status'} className={message.kind === 'error' ? 'text-sm text-status-danger' : 'text-sm text-status-success'}>
               {message.text}
