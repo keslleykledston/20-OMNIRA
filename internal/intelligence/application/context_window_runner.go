@@ -57,6 +57,7 @@ type ContextWindowRunner struct {
 	cfg        ContextWindowRunnerConfig
 	metrics    JobMetrics
 	usageFlush func(ctx context.Context, items []aiusage.Record) error
+	liveGate   func(ctx context.Context) (bool, error)
 }
 
 func NewContextWindowRunner(store ports.ContextWindowStore, analyzer WindowAnalyzer, session TenantSession, cfg ContextWindowRunnerConfig, m JobMetrics) *ContextWindowRunner {
@@ -73,6 +74,17 @@ func NewContextWindowRunner(store ports.ContextWindowStore, analyzer WindowAnaly
 // (WindowAnalyzerService.WithLedger's direct-write path), just without the pool-exhaustion protection.
 func (r *ContextWindowRunner) WithUsageFlush(flush func(ctx context.Context, items []aiusage.Record) error) *ContextWindowRunner {
 	r.usageFlush = flush
+	return r
+}
+
+// WithLiveGate wires the CONTEXT.2 operator kill switch (context_intelligence_v2_feature, migration
+// 000204): a SECOND gate, layered on top of (never replacing) the OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED
+// env var that decides whether this runner is even started. Checked on EVERY tick, same fail-safe
+// idiom as groupsapp.SLAAlertService.HandleBreach: a gate error is logged and treated as "not
+// enabled" rather than propagated — it must never retry-storm the job queue over a flag-read hiccup.
+// A runner without this (nil liveGate) behaves exactly as before: always enabled.
+func (r *ContextWindowRunner) WithLiveGate(gate func(ctx context.Context) (bool, error)) *ContextWindowRunner {
+	r.liveGate = gate
 	return r
 }
 
@@ -94,7 +106,19 @@ func (r *ContextWindowRunner) Run(ctx context.Context, every time.Duration) {
 }
 
 // ProcessOnce sweeps due windows, then claims and analyzes a batch; it returns how many were claimed.
+// Paused by WithLiveGate: returns (0, nil) without sweeping or claiming anything — an operator
+// flipping the switch off takes effect on the very next tick, no restart needed.
 func (r *ContextWindowRunner) ProcessOnce(ctx context.Context) (int, error) {
+	if r.liveGate != nil {
+		enabled, err := r.liveGate(ctx)
+		if err != nil {
+			log.Printf("context window: live gate check failed, skipping this tick: %v", err)
+			return 0, nil
+		}
+		if !enabled {
+			return 0, nil
+		}
+	}
 	if _, err := r.store.Sweep(ctx, time.Now().UTC(), r.cfg.SweepLimit); err != nil {
 		return 0, err
 	}

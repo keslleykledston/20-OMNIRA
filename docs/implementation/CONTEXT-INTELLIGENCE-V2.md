@@ -184,6 +184,25 @@ Migração 000176 (checagem de autorização adicionada à função) round-trip 
 - SQL migration rollback documentado (preferir forward-fix em produção); não fazer reset, DROP ou seed em produção.
 - Atualizar OpenAPI/AsyncAPI, ADR novo se alterar decisão relevante, `.changes/`, `docs/AI_HANDOFF.md` se existir e relatório de gates.
 
+### Addendum (2026-11-14) — botão liga/desliga no console do operador, SEGUNDO gate sobre a flag de host
+
+Migration `000204_context_intelligence_v2_feature_flag`: tabela singleton `context_intelligence_v2_feature`
+(mesmo molde do kill switch de alerta de SLA de grupo, ADR-0058 addendum), `internal/intelligence/adapters`
+(`PostgresContextIntelligenceV2FeatureFlagRepository` + `ContextIntelligenceV2FeatureFlagHandler`),
+`GET/PUT /api/v1/platform/context-intelligence-v2` (autoridade `is_platform_operator`, igual ao
+`group-sla-alert`), e um botão em `/plataforma` → aba "Funcionalidades".
+
+**Importante: isto NÃO substitui `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED`.** A variável de ambiente
+continua sendo o gate de host — decide se o worker sequer instancia o consumer/runner do CONTEXT.2A/2B
+e se a API registra o read model do CONTEXT.2C (ambos seguem FOUNDATION CODE, não liberados para
+produção). O botão é um SEGUNDO gate, mais fino, checado a cada tick do `ContextWindowRunner`
+(`WithLiveGate`, igual ao `s.flags.Enabled(ctx)` de `SLAAlertService.HandleBreach`): só tem qualquer
+efeito num host onde a variável de ambiente já está `true`. Em qualquer outro host (inclusive o atual,
+onde a flag segue `false`), o botão existe e responde, mas liga/desliga um switch que nenhum código em
+execução está olhando — é visibilidade e controle operacional adiantados para quando a fundação for
+de fato implantada, não uma mudança no estado atual da flag de host. Linha padrão `enabled = false`,
+nunca ligada por este trabalho.
+
 ## 4. Critério de conclusão (NÃO atendido nesta branch atualmente)
 
 Só declarar FEATURE IMPLEMENTED quando worker, persistência, API e interface estiverem conectados, testados em PostgreSQL real, build Docker e frontend passarem, RLS/Hub validado, Codex review independente sem blockers, e flag desativada por default. Só declarar DEPLOYED após aplicação deliberada do release e smoke no ambiente alvo.

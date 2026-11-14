@@ -1168,6 +1168,21 @@ func (s *Server) RegisterSLAAlertFeatureFlagHandlers(dbPool *pgxpool.Pool, h *gr
 	s.mux.Handle("PUT "+base, wrap(h.Set))
 }
 
+// RegisterContextIntelligenceV2FeatureFlagHandlers mounts the CONTEXT.2 operator kill switch's admin
+// endpoint: platform-wide, never tenant-scoped (same shape as RegisterSLAAlertFeatureFlagHandlers),
+// authority is IsPlatformOperator alone, checked inside the handler.
+func (s *Server) RegisterContextIntelligenceV2FeatureFlagHandlers(dbPool *pgxpool.Pool, h *intelligenceadapters.ContextIntelligenceV2FeatureFlagHandler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(userSession(fn)) }
+	const base = "/api/v1/platform/context-intelligence-v2"
+	s.mux.Handle("GET "+base, wrap(h.Get))
+	s.mux.Handle("PUT "+base, wrap(h.Set))
+}
+
 // RegisterAttendanceHandlers exposes finalizing an attendance and the contact's attendance history (ADR-0020) behind authn +
 // the tenant session. Permissions (conversation.claim / conversation.manage) are checked by the service.
 func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendanceadapters.Handler) {

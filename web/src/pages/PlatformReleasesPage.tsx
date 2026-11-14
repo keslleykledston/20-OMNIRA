@@ -28,7 +28,12 @@ import {
 import type { usePlatformOperator } from '../hooks/usePlatformOperator'
 import { currentUserId, handleUnauthorized, isUnauthorized } from '../lib/session'
 import { showToast } from '../lib/toast'
-import { groupSlaAlertFeatureFlagAPI, type GroupSlaAlertFeatureFlag } from '../lib/platformFeatureFlags'
+import {
+  groupSlaAlertFeatureFlagAPI,
+  type GroupSlaAlertFeatureFlag,
+  contextIntelligenceV2FeatureFlagAPI,
+  type ContextIntelligenceV2FeatureFlag,
+} from '../lib/platformFeatureFlags'
 import {
   describePlatformReleaseError,
   isTerminalRunState,
@@ -359,7 +364,12 @@ export default function PlatformReleasesPage() {
           />
         )}
 
-        {section === 'funcionalidades' && <FeatureFlagsSection />}
+        {section === 'funcionalidades' && (
+          <div className="space-y-4">
+            <FeatureFlagsSection />
+            <ContextIntelligenceV2FlagSection />
+          </div>
+        )}
       </div>
 
       <Modal open={setVersionOpen} title="Registrar versão instalada" onClose={() => { setVersionKey.spend(); setSetVersionOpen(false) }}>
@@ -409,6 +419,55 @@ function FeatureFlagsSection() {
             <p className="text-body-sm text-text-secondary">
               Chave geral da plataforma: quando uma conversa estoura o SLA, envia uma mensagem de verdade ao grupo de WhatsApp que cada tenant escolheu como "canal de
               alerta" (tela Grupos). Esta chave é independente dessa escolha — as duas precisam estar ligadas para a mensagem ser enviada.
+            </p>
+            <label className="mt-4 flex items-center gap-2 text-body-md font-medium text-text-primary">
+              <input
+                type="checkbox"
+                checked={flag.data?.enabled ?? false}
+                disabled={setFlag.isPending}
+                onChange={(e) => setFlag.mutate(e.target.checked)}
+                className="h-4 w-4 rounded border-border-subtle"
+              />
+              {flag.data?.enabled ? 'Ligado' : 'Desligado'}
+            </label>
+            {flag.data?.updated_at && (
+              <p className="mt-2 text-body-sm text-text-secondary">Última alteração: {new Date(flag.data.updated_at).toLocaleString('pt-BR')}</p>
+            )}
+          </>
+        )}
+      </CardBody>
+    </Card>
+  )
+}
+
+// Context Intelligence v2 (CONTEXT.2) kill switch: a button that pauses/resumes the window
+// analysis runner without a worker restart. SECOND gate, layered on top of (never replacing) the
+// host-level OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED env var — this switch only has any effect on a
+// host where that env var is already true.
+function ContextIntelligenceV2FlagSection() {
+  const qc = useQueryClient()
+  const flag = useQuery({ queryKey: ['context-intelligence-v2-flag'], queryFn: () => contextIntelligenceV2FeatureFlagAPI.get(), retry: false })
+  const setFlag = useMutation({
+    mutationFn: (enabled: boolean) => contextIntelligenceV2FeatureFlagAPI.set(enabled),
+    onSuccess: (data) => qc.setQueryData<ContextIntelligenceV2FeatureFlag>(['context-intelligence-v2-flag'], data),
+    onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
+  })
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-section-md font-semibold text-text-primary">Context Intelligence v2 (CONTEXT.2)</h2>
+      </CardHeader>
+      <CardBody>
+        {flag.isLoading ? (
+          <LoadingState message="Carregando…" />
+        ) : flag.isError ? (
+          <ErrorState title="Não foi possível carregar" message={describePlatformReleaseError(flag.error)} action={{ label: 'Tentar novamente', onClick: () => void flag.refetch() }} />
+        ) : (
+          <>
+            <p className="text-body-sm text-text-secondary">
+              Liga/desliga a análise de janelas de contexto (resumo e tópicos gerados por IA a partir das conversas). Esta chave só tem efeito em um host
+              onde a fundação já foi implantada (variável de ambiente do host); nela, ela pausa ou retoma o processamento sem reiniciar o worker.
             </p>
             <label className="mt-4 flex items-center gap-2 text-body-md font-medium text-text-primary">
               <input

@@ -911,6 +911,65 @@ describe('PlatformReleasesPage — group SLA alert feature flag (ADR-0058 addend
       if (u.endsWith('/platform/releases')) return { data: { items: releases } }
       if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
       if (u.endsWith('/platform/group-sla-alert')) return Promise.reject({ response: { status: 404 } })
+      if (u.endsWith('/platform/context-intelligence-v2')) return { data: { enabled: false, updated_at: '2026-11-01T10:00:00Z' } }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    renderAt(<PlatformReleasesPage />)
+    const user = userEvent.setup()
+    await screen.findByText('rel-2026.10.0')
+    await user.click(screen.getByRole('tab', { name: 'Funcionalidades' }))
+    expect(await screen.findByText('Você não tem permissão de operador de plataforma, ou o recurso não existe.')).toBeInTheDocument()
+  })
+})
+
+// The CONTEXT.2 window analysis runner kill switch: same button pattern as the group SLA alert
+// one, a SECOND gate layered on top of the host-level OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED env var.
+describe('PlatformReleasesPage — Context Intelligence v2 feature flag', () => {
+  it('shows the current state and lets an operator flip it, without touching other platform data', async () => {
+    let flagEnabled = false
+    let flagUpdatedAt = '2026-11-01T10:00:00Z'
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) return { data: installation() }
+      if (u.endsWith('/platform/releases')) return { data: { items: releases } }
+      if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
+      if (u.endsWith('/platform/group-sla-alert')) return { data: { enabled: false, updated_at: '2026-11-01T10:00:00Z' } }
+      if (u.endsWith('/platform/context-intelligence-v2')) return { data: { enabled: flagEnabled, updated_at: flagUpdatedAt } }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    vi.mocked(axios.put).mockImplementation(async (url: string, body: any) => {
+      if (String(url).endsWith('/platform/context-intelligence-v2')) {
+        flagEnabled = body.enabled
+        flagUpdatedAt = '2026-11-01T11:00:00Z'
+        return { data: { enabled: flagEnabled, updated_by: 'op-1', updated_at: flagUpdatedAt } }
+      }
+      throw new Error(`unexpected PUT ${url}`)
+    })
+    renderAt(<PlatformReleasesPage />)
+    const user = userEvent.setup()
+    await screen.findByText('rel-2026.10.0')
+
+    await user.click(screen.getByRole('tab', { name: 'Funcionalidades' }))
+    const toggles = await screen.findAllByRole('checkbox')
+    expect(toggles).toHaveLength(2)
+    const toggle = toggles[1]
+    expect(toggle).not.toBeChecked()
+
+    await user.click(toggle)
+    await waitFor(() => expect(toggle).toBeChecked())
+    expect(vi.mocked(axios.put).mock.calls.some((c) => String(c[0]).endsWith('/platform/context-intelligence-v2') && (c[1] as any).enabled === true)).toBe(true)
+    // Flipping this switch never refetches releases/runs — it is its own independent resource.
+    expect(vi.mocked(axios.get).mock.calls.filter((c) => String(c[0]).endsWith('/platform/releases')).length).toBe(1)
+  })
+
+  it('shows a permission-style error for whoever is not a platform operator', async () => {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const u = String(url)
+      if (u.endsWith('/platform/installation')) return { data: installation() }
+      if (u.endsWith('/platform/releases')) return { data: { items: releases } }
+      if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
+      if (u.endsWith('/platform/group-sla-alert')) return { data: { enabled: false, updated_at: '2026-11-01T10:00:00Z' } }
+      if (u.endsWith('/platform/context-intelligence-v2')) return Promise.reject({ response: { status: 404 } })
       return Promise.reject({ response: { status: 404 } })
     })
     renderAt(<PlatformReleasesPage />)

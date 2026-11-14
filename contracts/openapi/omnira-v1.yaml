@@ -2314,6 +2314,36 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
+  /platform/context-intelligence-v2:
+    get:
+      operationId: getContextIntelligenceV2FeatureFlag
+      tags: [PlatformRelease]
+      summary: The CONTEXT.2 window analysis runner kill switch (platform operator)
+      description: |
+        Platform-wide, never tenant-scoped: whether the CONTEXT.2A/2B window analysis runner is live.
+        A SECOND gate, layered on top of (never replacing) the host-level OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED
+        env var, which decides whether the subsystem is wired up at all — this switch only has any
+        effect on a host where that env var is already true. Checked by the worker on every runner
+        tick, so a change here takes effect immediately, no restart needed.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ContextIntelligenceV2FeatureFlag' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    put:
+      operationId: setContextIntelligenceV2FeatureFlag
+      tags: [PlatformRelease]
+      summary: Flip the CONTEXT.2 window analysis runner kill switch (platform operator)
+      description: Audited as a platform-wide event (context_intelligence_v2_feature.enabled/disabled).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [enabled], properties: { enabled: { type: boolean } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ContextIntelligenceV2FeatureFlag' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /platform/monitoring/status:
     get:
       operationId: getPlatformMonitoringStatus
@@ -6831,6 +6861,13 @@ components:
         current_digests: { type: object }
         updated_at: { type: string, format: date-time }
     GroupSlaAlertFeatureFlag:
+      type: object
+      required: [enabled, updated_at]
+      properties:
+        enabled: { type: boolean }
+        updated_by: { type: string, format: uuid }
+        updated_at: { type: string, format: date-time }
+    ContextIntelligenceV2FeatureFlag:
       type: object
       required: [enabled, updated_at]
       properties:

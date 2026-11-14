@@ -656,6 +656,7 @@ func main() {
 		// WithUsageFlush: the runner collects each analysis' ledger writes instead of letting them open their own
 		// nested session while still holding this window's own (Codex review round 5) — it performs them itself,
 		// right after releasing that connection, on a context with no session of its own.
+		contextFeatureFlags := intelligenceadapters.NewPostgresContextIntelligenceV2FeatureFlagRepository(dbPool)
 		windowRunner := intelligenceapp.NewContextWindowRunner(windowStore, windowAnalyzer, windowSession, intelligenceapp.DefaultContextWindowRunnerConfig(), nil).
 			WithUsageFlush(func(ctx context.Context, items []aiusage.Record) error {
 				for _, rec := range items {
@@ -664,7 +665,8 @@ func main() {
 					}
 				}
 				return nil
-			})
+			}).
+			WithLiveGate(contextFeatureFlags.Enabled)
 		go windowRunner.Run(workerCtx, 2*time.Second)
 		windowHandler, err := contextwindowworker.NewHandler(windowStore, contextwindow.DefaultPolicy())
 		if err != nil {
@@ -676,7 +678,7 @@ func main() {
 		}
 		defer windowConsumer.Stop()
 		_, modelReady := windowModels.Route(intelligenceapp.TaskContextWindowAnalyze)
-		log.Printf("Context Intelligence v2 window scheduling + analysis started (CONTEXT.2A/2B; model configured=%v)\n", modelReady == nil)
+		log.Printf("Context Intelligence v2 window scheduling + analysis started (CONTEXT.2A/2B; model configured=%v; paused until the admin-console switch is turned on)\n", modelReady == nil)
 	}
 
 	// Flow Builder runtime (ADR-0019), only when OMNIRA_FLOWS_ENABLED=true: the inbound-message consumer and the sweeper for

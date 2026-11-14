@@ -418,6 +418,7 @@ func main() {
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsHandler)
 	srv.RegisterSLAAlertFeatureFlagHandlers(dbPool, groupsadapters.NewSLAAlertFeatureFlagHandler(dbPool))
+	srv.RegisterContextIntelligenceV2FeatureFlagHandlers(dbPool, intelligenceadapters.NewContextIntelligenceV2FeatureFlagHandler(dbPool))
 	if cfg.ServiceContextEnabled {
 		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
 		if cfg.ServiceFinalizeHookEnabled {

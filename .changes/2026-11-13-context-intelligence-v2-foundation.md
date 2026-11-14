@@ -92,3 +92,10 @@
 - Documented architecture, current reuse of existing intelligence/service-context modules, implementation gaps, and mandatory safety/deploy gates.
 - Schema, routing and API changed (additive migrations, two new tenant-scoped endpoints); still no production
   configuration or rollout change — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED` stays `false` everywhere.
+- 2026-11-14 addendum: added a platform-operator admin-console button (`GET/PUT /api/v1/platform/context-intelligence-v2`,
+  migration `000204_context_intelligence_v2_feature_flag`, same shape as ADR-0058's group SLA alert kill switch) that
+  pauses/resumes `ContextWindowRunner` on every tick (`WithLiveGate`), without a worker restart. This is a SECOND
+  gate layered on top of — never replacing — `OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED`, which stays the host-level
+  switch deciding whether the CONTEXT.2A/2B runner and CONTEXT.2C read model are wired up at all (still FOUNDATION
+  CODE, not cleared for production). The button's seed row defaults to `enabled = false` and was not turned on;
+  it has no observable effect on any host where the env var is still `false`.
