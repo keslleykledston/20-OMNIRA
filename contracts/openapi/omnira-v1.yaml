@@ -2344,6 +2344,25 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
+  /platform/operator-status:
+    get:
+      operationId: getPlatformOperatorStatus
+      tags: [PlatformRelease]
+      summary: Whether the signed-in person is a platform operator (ADR-0038)
+      description: |
+        Platform-wide, never tenant-scoped, and independent of every OTHER platform feature's own
+        flag (Update Manager, the SLA alert kill switch, Context Intelligence v2...): the admin
+        console's nav guard and every screen that needs "am I an operator" use this endpoint alone,
+        never a feature-specific one — a feature-specific probe stops answering for every real
+        operator the day that OTHER feature happens to be disabled.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: false, required: [is_operator], properties: { is_operator: { type: boolean, enum: [true] } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /platform/monitoring/status:
     get:
       operationId: getPlatformMonitoringStatus

@@ -1183,6 +1183,20 @@ func (s *Server) RegisterContextIntelligenceV2FeatureFlagHandlers(dbPool *pgxpoo
 	s.mux.Handle("PUT "+base, wrap(h.Set))
 }
 
+// RegisterOperatorStatusHandlers mounts the admin console's own "am I a platform operator" probe
+// (ADR-0038), independent of every other platform-wide feature's own flag — see
+// hubadapters.OperatorStatusHandler's doc comment for why this must never be answered by a
+// feature-specific endpoint (e.g. Update Manager's /platform/installation).
+func (s *Server) RegisterOperatorStatusHandlers(dbPool *pgxpool.Pool, h *hubadapters.OperatorStatusHandler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(userSession(fn)) }
+	s.mux.Handle("GET /api/v1/platform/operator-status", wrap(h.Get))
+}
+
 // RegisterAttendanceHandlers exposes finalizing an attendance and the contact's attendance history (ADR-0020) behind authn +
 // the tenant session. Permissions (conversation.claim / conversation.manage) are checked by the service.
 func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendanceadapters.Handler) {

@@ -107,6 +107,11 @@ const run = (state: string, id = 'run-1', actorId = 'u-1'): PlatformUpdateRun =>
 let releases: PlatformRelease[]
 let runs: PlatformUpdateRun[]
 let installationState: PlatformInstallation | { notFound: true }
+// Achado real em produção (2026-11-15): /platform/operator-status é a ÚNICA prova de "sou
+// operador?" (ver usePlatformOperator) — totalmente separada de installationState, que agora só
+// representa o estado do Update Manager (uma feature própria, pode estar indisponível SEM que a
+// pessoa deixe de ser operadora).
+let operatorIsOperator: boolean
 // Keyed by run id — events are per-run on the real server; a flat shared array would let one
 // run's events leak into another run's trail in these tests without that actually proving
 // anything about the page's own cursor/accumulator reset logic.
@@ -115,6 +120,10 @@ let eventsByRun: Record<string, PlatformUpdateEvent[]>
 function serve() {
   vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
     const u = String(url)
+    if (u.endsWith('/platform/operator-status')) {
+      if (!operatorIsOperator) return Promise.reject({ response: { status: 404 } })
+      return { data: { is_operator: true } }
+    }
     if (u.endsWith('/platform/installation')) {
       if ('notFound' in installationState) return Promise.reject({ response: { status: 404 } })
       return { data: installationState }
@@ -145,17 +154,29 @@ beforeEach(() => {
   releases = [release()]
   runs = []
   installationState = installation()
+  operatorIsOperator = true
   eventsByRun = {}
   serve()
 })
 
 describe('PlatformReleasesPage — permission', () => {
   it('shows a permission message (never the screen) for whoever is not a platform operator, and asks for nothing else', async () => {
-    installationState = { notFound: true }
+    operatorIsOperator = false
     renderAt(<PlatformReleasesPage />)
     expect(await screen.findByText(/Esta área é só para operadores de plataforma/)).toBeInTheDocument()
+    expect(vi.mocked(axios.get).mock.calls.some((c) => String(c[0]).includes('/platform/installation'))).toBe(false)
     expect(vi.mocked(axios.get).mock.calls.some((c) => String(c[0]).includes('/platform/releases'))).toBe(false)
     expect(vi.mocked(axios.get).mock.calls.some((c) => String(c[0]).includes('/platform/updates/runs'))).toBe(false)
+  })
+
+  it('shows the catalog even when Update Manager is unavailable on this host, for a confirmed operator', async () => {
+    installationState = { notFound: true }
+    renderAt(<PlatformReleasesPage />)
+    expect(await screen.findByText('O recurso de atualização remota (Update Manager) não está habilitado neste host.')).toBeInTheDocument()
+    // Funcionalidades keeps working — it does not depend on Update Manager at all.
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('tab', { name: 'Funcionalidades' }))
+    expect(await screen.findByText('Alerta de SLA em grupo (ADR-0058)')).toBeInTheDocument()
   })
 })
 
@@ -420,6 +441,7 @@ describe('PlatformReleasesPage — terminal transition (Codex round 2)', () => {
     let eventsCalls = 0
     vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) return { data: { items: releases } }
       if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
@@ -447,6 +469,7 @@ describe('PlatformReleasesPage — terminal transition (Codex round 2)', () => {
     let installCalls = 0
     vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) {
         installCalls += 1
         return { data: installation(installCalls === 1 ? '2026.09.0' : '2026.10.0') }
@@ -481,6 +504,7 @@ describe('PlatformReleasesPage — terminal transition (Codex round 2)', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) {
         installCalls += 1
         return { data: installation(installCalls === 1 ? '2026.09.0' : '2026.10.0') }
@@ -634,6 +658,7 @@ describe('PlatformReleasesPage — checkpoint detail and event-fetch errors (Cod
     runs = [run('DEPLOYING')]
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) return { data: { items: releases } }
       if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
@@ -656,6 +681,7 @@ describe('PlatformReleasesPage — pagination (Codex round 5)', () => {
     let lastBefore: string | undefined
     vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) {
         const before = config?.params?.before as string | undefined
@@ -683,6 +709,7 @@ describe('PlatformReleasesPage — pagination (Codex round 5)', () => {
     runs = firstPage
     vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) return { data: { items: [] } }
       if (u.endsWith('/platform/updates/runs')) {
@@ -709,6 +736,7 @@ describe('PlatformReleasesPage — pagination (Codex round 5)', () => {
     let currentFirstPage = firstPage
     vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) return { data: { items: [] } }
       if (u.endsWith('/platform/updates/runs')) {
@@ -737,6 +765,7 @@ describe('PlatformReleasesPage — pagination (Codex round 5)', () => {
     let currentFirstPage = firstPage
     vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) return { data: { items: [] } }
       if (u.endsWith('/platform/updates/runs')) {
@@ -772,6 +801,7 @@ describe('PlatformReleasesPage — pagination (Codex round 5)', () => {
     let resolveSecondPage: (() => void) | undefined
     vi.mocked(axios.get).mockImplementation((url: string, config?: any) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return Promise.resolve({ data: { is_operator: true } })
       if (u.endsWith('/platform/installation')) return Promise.resolve({ data: installation() })
       if (u.endsWith('/platform/releases')) return Promise.resolve({ data: { items: [] } })
       if (u.endsWith('/platform/updates/runs')) {
@@ -873,6 +903,7 @@ describe('PlatformReleasesPage — group SLA alert feature flag (ADR-0058 addend
     let flagUpdatedAt = '2026-11-01T10:00:00Z'
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) return { data: { items: releases } }
       if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
@@ -907,6 +938,7 @@ describe('PlatformReleasesPage — group SLA alert feature flag (ADR-0058 addend
   it('shows a permission-style error for whoever is not a platform operator', async () => {
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) return { data: { items: releases } }
       if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
@@ -930,6 +962,7 @@ describe('PlatformReleasesPage — Context Intelligence v2 feature flag', () => 
     let flagUpdatedAt = '2026-11-01T10:00:00Z'
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) return { data: { items: releases } }
       if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }
@@ -965,6 +998,7 @@ describe('PlatformReleasesPage — Context Intelligence v2 feature flag', () => 
   it('shows a permission-style error for whoever is not a platform operator', async () => {
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       const u = String(url)
+      if (u.endsWith('/platform/operator-status')) return { data: { is_operator: true } }
       if (u.endsWith('/platform/installation')) return { data: installation() }
       if (u.endsWith('/platform/releases')) return { data: { items: releases } }
       if (u.endsWith('/platform/updates/runs')) return { data: { items: runs } }

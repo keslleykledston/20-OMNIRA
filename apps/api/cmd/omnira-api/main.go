@@ -37,6 +37,7 @@ import (
 	flowstemplates "github.com/omnira/omnira/internal/flows/templates"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	hubaccess "github.com/omnira/omnira/internal/hub/access"
+	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
 	identityapp "github.com/omnira/omnira/internal/identity/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
@@ -419,6 +420,10 @@ func main() {
 	srv.RegisterGroupHandlers(dbPool, groupsHandler)
 	srv.RegisterSLAAlertFeatureFlagHandlers(dbPool, groupsadapters.NewSLAAlertFeatureFlagHandler(dbPool))
 	srv.RegisterContextIntelligenceV2FeatureFlagHandlers(dbPool, intelligenceadapters.NewContextIntelligenceV2FeatureFlagHandler(dbPool))
+	// Platform operator authority (ADR-0038) does not depend on Hub, Update Manager, or any other
+	// feature's own flag — registered unconditionally so the admin console's nav guard never goes
+	// dark just because an unrelated platform feature happens to be disabled on this host.
+	srv.RegisterOperatorStatusHandlers(dbPool, hubadapters.NewOperatorStatusHandler(dbPool))
 	if cfg.ServiceContextEnabled {
 		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
 		if cfg.ServiceFinalizeHookEnabled {

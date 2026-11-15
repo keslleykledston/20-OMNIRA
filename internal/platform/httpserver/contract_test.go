@@ -12,6 +12,7 @@ import (
 
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
+	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	"github.com/omnira/omnira/internal/platform/config"
 	"github.com/omnira/omnira/internal/platformrelease/updatemgr"
@@ -96,6 +97,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterGroupHandlers(nil, groupsadapters.NewHandler(nil, nil, nil))
 	s.RegisterSLAAlertFeatureFlagHandlers(nil, groupsadapters.NewSLAAlertFeatureFlagHandler(nil))
 	s.RegisterContextIntelligenceV2FeatureFlagHandlers(nil, intelligenceadapters.NewContextIntelligenceV2FeatureFlagHandler(nil))
+	s.RegisterOperatorStatusHandlers(nil, hubadapters.NewOperatorStatusHandler(nil))
 	s.RegisterIntelligenceHandlers(nil, intelligenceadapters.NewTopicHandler(nil, nil, nil))
 	s.RegisterAIIntegrationHandlers(nil, tenancyadapters.NewAIIntegrationHandler(nil, nil, nil))
 	s.RegisterHubHandlers(nil, true, true, true)

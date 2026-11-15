@@ -101,7 +101,16 @@ export default function PlatformReleasesPage() {
   // guarda libera o Outlet, disparava seu próprio refetchOnMount; enquanto em voo, a MESMA
   // guarda via isLoading=true de novo e desmontava o Outlet (e a assinatura nova com ele) —
   // ciclo de montar/desmontar para sempre.
-  const { query: installation } = useOutletContext<ReturnType<typeof usePlatformOperator>>()
+  const { query: operatorProbe } = useOutletContext<ReturnType<typeof usePlatformOperator>>()
+  // Achado real em produção (2026-11-15): Update Manager (/platform/installation) é uma feature
+  // PRÓPRIA (F6, atrás de OMNIRA_PLATFORM_RELEASE_API_ENABLED) — nunca a prova de "sou operador?"
+  // (isso é operatorProbe, acima, vindo de usePlatformOperator). Um host onde só Update Manager
+  // está desligado não pode esconder as outras seções desta tela (Funcionalidades) nem negar
+  // acesso a um operador de verdade: cada dependência tem sua própria query e seu próprio estado
+  // de "indisponível", nenhuma delas bloqueia a página inteira.
+  const installation = useQuery({ queryKey: ['platform-installation'], queryFn: () => platformInstallationAPI.get(), enabled: operatorProbe.isSuccess, retry: false })
+  const installationStatus = (installation.error as { response?: { status?: number } } | null)?.response?.status
+  const installationUnavailable = installation.isError && installationStatus === 404
   const releases = useQuery({ queryKey: ['platform-releases'], queryFn: () => platformReleasesAPI.list(), enabled: installation.isSuccess, retry: false })
   const runs = useQuery({ queryKey: ['platform-runs'], queryFn: () => platformRunsAPI.list(), enabled: installation.isSuccess, retry: false, refetchInterval: 10_000 })
 
@@ -253,8 +262,8 @@ export default function PlatformReleasesPage() {
   }, [runs.data, trackedRunId])
 
   useEffect(() => {
-    if ([installation.error, releases.error, runs.error].some(isUnauthorized)) handleUnauthorized()
-  }, [installation.error, releases.error, runs.error])
+    if ([operatorProbe.error, installation.error, releases.error, runs.error].some(isUnauthorized)) handleUnauthorized()
+  }, [operatorProbe.error, installation.error, releases.error, runs.error])
 
   const setVersionKey = useStableIdempotencyKey()
   const setVersionMutation = useMutation({
@@ -289,15 +298,14 @@ export default function PlatformReleasesPage() {
     onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
   })
 
-  if (installation.isLoading) return <div className="p-6"><LoadingState message="Verificando acesso de operador de plataforma…" /></div>
-  if (installation.isError) {
-    if ((installation.error as { response?: { status?: number } })?.response?.status === 404) {
+  if (operatorProbe.isLoading) return <div className="p-6"><LoadingState message="Verificando acesso de operador de plataforma…" /></div>
+  if (operatorProbe.isError) {
+    if ((operatorProbe.error as { response?: { status?: number } })?.response?.status === 404) {
       return <div className="p-6"><PermissionState message="Esta área é só para operadores de plataforma (ADR-0038). Se você deveria ter acesso, peça a um operador existente para te adicionar." /></div>
     }
-    return <div className="p-6"><ErrorState message="Não foi possível carregar o estado da instalação." action={{ label: 'Tentar novamente', onClick: () => void installation.refetch() }} /></div>
+    return <div className="p-6"><ErrorState message="Não foi possível confirmar seu acesso de operador de plataforma." action={{ label: 'Tentar novamente', onClick: () => void operatorProbe.refetch() }} /></div>
   }
   const inst = installation.data
-  if (!inst) return null
 
   return (
     <div className="flex min-h-full flex-col">
@@ -312,56 +320,76 @@ export default function PlatformReleasesPage() {
             <h2 className="text-section-md font-semibold text-text-primary">Instalação atual</h2>
           </CardHeader>
           <CardBody>
-            <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="Canal" value={inst.channel} />
-              <Field label="Versão instalada" value={inst.current_version || 'não registrada'} warn={!inst.current_version} />
-              <Field label="Protocolo do agente" value={String(inst.agent_protocol)} />
-              <Field label="Atualizado em" value={new Date(inst.updated_at).toLocaleString('pt-BR')} />
-            </dl>
-            {!inst.current_version && (
-              <p className="mt-4 text-body-sm text-status-warning-strong">
-                Sem a versão instalada registrada, o preflight bloqueia toda release por padrão (fail-closed).
+            {installation.isLoading ? (
+              <LoadingState message="Carregando…" />
+            ) : installationUnavailable ? (
+              <p className="text-body-sm text-text-tertiary">
+                O recurso de atualização remota (Update Manager) não está habilitado neste host.
               </p>
-            )}
-            <div className="mt-4">
-              <Button variant="secondary" size="sm" onClick={() => setSetVersionOpen(true)}>
-                Registrar versão instalada
-              </Button>
-            </div>
+            ) : installation.isError ? (
+              <ErrorState message="Não foi possível carregar o estado da instalação." action={{ label: 'Tentar novamente', onClick: () => void installation.refetch() }} />
+            ) : inst ? (
+              <>
+                <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <Field label="Canal" value={inst.channel} />
+                  <Field label="Versão instalada" value={inst.current_version || 'não registrada'} warn={!inst.current_version} />
+                  <Field label="Protocolo do agente" value={String(inst.agent_protocol)} />
+                  <Field label="Atualizado em" value={new Date(inst.updated_at).toLocaleString('pt-BR')} />
+                </dl>
+                {!inst.current_version && (
+                  <p className="mt-4 text-body-sm text-status-warning-strong">
+                    Sem a versão instalada registrada, o preflight bloqueia toda release por padrão (fail-closed).
+                  </p>
+                )}
+                <div className="mt-4">
+                  <Button variant="secondary" size="sm" onClick={() => setSetVersionOpen(true)}>
+                    Registrar versão instalada
+                  </Button>
+                </div>
+              </>
+            ) : null}
           </CardBody>
         </Card>
 
         <Tabs items={TAB_ITEMS} value={section} onChange={setSection} aria-label="Seções de Plataforma" />
 
         {section === 'catalogo' && (
-          <CatalogSection
-            releases={releases}
-            olderReleases={olderReleases}
-            hasMoreReleases={hasMoreReleases}
-            onLoadMore={() => loadMoreReleases.mutate()}
-            isLoadingMore={loadMoreReleases.isPending}
-            selectedRelease={selectedRelease}
-            onSelect={setSelectedRelease}
-            onIngest={() => setIngestOpen(true)}
-            onRunStarted={(run) => {
-              trackRun(run.id)
-              setSection('atualizacoes')
-              void qc.invalidateQueries({ queryKey: ['platform-runs'] })
-            }}
-            installedVersion={inst.current_version}
-          />
+          installationUnavailable ? (
+            <EmptyState title="Catálogo não disponível" description="O catálogo de releases depende do Update Manager, não habilitado neste host." />
+          ) : (
+            <CatalogSection
+              releases={releases}
+              olderReleases={olderReleases}
+              hasMoreReleases={hasMoreReleases}
+              onLoadMore={() => loadMoreReleases.mutate()}
+              isLoadingMore={loadMoreReleases.isPending}
+              selectedRelease={selectedRelease}
+              onSelect={setSelectedRelease}
+              onIngest={() => setIngestOpen(true)}
+              onRunStarted={(run) => {
+                trackRun(run.id)
+                setSection('atualizacoes')
+                void qc.invalidateQueries({ queryKey: ['platform-runs'] })
+              }}
+              installedVersion={inst?.current_version}
+            />
+          )
         )}
 
         {section === 'atualizacoes' && (
-          <UpdatesSection
-            runs={runs}
-            olderRuns={olderRuns}
-            hasMoreRuns={hasMoreRuns}
-            onLoadMore={() => loadMoreRuns.mutate()}
-            isLoadingMore={loadMoreRuns.isPending}
-            trackedRunId={trackedRunId}
-            onTrack={trackRun}
-          />
+          installationUnavailable ? (
+            <EmptyState title="Histórico não disponível" description="O histórico de atualizações depende do Update Manager, não habilitado neste host." />
+          ) : (
+            <UpdatesSection
+              runs={runs}
+              olderRuns={olderRuns}
+              hasMoreRuns={hasMoreRuns}
+              onLoadMore={() => loadMoreRuns.mutate()}
+              isLoadingMore={loadMoreRuns.isPending}
+              trackedRunId={trackedRunId}
+              onTrack={trackRun}
+            />
+          )
         )}
 
         {section === 'funcionalidades' && (
