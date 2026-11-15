@@ -175,6 +175,11 @@ Cross-database queries não são permitidas.
   - http://localhost:8080/api/v1/auth/oidc/callback
   - http://localhost:3000/login?oidc=complete
   - https://omnira.devops.k3gsolutions.com.br/api/v1/auth/oidc/callback
+  - https://omnira.k3gsolutions.com.br/api/v1/auth/oidc/callback
+- Post Logout Redirect URIs (deve espelhar os hosts acima, sufixo `/login`):
+  - http://localhost:3000/login
+  - https://omnira.devops.k3gsolutions.com.br/login
+  - https://omnira.k3gsolutions.com.br/login
 
 ## Backup e Restore
 

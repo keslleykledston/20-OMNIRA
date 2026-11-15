@@ -37,15 +37,17 @@
       "redirectUris": [
         "http://localhost:28080/api/v1/auth/oidc/callback",
         "http://localhost:3000/login?oidc=complete",
-        "https://omnira.devops.k3gsolutions.com.br/api/v1/auth/oidc/callback"
+        "https://omnira.devops.k3gsolutions.com.br/api/v1/auth/oidc/callback",
+        "https://omnira.k3gsolutions.com.br/api/v1/auth/oidc/callback"
       ],
       "webOrigins": [
         "http://localhost:28080",
         "http://localhost:3000",
-        "https://omnira.devops.k3gsolutions.com.br"
+        "https://omnira.devops.k3gsolutions.com.br",
+        "https://omnira.k3gsolutions.com.br"
       ],
       "attributes": {
-        "post.logout.redirect.uris": "http://localhost:3000/login##https://omnira.devops.k3gsolutions.com.br/login"
+        "post.logout.redirect.uris": "http://localhost:3000/login##https://omnira.devops.k3gsolutions.com.br/login##https://omnira.k3gsolutions.com.br/login"
       },
       "protocolMappers": [
         {
