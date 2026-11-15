@@ -25,6 +25,7 @@ import {
   TextArea,
   type TabItem,
 } from '../components/primitives'
+import { Switch } from '../components/people/controls'
 import type { usePlatformOperator } from '../hooks/usePlatformOperator'
 import { currentUserId, handleUnauthorized, isUnauthorized } from '../lib/session'
 import { showToast } from '../lib/toast'
@@ -431,6 +432,10 @@ function FeatureFlagsSection() {
     onSuccess: (data) => qc.setQueryData<GroupSlaAlertFeatureFlag>(['group-sla-alert-flag'], data),
     onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
   })
+  const [draft, setDraft] = useState<boolean | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const current = flag.data?.enabled ?? false
+  const isDirty = draft !== null && draft !== current
 
   return (
     <Card>
@@ -448,19 +453,37 @@ function FeatureFlagsSection() {
               Chave geral da plataforma: quando uma conversa estoura o SLA, envia uma mensagem de verdade ao grupo de WhatsApp que cada tenant escolheu como "canal de
               alerta" (tela Grupos). Esta chave é independente dessa escolha — as duas precisam estar ligadas para a mensagem ser enviada.
             </p>
-            <label className="mt-4 flex items-center gap-2 text-body-md font-medium text-text-primary">
-              <input
-                type="checkbox"
-                checked={flag.data?.enabled ?? false}
-                disabled={setFlag.isPending}
-                onChange={(e) => setFlag.mutate(e.target.checked)}
-                className="h-4 w-4 rounded border-border-subtle"
-              />
-              {flag.data?.enabled ? 'Ligado' : 'Desligado'}
-            </label>
+            <div className="mt-4 flex items-center gap-3">
+              <Switch checked={draft ?? current} onChange={setDraft} disabled={setFlag.isPending} label="Alerta de SLA em grupo" />
+              <span className="text-body-md font-medium text-text-primary">{(draft ?? current) ? 'Ligado' : 'Desligado'}</span>
+            </div>
+            {isDirty && (
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" onClick={() => setConfirmOpen(true)} disabled={setFlag.isPending}>Salvar</Button>
+                <Button size="sm" variant="secondary" onClick={() => setDraft(null)} disabled={setFlag.isPending}>Cancelar</Button>
+              </div>
+            )}
             {flag.data?.updated_at && (
               <p className="mt-2 text-body-sm text-text-secondary">Última alteração: {new Date(flag.data.updated_at).toLocaleString('pt-BR')}</p>
             )}
+            <ConfirmDialog
+              open={confirmOpen}
+              title={draft ? 'Ligar o alerta de SLA em grupo?' : 'Desligar o alerta de SLA em grupo?'}
+              message={
+                draft
+                  ? 'Mensagens reais passam a ser enviadas ao grupo de alerta de cada tenant quando uma conversa estourar o SLA.'
+                  : 'Nenhuma mensagem de alerta de SLA será enviada a nenhum grupo até que esta chave seja ligada de novo.'
+              }
+              confirmLabel={draft ? 'Ligar' : 'Desligar'}
+              isPending={setFlag.isPending}
+              onConfirm={() =>
+                setFlag.mutate(draft!, {
+                  onSuccess: () => { setDraft(null); setConfirmOpen(false) },
+                  onError: () => setConfirmOpen(false),
+                })
+              }
+              onCancel={() => setConfirmOpen(false)}
+            />
           </>
         )}
       </CardBody>
@@ -480,6 +503,10 @@ function ContextIntelligenceV2FlagSection() {
     onSuccess: (data) => qc.setQueryData<ContextIntelligenceV2FeatureFlag>(['context-intelligence-v2-flag'], data),
     onError: (err) => showToast(describePlatformReleaseError(err), 'error'),
   })
+  const [draft, setDraft] = useState<boolean | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const current = flag.data?.enabled ?? false
+  const isDirty = draft !== null && draft !== current
 
   return (
     <Card>
@@ -497,19 +524,37 @@ function ContextIntelligenceV2FlagSection() {
               Liga/desliga a análise de janelas de contexto (resumo e tópicos gerados por IA a partir das conversas). Esta chave só tem efeito em um host
               onde a fundação já foi implantada (variável de ambiente do host); nela, ela pausa ou retoma o processamento sem reiniciar o worker.
             </p>
-            <label className="mt-4 flex items-center gap-2 text-body-md font-medium text-text-primary">
-              <input
-                type="checkbox"
-                checked={flag.data?.enabled ?? false}
-                disabled={setFlag.isPending}
-                onChange={(e) => setFlag.mutate(e.target.checked)}
-                className="h-4 w-4 rounded border-border-subtle"
-              />
-              {flag.data?.enabled ? 'Ligado' : 'Desligado'}
-            </label>
+            <div className="mt-4 flex items-center gap-3">
+              <Switch checked={draft ?? current} onChange={setDraft} disabled={setFlag.isPending} label="Context Intelligence v2" />
+              <span className="text-body-md font-medium text-text-primary">{(draft ?? current) ? 'Ligado' : 'Desligado'}</span>
+            </div>
+            {isDirty && (
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" onClick={() => setConfirmOpen(true)} disabled={setFlag.isPending}>Salvar</Button>
+                <Button size="sm" variant="secondary" onClick={() => setDraft(null)} disabled={setFlag.isPending}>Cancelar</Button>
+              </div>
+            )}
             {flag.data?.updated_at && (
               <p className="mt-2 text-body-sm text-text-secondary">Última alteração: {new Date(flag.data.updated_at).toLocaleString('pt-BR')}</p>
             )}
+            <ConfirmDialog
+              open={confirmOpen}
+              title={draft ? 'Ligar o Context Intelligence v2?' : 'Pausar o Context Intelligence v2?'}
+              message={
+                draft
+                  ? 'A análise de janelas de contexto (resumo e tópicos por IA) volta a processar as conversas neste host.'
+                  : 'A análise de janelas de contexto para de processar novas conversas até que esta chave seja ligada de novo.'
+              }
+              confirmLabel={draft ? 'Ligar' : 'Pausar'}
+              isPending={setFlag.isPending}
+              onConfirm={() =>
+                setFlag.mutate(draft!, {
+                  onSuccess: () => { setDraft(null); setConfirmOpen(false) },
+                  onError: () => setConfirmOpen(false),
+                })
+              }
+              onCancel={() => setConfirmOpen(false)}
+            />
           </>
         )}
       </CardBody>

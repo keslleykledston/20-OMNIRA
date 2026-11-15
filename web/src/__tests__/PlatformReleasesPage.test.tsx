@@ -923,13 +923,15 @@ describe('PlatformReleasesPage — group SLA alert feature flag (ADR-0058 addend
     await screen.findByText('rel-2026.10.0')
 
     await user.click(screen.getByRole('tab', { name: 'Funcionalidades' }))
-    const toggle = await screen.findByRole('checkbox')
-    expect(toggle).not.toBeChecked()
+    const toggle = await screen.findByRole('switch', { name: 'Alerta de SLA em grupo' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(screen.getByText('Desligado')).toBeInTheDocument()
 
     await user.click(toggle)
-    await waitFor(() => expect(toggle).toBeChecked())
     expect(screen.getByText('Ligado')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+    await user.click(await screen.findByRole('button', { name: 'Ligar' }))
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'))
     expect(vi.mocked(axios.put).mock.calls.some((c) => String(c[0]).endsWith('/platform/group-sla-alert') && (c[1] as any).enabled === true)).toBe(true)
     // Flipping the switch never refetches releases/runs — it is its own independent resource.
     expect(vi.mocked(axios.get).mock.calls.filter((c) => String(c[0]).endsWith('/platform/releases')).length).toBe(1)
@@ -983,13 +985,13 @@ describe('PlatformReleasesPage — Context Intelligence v2 feature flag', () => 
     await screen.findByText('rel-2026.10.0')
 
     await user.click(screen.getByRole('tab', { name: 'Funcionalidades' }))
-    const toggles = await screen.findAllByRole('checkbox')
-    expect(toggles).toHaveLength(2)
-    const toggle = toggles[1]
-    expect(toggle).not.toBeChecked()
+    const toggle = await screen.findByRole('switch', { name: 'Context Intelligence v2' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
 
     await user.click(toggle)
-    await waitFor(() => expect(toggle).toBeChecked())
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+    await user.click(await screen.findByRole('button', { name: 'Ligar' }))
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'))
     expect(vi.mocked(axios.put).mock.calls.some((c) => String(c[0]).endsWith('/platform/context-intelligence-v2') && (c[1] as any).enabled === true)).toBe(true)
     // Flipping this switch never refetches releases/runs — it is its own independent resource.
     expect(vi.mocked(axios.get).mock.calls.filter((c) => String(c[0]).endsWith('/platform/releases')).length).toBe(1)
