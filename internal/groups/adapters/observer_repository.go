@@ -33,7 +33,11 @@ func (r *PostgresObserverRepository) system(ctx context.Context, fn func(ctx con
 // tenant must be active, and no suggestion row may exist yet. Eligible means real text OR (ADR-0015 addendum
 // 2) a completed image analysis — a text-less image message with no analysis yet (or one that never
 // completes) simply waits, same as a media message always has under ADR-0055 decision 4. Oldest first, so a
-// group that just opted in is worked through in the order the conversation happened.
+// group that just opted in is worked through in the order the conversation happened — and so the Service can
+// group consecutive rows of the SAME group together into one window (ADR-0055 addendum 4) without a second
+// sort. AuthorName uses the same "team alias wins over the raw name" resolution Context already applies:
+// addendum 4 may classify several candidates together, possibly from different senders, so the window-builder
+// needs to label each one, not just the single target a non-windowed classify used to see.
 func (r *PostgresObserverRepository) Claim(ctx context.Context, limit int) ([]groupsapp.Candidate, error) {
 	if limit <= 0 {
 		limit = 1
@@ -41,15 +45,19 @@ func (r *PostgresObserverRepository) Claim(ctx context.Context, limit int) ([]gr
 	var out []groupsapp.Candidate
 	err := r.system(ctx, func(ctx context.Context, q platformdb.Querier) error {
 		rows, err := q.Query(ctx, `
-			SELECT m.id, m.tenant_id, m.group_id, m.sent_at, m.body, COALESCE(a.body, '')
+			SELECT m.id, m.tenant_id, m.group_id, m.sent_at,
+			       COALESCE(NULLIF(cp.alias, ''), NULLIF(ct.alias, ''), m.author_name),
+			       m.body, COALESCE(a.body, '')
 			FROM wa_group_messages m
 			JOIN wa_groups g ON g.tenant_id = m.tenant_id AND g.id = m.group_id
 			JOIN tenants t ON t.id = m.tenant_id AND t.status = 'active'
 			LEFT JOIN wa_group_message_suggestions s ON s.tenant_id = m.tenant_id AND s.group_message_id = m.id
 			LEFT JOIN wa_group_message_analysis a ON a.tenant_id = m.tenant_id AND a.group_message_id = m.id AND a.status = 'done'
+			LEFT JOIN channel_participants cp ON cp.tenant_id = m.tenant_id AND cp.id = m.sender_channel_participant_id
+			LEFT JOIN contacts ct ON ct.tenant_id = cp.tenant_id AND ct.id = cp.contact_id
 			WHERE g.enabled AND g.ai_observer_enabled AND NOT m.from_me AND s.id IS NULL
 			  AND (length(trim(m.body)) > 0 OR length(trim(COALESCE(a.body, ''))) > 0)
-			ORDER BY m.sent_at
+			ORDER BY m.tenant_id, m.group_id, m.sent_at
 			LIMIT $1`, limit)
 		if err != nil {
 			return err
@@ -57,7 +65,7 @@ func (r *PostgresObserverRepository) Claim(ctx context.Context, limit int) ([]gr
 		defer rows.Close()
 		for rows.Next() {
 			var c groupsapp.Candidate
-			if err := rows.Scan(&c.ID, &c.TenantID, &c.GroupID, &c.SentAt, &c.Body, &c.ImageCaption); err != nil {
+			if err := rows.Scan(&c.ID, &c.TenantID, &c.GroupID, &c.SentAt, &c.AuthorName, &c.Body, &c.ImageCaption); err != nil {
 				return err
 			}
 			out = append(out, c)

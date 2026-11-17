@@ -57,7 +57,7 @@ func TestObserverClaimOnlyFindsOptedInTextFromParticipants(t *testing.T) {
 	if _, ok := byID[want]; !ok {
 		t.Fatalf("tenant A's eligible message was not claimed: %+v", got)
 	}
-	if c := byID[want]; c.TenantID != tenantA || c.Body != "meu pedido não chegou" {
+	if c := byID[want]; c.TenantID != tenantA || c.Body != "meu pedido não chegou" || c.AuthorName != "Cliente" {
 		t.Fatalf("tenant A candidate = %+v", c)
 	}
 	if _, ok := byID[wantB]; !ok {
@@ -175,6 +175,29 @@ func TestObserverClaimFindsAnImageMessageOnlyAfterItsAnalysisIsDone(t *testing.T
 	}
 	if got[0].Body != "" || got[0].ImageCaption != "um roteador com a luz vermelha piscando" {
 		t.Fatalf("candidate = %+v", got[0])
+	}
+}
+
+// ADR-0055 addendum 4: Claim resolves AuthorName with the SAME "team alias wins" rule Context already used —
+// the window-builder in application.Service needs it to label each message of a multi-sender block.
+func TestObserverClaimResolvesTheTeamAliasAsAuthorName(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, jid1, "Homologação", true)
+	e.exec(`UPDATE wa_groups SET ai_observer_enabled=true WHERE id=$1`, g)
+	mid := e.msg(tenant, g, "m1", "oi pessoal", false, time.Now().UTC())
+	pid := uuid.New()
+	e.exec(`INSERT INTO channel_participants(id,tenant_id,channel_connection_id,provider,external_participant_id,display_name,alias) VALUES($1,$2,$3,'waha','555@lid','Cliente','Felipe (Suporte K3G)')`,
+		pid, tenant, conn.ID)
+	e.exec(`UPDATE wa_group_messages SET sender_channel_participant_id=$1 WHERE tenant_id=$2 AND id=$3`, pid, tenant, mid)
+
+	repo := NewPostgresObserverRepository(e.app)
+	got, err := repo.Claim(context.Background(), 5)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("claim: %v %+v", err, got)
+	}
+	if got[0].AuthorName != "Felipe (Suporte K3G)" {
+		t.Fatalf("the team alias must win over the raw author_name: %+v", got[0])
 	}
 }
 
