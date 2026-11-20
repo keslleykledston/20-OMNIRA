@@ -35,6 +35,8 @@ import (
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	flowsapplication "github.com/omnira/omnira/internal/flows/application"
 	flowsports "github.com/omnira/omnira/internal/flows/ports"
+	groupaiadapters "github.com/omnira/omnira/internal/groupai/adapters"
+	groupaiapp "github.com/omnira/omnira/internal/groupai/application"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	groupsapp "github.com/omnira/omnira/internal/groups/application"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
@@ -623,6 +625,40 @@ func main() {
 		}
 	} else {
 		log.Printf("Group AI observer disabled (OMNIRA_GROUP_AI_OBSERVER_ENABLED != true)\n")
+	}
+
+	// Group copilot (ADR-0060): keeps the memory of the groups an administrator enabled the AI for, extracts imported exports and consolidates old items.
+	// Off unless OMNIRA_GROUP_MEMORY_ENABLED=true. A model call is never made inside a transaction. The retention sweep of the encrypted raw imports runs
+	// ALWAYS, even with the copilot off and for a suspended company: switching the feature off (the rollback) must not make raw files outlive their retention.
+	{
+		groupAIFlags := groupaiapp.FlagsFromEnv(nil)
+		groupAISession := func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
+			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, func(c context.Context) error {
+				if active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, dbPool), tenantID); err != nil {
+					return err
+				} else if !active {
+					return errors.New("company is suspended")
+				}
+				return fn(c)
+			})
+		}
+		sweepSession := func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
+			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, fn)
+		}
+		groupAIEngine := groupaiapp.NewEngine(groupaiadapters.NewStore(dbPool), groupAISession, intelligenceadapters.NewModelRouterFromConfig(cfg), groupAIFlags).
+			WithLedger(aiusageadapters.NewPostgresLedger(dbPool)).WithSweepSessions(sweepSession)
+		go groupAIEngine.RunSweep(workerCtx, time.Minute)
+		if groupAIFlags.MemoryEnabled {
+			if groupAIFlags.ImportEnabled {
+				if c, err := groupaiadapters.NewImportCipher(cfg.CredentialsKey); err != nil {
+					log.Printf("group copilot: imports disabled, no cipher: %v", err)
+				} else {
+					groupAIEngine.WithCipher(c)
+				}
+			}
+			go groupAIEngine.Run(workerCtx, time.Minute)
+			log.Printf("Group copilot started (imports=%v, auto analyze=%v)\n", groupAIFlags.ImportEnabled, groupAIFlags.AutoAnalyze)
+		}
 	}
 
 	// CONTEXT.2 (Context Intelligence v2): event -> context window -> runner -> structured analysis. FOUNDATION

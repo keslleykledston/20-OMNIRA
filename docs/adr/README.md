@@ -35,3 +35,4 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 - 0052 - Listar templates aprovados na API externa (`template.read`) — aceito e implementado
 - 0053 - Nota interna na API externa como mensagem `private` (paridade com Chatwoot) — aceito e implementado; revisão do Codex achou e corrigiu vazamento de visibilidade no Workspace/Hub
 - 0054 - Platform Release/Update Engine: CI/CD, catálogo assinado, Update Manager e Update Agent para a instalação SaaS inteira (fases F0–F11) — aceito, em implementação na branch `feat/omnira-release-update-engine`
+- 0060 - Copiloto de grupo e memória de contexto do grupo (memória em camadas, import de arquivo com raw cifrado de 90 dias, propostas de ocorrência/tarefa aprovadas por humano) — implementado em LAB, tudo desligado por padrão; complementa o observador do ADR-0055 (memória, import e propostas)

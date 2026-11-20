@@ -37,9 +37,19 @@ const (
 	ActionGroupEnabled             AuditAction = "group.enabled"
 	ActionGroupDisabled            AuditAction = "group.disabled"
 	ActionGroupHistoryDeleted      AuditAction = "group.history_deleted"
-	ActionGroupPurposeSet          AuditAction = "group.purpose_set"
-	ActionGroupAccountLinked       AuditAction = "group.account_linked"
-	ActionGroupAccountUnlinked     AuditAction = "group.account_unlinked"
+	// ADR-0060: the group copilot. Metadata is ids, enums and counts only, never a message or a memory text.
+	ActionGroupAIEnabled         AuditAction = "group.ai_enabled"
+	ActionGroupAIDisabled        AuditAction = "group.ai_disabled"
+	ActionGroupMemoryErased      AuditAction = "group.memory_erased"
+	ActionGroupMemoryItemChanged AuditAction = "group.memory_item_changed"
+	ActionGroupImportUploaded    AuditAction = "group.import_uploaded"
+	ActionGroupImportDiscarded   AuditAction = "group.import_discarded"
+	ActionGroupImportReprocessed AuditAction = "group.import_reprocessed"
+	ActionGroupProposalApproved  AuditAction = "group.proposal_approved"
+	ActionGroupProposalRejected  AuditAction = "group.proposal_rejected"
+	ActionGroupPurposeSet        AuditAction = "group.purpose_set"
+	ActionGroupAccountLinked     AuditAction = "group.account_linked"
+	ActionGroupAccountUnlinked   AuditAction = "group.account_unlinked"
 	// ActionGroupAdditionalAccountLinked/Unlinked: a SECOND (or further) client linked to a group that
 	// represents more than one at once (ADR-0059 addendum 8 — e.g. a "swap"/peering group between two of the
 	// tenant's own clients). Distinct from ActionGroupAccountLinked/Unlinked, which is the group's ONE

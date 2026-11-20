@@ -341,7 +341,7 @@ for pkg in "${PACKAGES[@]}"; do
       -e OMNIRA_NATS_URL="${NATS_URL}" \
       -e OMNIRA_NATS_MONITOR_URL="${NATS_MONITOR_URL}" \
       -e OMNIRA_NATS_SERVER_NAME="${NATS_SERVER_NAME}" \
-      golang:1.25 sh -c "git config --global --add safe.directory /app && go test -count=1 ${pkg}"; then
+      golang:1.25 sh -c "git config --global --add safe.directory /app 2>/dev/null; go test -count=1 ${pkg}"; then
     :
   else
     FAILED+=("${pkg}")

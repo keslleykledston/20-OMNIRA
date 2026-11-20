@@ -135,6 +135,20 @@ x-omnira-runtime: &omnira-runtime
   # CONTEXT.2 (Context Intelligence v2): windowed, grouped semantic analysis of a conversation's messages.
   # FOUNDATION CODE, not cleared for production — see docs/implementation/CONTEXT-INTELLIGENCE-V2.md. Off by default.
   OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED: ${OMNIRA_CONTEXT_INTELLIGENCE_V2_ENABLED-false}
+  # ADR-0060: the group copilot (memory of a group, import of an export, proposals of cases/tasks). Everything OFF by default; the AI of each group is a
+  # further opt-in. The memory also needs OMNIRA_AI_ENABLED + a model; imports also need OMNIRA_CREDENTIALS_KEY and the antivirus (OMNIRA_CLAMAV_ADDR);
+  # proposals also need OMNIRA_SERVICE_CONTEXT_ENABLED. AUTO_ANALYZE lets the worker read a group by itself (volume/age); off = only when somebody asks.
+  OMNIRA_GROUP_MEMORY_ENABLED: ${OMNIRA_GROUP_MEMORY_ENABLED-false}
+  OMNIRA_GROUP_IMPORT_ENABLED: ${OMNIRA_GROUP_IMPORT_ENABLED-false}
+  OMNIRA_GROUP_PROPOSALS_ENABLED: ${OMNIRA_GROUP_PROPOSALS_ENABLED-false}
+  OMNIRA_GROUP_AUTO_ANALYZE: ${OMNIRA_GROUP_AUTO_ANALYZE-false}
+  OMNIRA_GROUP_IMPORT_ALLOW_UNSCANNED: ${OMNIRA_GROUP_IMPORT_ALLOW_UNSCANNED-false}
+  OMNIRA_GROUP_AI_DAILY_CALLS: ${OMNIRA_GROUP_AI_DAILY_CALLS-}
+  OMNIRA_GROUP_RAW_RETENTION_DAYS: ${OMNIRA_GROUP_RAW_RETENTION_DAYS-}
+  OMNIRA_GROUP_IMPORT_TZ: ${OMNIRA_GROUP_IMPORT_TZ-}
+  OMNIRA_AI_MODEL_GROUP_MEMORY: ${OMNIRA_AI_MODEL_GROUP_MEMORY-}
+  OMNIRA_AI_MODEL_GROUP_CONSOLIDATE: ${OMNIRA_AI_MODEL_GROUP_CONSOLIDATE-}
+  OMNIRA_AI_MODEL_GROUP_PROPOSAL: ${OMNIRA_AI_MODEL_GROUP_PROPOSAL-}
 
 services:
   postgres:

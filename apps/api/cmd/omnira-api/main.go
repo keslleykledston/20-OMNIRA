@@ -35,6 +35,8 @@ import (
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	flowsapplication "github.com/omnira/omnira/internal/flows/application"
 	flowstemplates "github.com/omnira/omnira/internal/flows/templates"
+	groupaiadapters "github.com/omnira/omnira/internal/groupai/adapters"
+	groupaiapp "github.com/omnira/omnira/internal/groupai/application"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	hubaccess "github.com/omnira/omnira/internal/hub/access"
 	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
@@ -417,7 +419,33 @@ func main() {
 			log.Printf("groups: media store unavailable, group image/PDF downloads disabled: %v", err)
 		}
 	}
+	// ADR-0060: the group copilot. "Delete history" always purges what was derived from it (even with the copilot off: the tables exist);
+	// the copilot's own API only exists when its flag is on.
+	groupAIFlags := groupaiapp.FlagsFromEnv(nil)
+	groupAIService := groupaiapp.NewService(groupaiadapters.NewStore(dbPool), groupAIFlags)
+	groupsHandler.WithHistoryPurger(func(ctx context.Context, tenantID, groupID, actor uuid.UUID) error {
+		_, _, err := groupAIService.PurgeHistory(ctx, tenantID, groupID, actor)
+		return err
+	})
 	srv.RegisterGroupHandlers(dbPool, groupsHandler)
+	if groupAIFlags.MemoryEnabled {
+		groupAIService.WithModels(intelligenceadapters.NewModelRouterFromConfig(cfg)).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
+		if groupAIFlags.ImportEnabled {
+			if c, err := groupaiadapters.NewImportCipher(cfg.CredentialsKey); err != nil {
+				log.Printf("group copilot: imports disabled, no cipher: %v", err)
+			} else {
+				groupAIService.WithCipher(c)
+			}
+			if cfg.ClamAVAddr != "" {
+				groupAIService.WithScanner(groupaiadapters.NewAVScanner(mediaadapters.NewClamAV(cfg.ClamAVAddr)))
+			}
+		}
+		if groupAIFlags.ProposalsEnabled && cfg.ServiceContextEnabled {
+			proposalSvc, _, _ := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
+			groupAIService.WithBridge(groupaiadapters.NewServiceBridge(proposalSvc))
+		}
+		srv.RegisterGroupAIHandlers(dbPool, groupaiadapters.NewHandler(dbPool, groupAIService, auditadapters.NewPostgresAuditEventRepository(dbPool)))
+	}
 	srv.RegisterSLAAlertFeatureFlagHandlers(dbPool, groupsadapters.NewSLAAlertFeatureFlagHandler(dbPool))
 	srv.RegisterContextIntelligenceV2FeatureFlagHandlers(dbPool, intelligenceadapters.NewContextIntelligenceV2FeatureFlagHandler(dbPool))
 	// Platform operator authority (ADR-0038) does not depend on Hub, Update Manager, or any other

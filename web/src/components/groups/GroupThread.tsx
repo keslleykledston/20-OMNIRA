@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge, Button, ConfirmDialog, Icon } from '../primitives'
+import { GroupCopilot } from './GroupCopilot'
 import { useThreadScroll } from '../../hooks/useThreadScroll'
 import {
   authorLabel,
@@ -173,6 +174,8 @@ export function GroupThread({ group, canManage, onBack }: Props) {
               </label>
             )
           })()}
+          {/* renders nothing unless the group copilot exists for this tenant and person (ADR-0060) */}
+          <GroupCopilot group={group} />
           {canManage && (
             <Button size="sm" variant="tertiary" onClick={() => setConfirmDelete(true)} disabled={messages.length === 0 && !hasNextPage}>
               Apagar histórico

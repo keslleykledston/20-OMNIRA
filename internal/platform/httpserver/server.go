@@ -29,6 +29,7 @@ import (
 	externaldelivery "github.com/omnira/omnira/internal/external/delivery"
 	externaldomain "github.com/omnira/omnira/internal/external/domain"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
+	groupaiadapters "github.com/omnira/omnira/internal/groupai/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
@@ -726,13 +727,13 @@ func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled boo
 		Finalize:  finalize,
 		Eligible:  externaladapters.SectorsEligible,
 		QueueOpen: externaladapters.SectorsQueueOpen,
-		Starter:   externaladapters.PostgresStartStore{}, // ADR-0050
+		Starter:   externaladapters.PostgresStartStore{}, // ADR-0060
 	}
 	if s.outboundAttachments != nil { // files for an application exist only where outbound media is on (a nil pointer in the interface would not be nil)
 		deps.Media = s.outboundAttachments
 	}
 	w := externaladapters.NewWriteHandler(dbPool, deps)
-	// ADR-0050: create-or-reuse a conversation by phone. No {id} (nothing may exist yet), so it needs BOTH contact.write and
+	// ADR-0060: create-or-reuse a conversation by phone. No {id} (nothing may exist yet), so it needs BOTH contact.write and
 	// conversation.open — chaining RequireScope twice is the same "this installation lacks scope X" 403 either scope is missing.
 	s.mux.Handle("POST /api/v1/external/conversations",
 		ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactWrite, externaladapters.RequireScope(externaldomain.ScopeConversationOpen, w.StartConversation()))))
@@ -1195,6 +1196,22 @@ func (s *Server) RegisterOperatorStatusHandlers(dbPool *pgxpool.Pool, h *hubadap
 	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
 	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(userSession(fn)) }
 	s.mux.Handle("GET /api/v1/platform/operator-status", wrap(h.Get))
+}
+
+// RegisterGroupAIHandlers exposes the group copilot (ADR-0060): the AI opt-in of a group, its memory, the imports and the proposals. Authorization is the
+// group.ai.* / group.import / group.memory.erase keys, checked by the handler on top of RLS. Registered only when the memory flag is on.
+func (s *Server) RegisterGroupAIHandlers(dbPool *pgxpool.Pool, h *groupaiadapters.Handler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }
+	h.Routes(s.mux, wrap)
 }
 
 // RegisterAttendanceHandlers exposes finalizing an attendance and the contact's attendance history (ADR-0020) behind authn +
