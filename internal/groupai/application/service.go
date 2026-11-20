@@ -221,7 +221,7 @@ func (s *Service) PatchItem(ctx context.Context, tenantID, groupID, itemID, acto
 			return it, err
 		}
 		if summary != it.Summary {
-			it.Summary, it.Fingerprint = summary, domain.Fingerprint(it.Kind, summary)
+			it.Summary, it.Fingerprint = summary, domain.FingerprintFor(it.Tier, it.Kind, summary)
 			it.Truth = domain.TruthHumanConfirmed
 			events = append(events, EventUpdated)
 		}
@@ -236,6 +236,7 @@ func (s *Service) PatchItem(ctx context.Context, tenantID, groupID, itemID, acto
 			return it, fmt.Errorf("%w: status must be open or resolved", domain.ErrInvalidItem)
 		}
 		it.Status = *p.Status
+		it.Truth = domain.TruthHumanConfirmed // a person's decision on the item: the AI will not flip it back
 	}
 	if p.Confirm != nil && *p.Confirm && it.Truth != domain.TruthHumanConfirmed {
 		it.Truth = domain.TruthHumanConfirmed
@@ -499,9 +500,11 @@ func (s *Service) ReprocessImport(ctx context.Context, tenantID, groupID, import
 
 // ---- proposals
 
+// ProposalEdit changes only the fields that were sent (nil = leave as is). DueAtSet distinguishes "not sent" from "sent as null" (clear the date).
 type ProposalEdit struct {
-	Title, Description, Priority string
+	Title, Description, Priority *string
 	DueAt                        *time.Time
+	DueAtSet                     bool
 	Version                      int
 }
 
@@ -528,6 +531,12 @@ func (s *Service) DraftProposal(ctx context.Context, tenantID, groupID, itemID, 
 	if it.GroupID != groupID || it.Status == domain.StatusSuperseded {
 		return zero, false, ErrNotFound
 	}
+	// an item has at most one live proposal of each kind: ask the store BEFORE paying for a model call whose result would be thrown away
+	if live, found, err := s.store.LiveProposal(ctx, tenantID, itemID, kind); err != nil {
+		return zero, false, err
+	} else if found {
+		return live, false, nil
+	}
 	title, desc, prio, by := s.draft(ctx, tenantID, groupID, kind, it)
 	id := uuid.New()
 	p := domain.Proposal{ID: id, TenantID: tenantID, GroupID: groupID, MemoryItemID: &itemID, Kind: kind, Title: title, Description: desc, Priority: prio,
@@ -549,6 +558,10 @@ func (s *Service) draft(ctx context.Context, tenantID, groupID uuid.UUID, kind d
 	}
 	route, err := s.models.Route(intelapp.TaskGroupProposal)
 	if err != nil {
+		return fallback()
+	}
+	// a draft is a model call: it counts against the same daily limit of the group; over the limit the draft is the item's own words
+	if ok, berr := s.store.BumpBudget(ctx, tenantID, groupID, s.now(), s.flags.DailyCallsPerGroup); berr != nil || !ok {
 		return fallback()
 	}
 	nonce, err := newNonce()
@@ -618,19 +631,22 @@ func (s *Service) EditProposal(ctx context.Context, tenantID, groupID, proposalI
 		return p, ErrConflict
 	}
 	title, desc, prio := p.Title, p.Description, p.Priority
-	if e.Title != "" {
-		title = e.Title
+	if e.Title != nil {
+		title = *e.Title
 	}
-	if e.Description != "" || e.Title != "" {
-		desc = e.Description
+	if e.Description != nil {
+		desc = *e.Description
 	}
-	if e.Priority != "" {
-		prio = e.Priority
+	if e.Priority != nil {
+		prio = *e.Priority
 	}
 	if title, desc, prio, err = domain.CleanProposal(p.Kind, title, desc, prio); err != nil {
 		return p, err
 	}
-	p.Title, p.Description, p.Priority, p.DueAt = title, desc, prio, e.DueAt
+	p.Title, p.Description, p.Priority = title, desc, prio
+	if e.DueAtSet {
+		p.DueAt = e.DueAt
+	}
 	if err := s.store.UpdateProposal(ctx, p, p.Version); err != nil {
 		return p, err
 	}

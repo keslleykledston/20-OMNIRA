@@ -85,7 +85,7 @@ func (s *ConsolidationStats) drop(reason string) {
 func ParseConsolidation(raw string, candidates map[string]Item) ([]Consolidated, ConsolidationStats, error) {
 	var stats ConsolidationStats
 	if len(raw) > maxRawOutputBytes {
-		return nil, stats, fmt.Errorf("%w: output too large", ErrInvalidItem)
+		return nil, stats, fmt.Errorf("%w: output too large", ErrInvalidOutput)
 	}
 	s := strings.TrimSpace(raw)
 	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(s, "```json"), "```"), "```"))
@@ -100,7 +100,7 @@ func ParseConsolidation(raw string, candidates map[string]Item) ([]Consolidated,
 		} `json:"consolidated"`
 	}
 	if err := dec.Decode(&in); err != nil || dec.More() {
-		return nil, stats, fmt.Errorf("%w: not a single JSON object with consolidated", ErrInvalidItem)
+		return nil, stats, fmt.Errorf("%w: not a single JSON object with consolidated", ErrInvalidOutput)
 	}
 	used := map[string]bool{}
 	var out []Consolidated
@@ -159,7 +159,7 @@ func copiesQuote(summary string, replaces []Item) bool {
 			}
 			// a long run of the quote inside the summary counts as copying even when the summary quotes only a part of it
 			r := []rune(q)
-			for start := 0; start+minLiteralRunes <= len(r); start += 10 {
+			for start := 0; start+minLiteralRunes <= len(r); start++ {
 				if strings.Contains(norm, string(r[start:start+minLiteralRunes])) {
 					return true
 				}

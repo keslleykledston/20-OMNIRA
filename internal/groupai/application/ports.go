@@ -26,6 +26,8 @@ var (
 	ErrProposalDecided   = errors.New("groupai: the proposal was already decided")
 	ErrForbiddenCreation = errors.New("groupai: you lack the permission to create this record")
 	ErrDuplicateItem     = errors.New("groupai: an equal item already exists")
+	// ErrAborted: the work was cancelled meanwhile (the memory was erased, the AI turned off, the import discarded); nothing more is written.
+	ErrAborted = errors.New("groupai: the work was cancelled meanwhile")
 )
 
 type GroupInfo struct {
@@ -58,6 +60,7 @@ type ItemFilter struct {
 	Kinds        []domain.Kind
 	Tier         domain.Tier
 	IncludeSuper bool
+	OldestFirst  bool
 	Query        string
 	Limit        int
 	OrderByRank  bool
@@ -70,6 +73,7 @@ type State struct {
 	LastConsolidatedAt     *time.Time
 	LastRunAt              *time.Time
 	LastRunOK              *bool
+	ConsecutiveFailures    int
 	AnalyzeRequestedAt     *time.Time
 	AnalyzeRequestedBy     *uuid.UUID
 	ConsolidateRequestedAt *time.Time
@@ -85,6 +89,7 @@ type State struct {
 type RunRecord struct {
 	At               time.Time
 	OK               bool
+	Failed           bool // an unusable answer at this cursor: counts toward the skip threshold
 	PromptVersion    string
 	InputTokens      int
 	OutputTokens     int
@@ -173,6 +178,7 @@ type Store interface {
 	// proposals
 	InsertProposal(ctx context.Context, p domain.Proposal) (stored domain.Proposal, created bool, err error)
 	GetProposal(ctx context.Context, tenantID, proposalID uuid.UUID, forUpdate bool) (domain.Proposal, error)
+	LiveProposal(ctx context.Context, tenantID, itemID uuid.UUID, kind domain.ProposalKind) (domain.Proposal, bool, error)
 	ListProposals(ctx context.Context, tenantID, groupID uuid.UUID, status string, limit int) ([]domain.Proposal, error)
 	UpdateProposal(ctx context.Context, p domain.Proposal, expectedVersion int) error
 }

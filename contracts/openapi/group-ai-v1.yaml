@@ -58,6 +58,7 @@ paths:
         - { name: tier, in: query, schema: { type: string, enum: [episodic, consolidated] } }
         - { name: q, in: query, schema: { type: string, maxLength: 200 } }
         - { name: include_superseded, in: query, schema: { type: boolean } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
       responses:
         '200': { description: The items and where the reading stands, content: { application/json: { schema: { $ref: '#/components/schemas/MemoryList' } } } }
         '400': { $ref: '#/components/responses/Text' }
@@ -222,6 +223,7 @@ paths:
         '403': { $ref: '#/components/responses/Text' }
         '404': { $ref: '#/components/responses/Text' }
         '409': { $ref: '#/components/responses/Text' }
+        '400': { $ref: '#/components/responses/Text' }
         '413': { $ref: '#/components/responses/Text' }
         '422': { $ref: '#/components/responses/Text' }
         '503': { $ref: '#/components/responses/Text' }
@@ -321,7 +323,9 @@ paths:
       operationId: editGroupProposal
       tags: [GroupCopilot]
       summary: Fix the draft before approving it
-      description: Requires `group.ai.manage`. Only a pending proposal can be edited (`409` otherwise); `version` guards a concurrent edit.
+      description: |
+        Requires `group.ai.manage`. Only a pending proposal can be edited (`409` otherwise); `version` guards a concurrent edit. Only the fields sent change:
+        an omitted field is kept, and `due_at: null` clears the date.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/GroupId' }

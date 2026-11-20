@@ -37,8 +37,8 @@ func NewModelRouterFromConfig(cfg *config.Config) *application.ModelRouter {
 	add(application.TaskCopilotReply, "OMNIRA_AI_MODEL_COPILOT", 700)
 	add(application.TaskClosingSuggest, "OMNIRA_AI_MODEL_CLOSING_SUGGEST", 700) // ADR-0020: closing summary and follow-up items
 	// ADR-0050: the group copilot's memory extraction, its consolidation and the draft of a proposal
-	add(application.TaskGroupMemory, "OMNIRA_AI_MODEL_GROUP_MEMORY", 1500)
-	add(application.TaskGroupConsolidate, "OMNIRA_AI_MODEL_GROUP_CONSOLIDATE", 1500)
+	add(application.TaskGroupMemory, "OMNIRA_AI_MODEL_GROUP_MEMORY", 3000)
+	add(application.TaskGroupConsolidate, "OMNIRA_AI_MODEL_GROUP_CONSOLIDATE", 3000)
 	add(application.TaskGroupProposal, "OMNIRA_AI_MODEL_GROUP_PROPOSAL", 500)
 	return router
 }

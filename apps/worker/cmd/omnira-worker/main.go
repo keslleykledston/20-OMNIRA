@@ -521,9 +521,11 @@ func main() {
 		log.Printf("Conversation Intelligence pipeline started (auto routing=%v)\n", intelligenceFlags.TopicAutoRoutingEnabled)
 	}
 
-	// Group copilot (ADR-0050): keeps the memory of the groups an administrator enabled the AI for, extracts imported exports, consolidates old items and
-	// discards the raw of expired imports. Off unless OMNIRA_GROUP_MEMORY_ENABLED=true. A model call is never made inside a transaction.
-	if groupAIFlags := groupaiapp.FlagsFromEnv(nil); groupAIFlags.MemoryEnabled {
+	// Group copilot (ADR-0050): keeps the memory of the groups an administrator enabled the AI for, extracts imported exports and consolidates old items.
+	// Off unless OMNIRA_GROUP_MEMORY_ENABLED=true. A model call is never made inside a transaction. The retention sweep of the encrypted raw imports runs
+	// ALWAYS, even with the copilot off and for a suspended company: switching the feature off (the rollback) must not make raw files outlive their retention.
+	{
+		groupAIFlags := groupaiapp.FlagsFromEnv(nil)
 		groupAISession := func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
 			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, func(c context.Context) error {
 				if active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, dbPool), tenantID); err != nil {
@@ -534,17 +536,23 @@ func main() {
 				return fn(c)
 			})
 		}
-		groupAIEngine := groupaiapp.NewEngine(groupaiadapters.NewStore(dbPool), groupAISession, intelligenceadapters.NewModelRouterFromConfig(cfg), groupAIFlags).
-			WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
-		if groupAIFlags.ImportEnabled {
-			if c, err := groupaiadapters.NewImportCipher(cfg.CredentialsKey); err != nil {
-				log.Printf("group copilot: imports disabled, no cipher: %v", err)
-			} else {
-				groupAIEngine.WithCipher(c)
-			}
+		sweepSession := func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
+			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, fn)
 		}
-		go groupAIEngine.Run(workerCtx, time.Minute)
-		log.Printf("Group copilot started (imports=%v, auto analyze=%v)\n", groupAIFlags.ImportEnabled, groupAIFlags.AutoAnalyze)
+		groupAIEngine := groupaiapp.NewEngine(groupaiadapters.NewStore(dbPool), groupAISession, intelligenceadapters.NewModelRouterFromConfig(cfg), groupAIFlags).
+			WithLedger(aiusageadapters.NewPostgresLedger(dbPool)).WithSweepSessions(sweepSession)
+		go groupAIEngine.RunSweep(workerCtx, time.Minute)
+		if groupAIFlags.MemoryEnabled {
+			if groupAIFlags.ImportEnabled {
+				if c, err := groupaiadapters.NewImportCipher(cfg.CredentialsKey); err != nil {
+					log.Printf("group copilot: imports disabled, no cipher: %v", err)
+				} else {
+					groupAIEngine.WithCipher(c)
+				}
+			}
+			go groupAIEngine.Run(workerCtx, time.Minute)
+			log.Printf("Group copilot started (imports=%v, auto analyze=%v)\n", groupAIFlags.ImportEnabled, groupAIFlags.AutoAnalyze)
+		}
 	}
 
 	// Flow Builder runtime (ADR-0019), only when OMNIRA_FLOWS_ENABLED=true: the inbound-message consumer and the sweeper for

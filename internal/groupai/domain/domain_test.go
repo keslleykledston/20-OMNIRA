@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -428,5 +429,101 @@ func TestExtractExportTextStopsAZipBomb(t *testing.T) {
 	bomb := makeZip(t, map[string]string{"_chat.txt": strings.Repeat("0", 8<<20)}) // 8 MiB of zeros compresses ~1000x
 	if _, _, err := ExtractExportText(bomb); !errors.Is(err, ErrImportZip) {
 		t.Fatalf("zip bomb: %v", err)
+	}
+}
+
+// ---- findings of the independent review
+
+func TestParserIsLinearOnAHostileFile(t *testing.T) {
+	// one header followed by a million blank lines used to cost a quadratic copy (tens of seconds)
+	hostile := "12/03/2024 08:10 - Maria: oi\n" + strings.Repeat("\n", 1_000_000) + "12/03/2024 08:11 - João: fim\n"
+	start := time.Now()
+	res, err := ParseWhatsAppExport(hostile, time.UTC)
+	if err != nil || len(res.Messages) != 2 {
+		t.Fatalf("%v %d", err, len(res.Messages))
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("parsing a hostile file took %v", d)
+	}
+	if got := len(res.Messages[0].Text); got > maxRecordBytes {
+		t.Fatalf("a message accumulated %d bytes of continuation lines", got)
+	}
+}
+
+func TestMaskPIICatchesTheFormatsThatSlippedThrough(t *testing.T) {
+	for _, in := range []string{
+		"+55 11 91234 5678",
+		"+55 11 91234‑5678",
+		"+55 11 9​1234 5678",
+		"5511999998888 5511988887777",
+		"11 99999-8888 11 98888-7777",
+		"joao@​empresa.com.br",
+	} {
+		got := MaskPII("contato: " + in + " fim")
+		if strings.ContainsAny(got, "0123456789@") && !strings.Contains(got, "[") || strings.Contains(got, "9999") || strings.Contains(got, "1234") || strings.Contains(got, "empresa") {
+			t.Errorf("MaskPII(%q) = %q", in, got)
+		}
+	}
+	if got := MaskPII("pagar 1500 até o dia 20 do protocolo 20240318"); got != "pagar 1500 até o dia 20 do protocolo 20240318" {
+		t.Errorf("an amount or a protocol was masked: %q", got)
+	}
+}
+
+func TestChangesToExistingItemsNeedEvidenceAndNeverTouchConsolidatedOnes(t *testing.T) {
+	ctx := extCtx()
+	ctx.Items["i4"] = Item{ID: uuid.New(), Kind: KindFact, Tier: TierConsolidated, Status: StatusOpen, Truth: TruthAIInferred, Summary: "conhecimento"}
+	ctx.Items["i5"] = Item{ID: uuid.New(), Kind: KindRequest, Tier: TierEpisodic, Status: StatusOpen, Truth: TruthAIInferred, Summary: "pedido"}
+	raw := `{"ops":[
+	  {"op":"resolve","id":"i5"},
+	  {"op":"update","id":"i5","summary":"outra coisa","evidence":[]},
+	  {"op":"resolve","id":"i4","evidence":[{"ref":"m1","quote":"x"}]},
+	  {"op":"update","id":"i4","summary":"x","evidence":[{"ref":"m1","quote":"x"}]},
+	  {"op":"reinforce","id":"i4"},
+	  {"op":"resolve","id":"i5","evidence":[{"ref":"m2","quote":"Mandei agora a nota fiscal."}]}]}`
+	ops, stats, err := ParseExtraction(raw, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var types []OpType
+	for _, o := range ops {
+		types = append(types, o.Type)
+	}
+	if len(types) != 2 || types[0] != OpReinforce || types[1] != OpResolve {
+		t.Fatalf("ops %v, stats %+v", types, stats)
+	}
+	if stats.Dropped["no_evidence"] != 2 || stats.Dropped["consolidated_item"] != 2 {
+		t.Fatalf("dropped %v", stats.Dropped)
+	}
+}
+
+func TestOneAnswerCannotMassResolve(t *testing.T) {
+	ctx := extCtx()
+	var ops []string
+	for i := 10; i < 30; i++ {
+		h := fmt.Sprintf("i%d", i)
+		ctx.Items[h] = Item{ID: uuid.New(), Kind: KindRequest, Tier: TierEpisodic, Status: StatusOpen, Truth: TruthAIInferred, Summary: h}
+		ops = append(ops, `{"op":"resolve","id":"`+h+`","evidence":[{"ref":"m2","quote":"x"}]}`)
+	}
+	got, stats, err := ParseExtraction(`{"ops":[`+strings.Join(ops, ",")+`]}`, ctx)
+	if err != nil || len(got) != MaxResolvesPerRun || stats.Dropped["resolve_over_limit"] != 10 {
+		t.Fatalf("%d ops, %v, %v", len(got), stats.Dropped, err)
+	}
+}
+
+func TestAnInvalidAnswerIsDistinguishableAndAConsolidatedFingerprintNeverCollides(t *testing.T) {
+	if _, _, err := ParseExtraction("prosa qualquer", extCtx()); !errors.Is(err, ErrInvalidOutput) {
+		t.Fatalf("%v", err)
+	}
+	if _, _, err := ParseConsolidation("prosa qualquer", nil); !errors.Is(err, ErrInvalidOutput) {
+		t.Fatalf("%v", err)
+	}
+	if FingerprintFor(TierEpisodic, KindFact, "Mesmas palavras") == FingerprintFor(TierConsolidated, KindFact, "mesmas palavras") {
+		t.Fatal("a consolidated item must never share the fingerprint of an episodic one")
+	}
+	if got := VerifiedQuote("Bearer abcdefghijklmnopqrstuvwxyz0123456789", "token Bearer abcdefghijklmnopqrstuvwxyz0123456789 ok"); got != "" {
+		t.Fatalf("a quote that looks like a secret was kept: %q", got)
+	}
+	if CleanActor("Participante 3") != "" || CleanActor("Maria") != "Maria" {
+		t.Fatal("the per-batch label must not be stored")
 	}
 }

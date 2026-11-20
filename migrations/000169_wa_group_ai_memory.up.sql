@@ -80,6 +80,8 @@ CREATE TABLE wa_group_memory_state (
   -- when the worker last looked at the group, whether or not it had anything to do: it makes the scan fair among quiet groups
   last_checked_at           TIMESTAMPTZ,
   last_run_ok               BOOLEAN,
+  -- batches in a row whose answer was unusable at the same cursor: after a few the batch is skipped so one bad batch cannot block a group forever
+  consecutive_failures      INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_failures >= 0),
   -- asked from the screen: the worker does the reading (a model call is never made inside a request transaction)
   analyze_requested_at      TIMESTAMPTZ,
   analyze_requested_by      UUID REFERENCES users(id) ON DELETE SET NULL,

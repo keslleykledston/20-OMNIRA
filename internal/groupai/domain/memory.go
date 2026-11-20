@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -142,10 +143,16 @@ func CleanSummary(s string) (string, error) {
 	return out, nil
 }
 
+var participantLabel = regexp.MustCompile(`^Participante \d+$`)
+
 // CleanActor sanitizes who an item is about. It never keeps a phone number: those are masked to a neutral label.
 func CleanActor(s string) string {
 	out := strings.Join(strings.Fields(untrusted.SanitizeDerivedText(s)), " ")
 	out = MaskPII(out)
+	// "Participante N" is a label of one batch of the prompt: across batches N means different people, so it is never stored
+	if participantLabel.MatchString(out) {
+		return ""
+	}
 	if r := []rune(out); len(r) > MaxActorRunes {
 		out = string(r[:MaxActorRunes])
 	}
@@ -157,6 +164,16 @@ func CleanActor(s string) string {
 func Fingerprint(kind Kind, summary string) string {
 	sum := sha256.Sum256([]byte(string(kind) + "\n" + normalizeWords(summary)))
 	return hex.EncodeToString(sum[:])
+}
+
+// FingerprintFor is the dedupe key of an item in its tier. A consolidated item never collides with an episodic one, so condensing an item into
+// the same words can never make it replace itself.
+func FingerprintFor(tier Tier, kind Kind, summary string) string {
+	if tier == TierConsolidated {
+		sum := sha256.Sum256([]byte("consolidated\n" + string(kind) + "\n" + normalizeWords(summary)))
+		return hex.EncodeToString(sum[:])
+	}
+	return Fingerprint(kind, summary)
 }
 
 func normalizeWords(s string) string {
@@ -236,8 +253,12 @@ func CleanQuote(s string) string {
 func VerifiedQuote(proposed, source string) string {
 	src := normalizeWords(source)
 	p := normalizeWords(proposed)
+	q := CleanQuote(source)
 	if p != "" && strings.Contains(src, p) {
-		return CleanQuote(proposed)
+		q = CleanQuote(proposed)
 	}
-	return CleanQuote(source)
+	if untrusted.ContainsCredential(q) { // an excerpt that looks like a secret is not kept
+		return ""
+	}
+	return q
 }

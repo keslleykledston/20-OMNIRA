@@ -61,7 +61,9 @@ func (s *Store) SetAIEnabled(ctx context.Context, tenantID, groupID uuid.UUID, e
 
 func (s *Store) MessagesAfter(ctx context.Context, tenantID, groupID uuid.UUID, afterAt *time.Time, afterID *uuid.UUID, limit int) ([]application.GroupMessage, error) {
 	args := []any{tenantID, groupID}
-	where := "tenant_id = $1 AND group_id = $2"
+	// a message is read once it has settled: the intake commits a moment after it stamps created_at, and a transaction that started earlier but
+	// committed later than a read would otherwise be skipped for good by the cursor
+	where := "tenant_id = $1 AND group_id = $2 AND created_at <= now() - interval '20 seconds'"
 	if afterAt != nil {
 		id := uuid.Nil
 		if afterID != nil {
@@ -93,9 +95,9 @@ func (s *Store) CountMessagesAfter(ctx context.Context, tenantID, groupID uuid.U
 	var oldest *time.Time
 	var err error
 	if afterAt == nil {
-		err = s.q(ctx).QueryRow(ctx, `SELECT count(*), min(created_at) FROM wa_group_messages WHERE tenant_id = $1 AND group_id = $2`, tenantID, groupID).Scan(&n, &oldest)
+		err = s.q(ctx).QueryRow(ctx, `SELECT count(*), min(created_at) FROM wa_group_messages WHERE tenant_id = $1 AND group_id = $2 AND created_at <= now() - interval '20 seconds'`, tenantID, groupID).Scan(&n, &oldest)
 	} else {
-		err = s.q(ctx).QueryRow(ctx, `SELECT count(*), min(created_at) FROM wa_group_messages WHERE tenant_id = $1 AND group_id = $2 AND created_at > $3`, tenantID, groupID, *afterAt).Scan(&n, &oldest)
+		err = s.q(ctx).QueryRow(ctx, `SELECT count(*), min(created_at) FROM wa_group_messages WHERE tenant_id = $1 AND group_id = $2 AND created_at > $3 AND created_at <= now() - interval '20 seconds'`, tenantID, groupID, *afterAt).Scan(&n, &oldest)
 	}
 	return n, oldest, err
 }
@@ -183,6 +185,9 @@ func (s *Store) ListItems(ctx context.Context, tenantID, groupID uuid.UUID, f ap
 		add(`summary ILIKE '%' || ? || '%' ESCAPE '\'`, escapeLike(f.Query))
 	}
 	order := "last_reinforced_at DESC, id"
+	if f.OldestFirst {
+		order = "last_reinforced_at, id"
+	}
 	if f.OrderByRank {
 		// the weight now: stored relevance halved every 60 days since it was last reinforced; what a person pinned comes first
 		order = "pinned DESC, (relevance * power(0.5, extract(epoch FROM (now() - last_reinforced_at)) / 5184000.0)) DESC, last_reinforced_at DESC, id"
@@ -295,6 +300,11 @@ func (s *Store) EraseMemory(ctx context.Context, tenantID, groupID uuid.UUID) (i
 		return 0, err
 	}
 	// the reading restarts from nothing: the cursor and the counters are part of what was remembered
+	// the proposals were drafted from that memory and cannot be deleted by the app (a decision is a record): their words are scrubbed
+	if _, err = s.q(ctx).Exec(ctx, `UPDATE wa_group_proposals SET title = '(removido)', description = '', reject_reason = CASE WHEN reject_reason IS NULL THEN NULL ELSE '(removido)' END,
+		updated_at = now() WHERE tenant_id = $1 AND group_id = $2`, tenantID, groupID); err != nil {
+		return 0, err
+	}
 	_, err = s.q(ctx).Exec(ctx, `UPDATE wa_group_memory_state SET last_processed_at = NULL, last_processed_message_id = NULL, last_consolidated_at = NULL,
 		analyze_requested_at = NULL, consolidate_requested_at = NULL, updated_at = now() WHERE tenant_id = $1 AND group_id = $2`, tenantID, groupID)
 	return tag.RowsAffected(), err
@@ -327,10 +337,10 @@ func (s *Store) AppendEvent(ctx context.Context, ev application.ItemEvent) error
 func (s *Store) GetState(ctx context.Context, tenantID, groupID uuid.UUID) (application.State, error) {
 	var st application.State
 	var day *time.Time
-	err := s.q(ctx).QueryRow(ctx, `SELECT last_processed_at, last_processed_message_id, last_consolidated_at, last_run_at, last_run_ok, analyze_requested_at, analyze_requested_by,
+	err := s.q(ctx).QueryRow(ctx, `SELECT last_processed_at, last_processed_message_id, last_consolidated_at, last_run_at, last_run_ok, consecutive_failures, analyze_requested_at, analyze_requested_by,
 		consolidate_requested_at, prompt_version, runs, input_tokens, output_tokens, budget_day::timestamptz, budget_calls
 		FROM wa_group_memory_state WHERE tenant_id = $1 AND group_id = $2`, tenantID, groupID).Scan(&st.LastProcessedAt, &st.LastProcessedMessageID, &st.LastConsolidatedAt,
-		&st.LastRunAt, &st.LastRunOK, &st.AnalyzeRequestedAt, &st.AnalyzeRequestedBy, &st.ConsolidateRequestedAt, &st.PromptVersion, &st.Runs, &st.InputTokens, &st.OutputTokens, &day, &st.BudgetCalls)
+		&st.LastRunAt, &st.LastRunOK, &st.ConsecutiveFailures, &st.AnalyzeRequestedAt, &st.AnalyzeRequestedBy, &st.ConsolidateRequestedAt, &st.PromptVersion, &st.Runs, &st.InputTokens, &st.OutputTokens, &day, &st.BudgetCalls)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return application.State{}, nil
 	}
@@ -349,10 +359,11 @@ func (s *Store) RecordRun(ctx context.Context, tenantID, groupID uuid.UUID, r ap
 	}
 	_, err := s.q(ctx).Exec(ctx, `
 		INSERT INTO wa_group_memory_state (tenant_id, group_id, last_run_at, last_run_ok, prompt_version, runs, input_tokens, output_tokens, last_processed_at,
-		  last_processed_message_id, last_consolidated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		  last_processed_message_id, last_consolidated_at, consecutive_failures)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, CASE WHEN $14::boolean THEN 1 ELSE 0 END)
 		ON CONFLICT (tenant_id, group_id) DO UPDATE SET
 		  last_run_at = EXCLUDED.last_run_at, last_run_ok = EXCLUDED.last_run_ok,
+		  consecutive_failures = CASE WHEN $14::boolean THEN wa_group_memory_state.consecutive_failures + 1 WHEN $4::boolean THEN 0 ELSE wa_group_memory_state.consecutive_failures END,
 		  prompt_version = CASE WHEN EXCLUDED.prompt_version <> '' THEN EXCLUDED.prompt_version ELSE wa_group_memory_state.prompt_version END,
 		  runs = wa_group_memory_state.runs + EXCLUDED.runs,
 		  input_tokens = wa_group_memory_state.input_tokens + EXCLUDED.input_tokens,
@@ -363,7 +374,7 @@ func (s *Store) RecordRun(ctx context.Context, tenantID, groupID uuid.UUID, r ap
 		  analyze_requested_at = CASE WHEN $12 THEN NULL ELSE wa_group_memory_state.analyze_requested_at END,
 		  consolidate_requested_at = CASE WHEN $13 THEN NULL ELSE wa_group_memory_state.consolidate_requested_at END,
 		  updated_at = now()`,
-		tenantID, groupID, r.At, r.OK, r.PromptVersion, runs, r.InputTokens, r.OutputTokens, r.LastProcessedAt, r.LastProcessedID, consolidatedAt, r.ClearAnalyzeAsk, r.ClearConsolidAsk)
+		tenantID, groupID, r.At, r.OK, r.PromptVersion, runs, r.InputTokens, r.OutputTokens, r.LastProcessedAt, r.LastProcessedID, consolidatedAt, r.ClearAnalyzeAsk, r.ClearConsolidAsk, r.Failed)
 	return err
 }
 
@@ -422,7 +433,9 @@ func (s *Store) DueGroups(ctx context.Context, now time.Time, auto bool, limit i
 			WHERE g.ai_enabled AND g.enabled
 			  AND (st.analyze_requested_at IS NOT NULL OR st.consolidate_requested_at IS NOT NULL`+autoCond+`
 			       OR st.last_consolidated_at IS NULL OR st.last_consolidated_at < $1::timestamptz - interval '7 days')
-			ORDER BY (st.analyze_requested_at IS NOT NULL OR st.consolidate_requested_at IS NOT NULL) DESC, COALESCE(st.last_checked_at, '-infinity'::timestamptz), g.id
+			ORDER BY ((st.analyze_requested_at IS NOT NULL OR st.consolidate_requested_at IS NOT NULL)
+			          AND (st.last_checked_at IS NULL OR GREATEST(st.analyze_requested_at, st.consolidate_requested_at) > st.last_checked_at)) DESC,
+			         COALESCE(st.last_checked_at, '-infinity'::timestamptz), g.id
 			LIMIT $2`, now, limit)
 		if err != nil {
 			return err
@@ -600,9 +613,11 @@ func (s *Store) importRefs(ctx context.Context, sql string, args ...any) ([]appl
 
 func (s *Store) PendingImports(ctx context.Context, limit int) ([]application.ImportRef, error) {
 	return s.importRefs(ctx, `
-		SELECT i.tenant_id, i.group_id, i.id FROM wa_group_imports i JOIN tenants t ON t.id = i.tenant_id AND t.status = 'active'
+		SELECT i.tenant_id, i.group_id, i.id FROM wa_group_imports i
+		JOIN tenants t ON t.id = i.tenant_id AND t.status = 'active'
+		JOIN wa_groups g ON g.tenant_id = i.tenant_id AND g.id = i.group_id AND g.ai_enabled
 		WHERE i.status = 'uploaded' OR (i.status = 'extracting' AND i.status_changed_at < now() - interval '30 minutes')
-		ORDER BY i.created_at LIMIT $1`, limit)
+		ORDER BY i.status_changed_at, i.created_at LIMIT $1`, limit)
 }
 
 func (s *Store) ExpiredImports(ctx context.Context, now time.Time, limit int) ([]application.ImportRef, error) {
@@ -664,6 +679,15 @@ func (s *Store) GetProposal(ctx context.Context, tenantID, proposalID uuid.UUID,
 		return p, application.ErrNotFound
 	}
 	return p, err
+}
+
+func (s *Store) LiveProposal(ctx context.Context, tenantID, itemID uuid.UUID, kind domain.ProposalKind) (domain.Proposal, bool, error) {
+	p, err := scanProposal(s.q(ctx).QueryRow(ctx, `SELECT `+proposalCols+` FROM wa_group_proposals
+		WHERE tenant_id = $1 AND memory_item_id = $2 AND kind = $3 AND status IN ('pending_approval','created')`, tenantID, itemID, string(kind)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return p, false, nil
+	}
+	return p, err == nil, err
 }
 
 func (s *Store) ListProposals(ctx context.Context, tenantID, groupID uuid.UUID, status string, limit int) ([]domain.Proposal, error) {

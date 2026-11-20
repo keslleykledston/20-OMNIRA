@@ -118,6 +118,17 @@ func (e *Engine) ExtractImport(ctx context.Context, ref ImportRef) error {
 	var lastErr error
 	for _, b := range batches {
 		res, err := e.extractBatch(ctx, gref, b, domain.SourceImport, &ref.ImportID, false)
+		if errors.Is(err, ErrAborted) { // the AI was turned off, or the import discarded, meanwhile: stop calling the model
+			_ = e.sessions(ctx, ref.TenantID, func(sctx context.Context) error {
+				cur, gerr := e.store.GetImport(sctx, ref.TenantID, ref.ImportID, true)
+				if gerr != nil || cur.Status != domain.ImportExtracting {
+					return gerr
+				}
+				cur.Status = domain.ImportUploaded // waits; it is picked up again if the AI of the group is turned back on
+				return e.store.UpdateImport(sctx, cur)
+			})
+			return nil
+		}
 		if err != nil {
 			if errors.Is(err, ErrModelUnavailable) && ok == 0 && failed == 0 {
 				// nothing was read: put it back and try again on a later tick instead of burning the file
@@ -204,7 +215,7 @@ func (e *Engine) ConsolidateGroup(ctx context.Context, ref GroupRef, explicit bo
 		if st, err = e.store.GetState(sctx, ref.TenantID, ref.GroupID); err != nil {
 			return err
 		}
-		items, err = e.store.ListItems(sctx, ref.TenantID, ref.GroupID, ItemFilter{Tier: domain.TierEpisodic, Limit: 2000})
+		items, err = e.store.ListItems(sctx, ref.TenantID, ref.GroupID, ItemFilter{Tier: domain.TierEpisodic, OldestFirst: true, Limit: 2000})
 		return err
 	}); err != nil {
 		return err
@@ -282,7 +293,7 @@ func (e *Engine) ConsolidateGroup(ctx context.Context, ref GroupRef, explicit bo
 		for _, c := range out {
 			it := domain.Item{TenantID: ref.TenantID, GroupID: ref.GroupID, Kind: c.Kind, Tier: domain.TierConsolidated, Status: domain.StatusOpen,
 				Truth: domain.TruthAIInferred, Summary: c.Summary, ActorLabel: c.Actor, Relevance: consolidatedRelevance(c.Replaces, now),
-				LastReinforcedAt: now, Source: domain.SourceConsolidation, PromptVersion: domain.PromptVersion, Fingerprint: domain.Fingerprint(c.Kind, c.Summary)}
+				LastReinforcedAt: now, Source: domain.SourceConsolidation, PromptVersion: domain.PromptVersion, Fingerprint: domain.FingerprintFor(domain.TierConsolidated, c.Kind, c.Summary)}
 			stored, isNew, err := e.store.InsertItem(sctx, it)
 			if err != nil {
 				return err
@@ -293,6 +304,9 @@ func (e *Engine) ConsolidateGroup(ctx context.Context, ref GroupRef, explicit bo
 				}
 			}
 			for _, old := range c.Replaces {
+				if old.ID == stored.ID { // never supersede an item by itself
+					continue
+				}
 				cur, err := e.store.GetItem(sctx, ref.TenantID, old.ID, true)
 				if errors.Is(err, ErrNotFound) {
 					continue

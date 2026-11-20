@@ -49,14 +49,15 @@ func DefaultEngineConfig() EngineConfig {
 // Engine keeps the memory of the groups. It runs in the worker. A model call is NEVER made while a transaction is open: every step
 // reads in one short session, calls the model with no session, and writes in another short session.
 type Engine struct {
-	store    Store
-	sessions Sessions
-	models   *intelapp.ModelRouter
-	ledger   aiusage.Ledger
-	cipher   Cipher
-	flags    Flags
-	cfg      EngineConfig
-	now      func() time.Time
+	store         Store
+	sessions      Sessions
+	models        *intelapp.ModelRouter
+	ledger        aiusage.Ledger
+	cipher        Cipher
+	sweepSessions Sessions
+	flags         Flags
+	cfg           EngineConfig
+	now           func() time.Time
 }
 
 func NewEngine(store Store, sessions Sessions, models *intelapp.ModelRouter, flags Flags) *Engine {
@@ -64,12 +65,19 @@ func NewEngine(store Store, sessions Sessions, models *intelapp.ModelRouter, fla
 }
 
 func (e *Engine) WithLedger(l aiusage.Ledger) *Engine { e.ledger = l; return e }
-func (e *Engine) WithCipher(c Cipher) *Engine         { e.cipher = c; return e }
-func (e *Engine) WithConfig(c EngineConfig) *Engine   { e.cfg = c; return e }
+
+// WithSweepSessions sets the sessions the retention sweep uses. The raw of a suspended company must be discarded on schedule too, so the sweep must not
+// refuse a suspended tenant the way the reading does.
+func (e *Engine) WithSweepSessions(s Sessions) *Engine { e.sweepSessions = s; return e }
+func (e *Engine) WithCipher(c Cipher) *Engine          { e.cipher = c; return e }
+func (e *Engine) WithConfig(c EngineConfig) *Engine    { e.cfg = c; return e }
 func (e *Engine) WithClock(f func() time.Time) *Engine {
 	e.now = f
 	return e
 }
+
+// maxBatchFailures: after this many unusable answers in a row at the same cursor, the batch is skipped.
+const maxBatchFailures = 3
 
 // RunReport is what one run did: counts only.
 type RunReport struct {
@@ -111,8 +119,8 @@ type sourceMsg struct {
 
 // ---- the tick of the worker
 
-// Tick does one pass of the background work: extract the imports waiting, read the groups that are due, consolidate the ones that need it and
-// discard the raw files that expired. It never returns an error of one group to the next: a failure is logged with ids and the pass goes on.
+// Tick does one pass of the background work: extract the imports waiting, read the groups that are due and consolidate the ones that need it.
+// (The retention sweep is RunSweep, which runs even with the copilot off.) It never returns an error of one group to the next: a failure is logged with ids and the pass goes on.
 func (e *Engine) Tick(ctx context.Context) {
 	if !e.flags.MemoryEnabled {
 		return
@@ -142,11 +150,6 @@ func (e *Engine) Tick(ctx context.Context) {
 		}
 		_ = e.sessions(ctx, ref.TenantID, func(sctx context.Context) error { return e.store.Touch(sctx, ref.TenantID, ref.GroupID, now) })
 	}
-	if n, err := e.SweepExpiredImports(ctx); err != nil {
-		log.Printf("groupai: sweeping expired imports failed: %v", err)
-	} else if n > 0 {
-		log.Printf("groupai: %d raw import file(s) discarded after the retention period", n)
-	}
 }
 
 // Run ticks until the context ends. A panic in one pass is logged and the loop goes on: the copilot is never a single point of failure.
@@ -170,6 +173,32 @@ func (e *Engine) Run(ctx context.Context, every time.Duration) {
 	}
 }
 
+// RunSweep is Run for the retention sweep alone: it keeps discarding expired raw imports even when the copilot itself is switched off (the documented
+// rollback must not make encrypted raw outlive its retention).
+func (e *Engine) RunSweep(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("groupai: a sweep panicked and was abandoned: %v", r)
+				}
+			}()
+			if n, err := e.SweepExpiredImports(ctx); err != nil {
+				log.Printf("groupai: sweeping expired imports failed: %v", err)
+			} else if n > 0 {
+				log.Printf("groupai: %d raw import file(s) discarded after the retention period", n)
+			}
+		}()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // SweepExpiredImports discards the raw of every import whose retention ended (ADR-0050 §6, rule b).
 func (e *Engine) SweepExpiredImports(ctx context.Context) (int, error) {
 	now := e.now()
@@ -178,8 +207,12 @@ func (e *Engine) SweepExpiredImports(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	n := 0
+	sessions := e.sessions
+	if e.sweepSessions != nil {
+		sessions = e.sweepSessions
+	}
 	for _, ref := range refs {
-		err := e.sessions(ctx, ref.TenantID, func(sctx context.Context) error {
+		err := sessions(ctx, ref.TenantID, func(sctx context.Context) error {
 			if err := e.store.DiscardImport(sctx, ref.TenantID, ref.ImportID, domain.DiscardExpired, nil, now); err != nil {
 				return err
 			}
@@ -256,11 +289,26 @@ func (e *Engine) RunGroup(ctx context.Context, ref GroupRef, explicit bool) (Run
 		maxBatches = e.cfg.MaxBatchesBoot
 	}
 	cursorAt, cursorID := st.LastProcessedAt, st.LastProcessedMessageID
+	fails := st.ConsecutiveFailures
+	skipped := 0
 	var runErr error
+	failedAnswer := false
 	for rep.Batches < maxBatches {
 		var msgs []GroupMessage
 		if err := e.sessions(ctx, ref.TenantID, func(sctx context.Context) error {
-			var err error
+			// the memory may have been erased (the cursor reset) or the AI turned off while the previous batch was being answered: stop at once
+			cur, err := e.store.GetState(sctx, ref.TenantID, ref.GroupID)
+			if err != nil {
+				return err
+			}
+			if cursorAt != nil && (cur.LastProcessedAt == nil || !cur.LastProcessedAt.Equal(*cursorAt)) {
+				return ErrAborted
+			}
+			if gi, err := e.store.Group(sctx, ref.TenantID, ref.GroupID); err != nil {
+				return err
+			} else if !gi.AIEnabled {
+				return ErrAborted
+			}
 			msgs, err = e.store.MessagesAfter(sctx, ref.TenantID, ref.GroupID, cursorAt, cursorID, e.cfg.BatchMessages*2)
 			return err
 		}); err != nil {
@@ -281,10 +329,24 @@ func (e *Engine) RunGroup(ctx context.Context, ref GroupRef, explicit bool) (Run
 		if len(eligible) > 0 {
 			res, err := e.extractBatch(ctx, ref, eligible, domain.SourceLive, nil, true)
 			if err != nil {
-				runErr = err
-				break
+				if errors.Is(err, domain.ErrInvalidOutput) && fails+1 >= maxBatchFailures {
+					// the same batch answered something unusable several runs in a row: skip it (and say so in the run's state) instead of
+					// stopping the group forever on one bad batch
+					log.Printf("groupai: skipping a batch of group %s after %d unusable answers", ref.GroupID, fails+1)
+					skipped++
+					fails = 0
+				} else {
+					if errors.Is(err, domain.ErrInvalidOutput) {
+						fails++
+						failedAnswer = true
+					}
+					runErr = err
+					break
+				}
+			} else {
+				fails = 0
+				rep.add(res)
 			}
-			rep.add(res)
 		}
 		t, id := last.CreatedAt, last.ID
 		cursorAt, cursorID = &t, &id
@@ -297,8 +359,8 @@ func (e *Engine) RunGroup(ctx context.Context, ref GroupRef, explicit bool) (Run
 		}
 	}
 	// the final record: the run's own state (ok or not), the ask cleared when it was served
-	rec := RunRecord{At: e.now(), OK: runErr == nil, PromptVersion: domain.PromptVersion, InputTokens: rep.InputTokens, OutputTokens: rep.OutputTokens,
-		ClearAnalyzeAsk: runErr == nil || !errors.Is(runErr, ErrBudget)}
+	rec := RunRecord{At: e.now(), OK: runErr == nil && skipped == 0, Failed: failedAnswer, PromptVersion: domain.PromptVersion, InputTokens: rep.InputTokens,
+		OutputTokens: rep.OutputTokens, ClearAnalyzeAsk: runErr == nil || !errors.Is(runErr, ErrBudget)}
 	if err := e.sessions(ctx, ref.TenantID, func(sctx context.Context) error { return e.store.RecordRun(sctx, ref.TenantID, ref.GroupID, rec) }); err != nil && runErr == nil {
 		runErr = err
 	}
@@ -343,7 +405,11 @@ func authorLabel(al *domain.Aliaser, m GroupMessage) string {
 
 // cleanText is the text of a message as the model may see it, and as an evidence excerpt may keep it: sanitized, masked, bounded.
 func (e *Engine) cleanText(s string) string {
-	t := strings.TrimSpace(domain.MaskPII(untrusted.SanitizeDerivedText(s)))
+	clean := untrusted.SanitizeDerivedText(s)
+	if untrusted.ContainsCredential(clean) { // a message that carries a secret never reaches the provider nor an evidence excerpt
+		return "[mensagem omitida: parece conter uma credencial]"
+	}
+	t := strings.TrimSpace(domain.MaskPII(clean))
 	if r := []rune(t); len(r) > e.cfg.MessageRunes {
 		t = string(r[:e.cfg.MessageRunes-1]) + "…"
 	}
@@ -410,6 +476,23 @@ func (e *Engine) extractBatch(ctx context.Context, ref GroupRef, msgs []sourceMs
 		return res, nil
 	}
 	err = e.sessions(ctx, ref.TenantID, func(sctx context.Context) error {
+		// the world may have changed while the model answered: if the AI was turned off, the import discarded or the memory erased, write nothing
+		gi, err := e.store.Group(sctx, ref.TenantID, ref.GroupID)
+		if err != nil {
+			return err
+		}
+		if !gi.AIEnabled {
+			return ErrAborted
+		}
+		if importID != nil {
+			imp, err := e.store.GetImport(sctx, ref.TenantID, *importID, true) // FOR UPDATE: serialized with a discard
+			if err != nil {
+				return err
+			}
+			if imp.Status != domain.ImportExtracting {
+				return ErrAborted
+			}
+		}
 		c, r, u, ri, err := e.applyOps(sctx, ref, ops, src, importID)
 		res.Created, res.Resolved, res.Updated, res.Reinforced = c, r, u, ri
 		return err
@@ -456,7 +539,7 @@ func renderExtraction(items []domain.Item, msgs []sourceMsg, nonce string, memor
 	shown := 0
 	for _, it := range items {
 		h := fmt.Sprintf("i%d", shown+1)
-		line := fmt.Sprintf("%s [kind=%s status=%s truth=%s actor=%s] %s\n", h, it.Kind, it.Status, it.Truth, quote(it.ActorLabel), quote(it.Summary))
+		line := fmt.Sprintf("%s [kind=%s status=%s truth=%s actor=%s] %s\n", h, it.Kind, it.Status, it.Truth, quote(domain.MaskPII(it.ActorLabel)), quote(domain.MaskPII(it.Summary)))
 		n := len([]rune(line))
 		if n > budget {
 			break
@@ -487,7 +570,7 @@ func (e *Engine) applyOps(ctx context.Context, ref GroupRef, ops []domain.Op, sr
 		case domain.OpAdd:
 			it := domain.Item{TenantID: ref.TenantID, GroupID: ref.GroupID, Kind: op.Kind, Tier: domain.TierEpisodic, Status: op.Status, Truth: op.Truth,
 				Summary: op.Summary, ActorLabel: op.Actor, Evidence: op.Evidence, Relevance: domain.NewRelevance, LastReinforcedAt: now, Source: src,
-				SourceImportID: importID, PromptVersion: domain.PromptVersion, Fingerprint: domain.Fingerprint(op.Kind, op.Summary)}
+				SourceImportID: importID, PromptVersion: domain.PromptVersion, Fingerprint: domain.FingerprintFor(domain.TierEpisodic, op.Kind, op.Summary)}
 			stored, isNew, err := e.store.InsertItem(ctx, it)
 			if err != nil {
 				return created, resolved, updated, reinforced, err
@@ -499,7 +582,22 @@ func (e *Engine) applyOps(ctx context.Context, ref GroupRef, ops []domain.Op, sr
 				}
 				continue
 			}
-			// the same fact was already there: seeing it again reinforces it and may add its evidence
+			// the same words were already there. A request that was settled and is asked again is OPEN again (a recurring need must not vanish into
+			// an old resolved item); anything else is just seen again, which reinforces it and may add its evidence
+			if stored.Status == domain.StatusResolved && op.Status == domain.StatusOpen && stored.Kind == domain.KindRequest && !stored.Protected() && stored.Tier == domain.TierEpisodic {
+				stored.Status = domain.StatusOpen
+				stored.Evidence = mergeEvidence(stored.Evidence, op.Evidence)
+				stored.Relevance = domain.Reinforced(stored.Relevance, stored.LastReinforcedAt, now, false, 0.5)
+				stored.LastReinforcedAt = now
+				if err := e.store.UpdateItem(ctx, stored, stored.Version); err != nil {
+					return created, resolved, updated, reinforced, err
+				}
+				updated++
+				if err := e.event(ctx, ref, &stored.ID, EventReopened, map[string]any{"source": string(src)}); err != nil {
+					return created, resolved, updated, reinforced, err
+				}
+				continue
+			}
 			if err := e.reinforce(ctx, stored, op.Evidence, now); err != nil {
 				return created, resolved, updated, reinforced, err
 			}
@@ -522,7 +620,7 @@ func (e *Engine) applyOps(ctx context.Context, ref GroupRef, ops []domain.Op, sr
 				reinforced++
 				continue
 			}
-			if cur.Protected() || cur.Status == domain.StatusSuperseded {
+			if cur.Protected() || cur.Status == domain.StatusSuperseded || cur.Tier == domain.TierConsolidated {
 				continue
 			}
 			if op.Type == domain.OpResolve {
@@ -539,11 +637,12 @@ func (e *Engine) applyOps(ctx context.Context, ref GroupRef, ops []domain.Op, sr
 				}
 				continue
 			}
-			fp := domain.Fingerprint(cur.Kind, op.Summary)
+			fp := domain.FingerprintFor(cur.Tier, cur.Kind, op.Summary)
 			if fp == cur.Fingerprint {
 				continue
 			}
 			cur.Summary, cur.Fingerprint, cur.Truth = op.Summary, fp, domain.TruthAIInferred
+			cur.Evidence = mergeEvidence(cur.Evidence, op.Evidence)
 			cur.LastReinforcedAt = now
 			if err := e.store.UpdateItem(ctx, cur, cur.Version); err != nil {
 				if errors.Is(err, ErrDuplicateItem) { // the new words equal another live item: leave both as they are
@@ -566,7 +665,7 @@ func (e *Engine) reinforce(ctx context.Context, it domain.Item, extra []domain.E
 	}
 	rel := domain.Reinforced(it.Relevance, it.LastReinforcedAt, now, it.Protected(), 0.5)
 	var ev []domain.Evidence
-	if len(extra) > 0 && it.Tier == domain.TierEpisodic {
+	if len(extra) > 0 && it.Tier == domain.TierEpisodic && !it.Protected() {
 		ev = mergeEvidence(it.Evidence, extra)
 	}
 	return e.store.ReinforceItem(ctx, it.TenantID, it.ID, rel, now, ev)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,9 @@ type Handler struct {
 func NewHandler(pool *pgxpool.Pool, svc *application.Service, audit auditports.AuditEventRepository) *Handler {
 	return &Handler{pool: pool, svc: svc, audit: audit}
 }
+
+// importSlots bounds the uploads handled at once by this process.
+var importSlots = make(chan struct{}, 2)
 
 // Routes registers every route of the module on r (a ServeMux or a recorder), wrapped by wrap (authentication + the tenant session). The
 // contract test reads the same list, so a route and its documentation cannot drift apart.
@@ -328,6 +332,14 @@ func (h *Handler) ListMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	f := application.ItemFilter{OrderByRank: true, Query: strings.TrimSpace(q.Get("q")), IncludeSuper: q.Get("include_superseded") == "true"}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 500 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		f.Limit = n
+	}
 	if len(f.Query) > 200 {
 		http.Error(w, "invalid search", http.StatusBadRequest)
 		return
@@ -590,9 +602,27 @@ func (h *Handler) UploadImport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// a 50 MiB file is held (and parsed, sealed and stored) in this request: only a few at a time
+	select {
+	case importSlots <- struct{}{}:
+		defer func() { <-importSlots }()
+	default:
+		w.Header().Set("Retry-After", "30")
+		http.Error(w, "another import is being processed; try again in a moment", http.StatusServiceUnavailable)
+		return
+	}
+	// the server's default 15 s read/write deadlines fit a JSON call, not a large upload followed by a scan and a big insert
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(2 * time.Minute))
+	_ = rc.SetWriteDeadline(time.Now().Add(4 * time.Minute))
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, domain.MaxImportBytes+1))
 	if err != nil {
-		http.Error(w, "the file is too large", http.StatusRequestEntityTooLarge)
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, "the file is too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "the file could not be read", http.StatusBadRequest)
+		}
 		return
 	}
 	im, err := h.svc.UploadImport(r.Context(), tc.TenantID, gid, tc.ActorID, r.URL.Query().Get("filename"), body)
@@ -720,16 +750,28 @@ func (h *Handler) EditProposal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Title       string     `json:"title"`
-		Description string     `json:"description"`
-		Priority    string     `json:"priority"`
-		DueAt       *time.Time `json:"due_at"`
-		Version     int        `json:"version"`
+		Title       *string         `json:"title"`
+		Description *string         `json:"description"`
+		Priority    *string         `json:"priority"`
+		DueAt       json.RawMessage `json:"due_at"`
+		Version     int             `json:"version"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	p, err := h.svc.EditProposal(r.Context(), tc.TenantID, gid, pid, application.ProposalEdit{Title: req.Title, Description: req.Description, Priority: req.Priority, DueAt: req.DueAt, Version: req.Version})
+	edit := application.ProposalEdit{Title: req.Title, Description: req.Description, Priority: req.Priority, Version: req.Version}
+	if req.DueAt != nil { // sent: a date, or null to clear it
+		edit.DueAtSet = true
+		if string(req.DueAt) != "null" {
+			var t time.Time
+			if err := json.Unmarshal(req.DueAt, &t); err != nil {
+				http.Error(w, "invalid due_at", http.StatusBadRequest)
+				return
+			}
+			edit.DueAt = &t
+		}
+	}
+	p, err := h.svc.EditProposal(r.Context(), tc.TenantID, gid, pid, edit)
 	if err != nil {
 		writeErr(w, err)
 		return

@@ -162,9 +162,13 @@ type fakeModel struct {
 	outputs []string
 	inputs  []string
 	err     error
+	onCall  func() // runs while "the provider is answering": the world may change meanwhile
 }
 
 func (f *fakeModel) Generate(_ context.Context, req aiports.GenerateRequest) (aiports.GenerateResponse, error) {
+	if f.onCall != nil {
+		f.onCall()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inputs = append(f.inputs, req.Input)

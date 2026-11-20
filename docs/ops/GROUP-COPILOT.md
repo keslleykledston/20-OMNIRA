@@ -44,7 +44,8 @@ SELECT task, count(*), sum(input_tokens), sum(output_tokens), count(*) FILTER (W
 - **Import parado em `extracting`:** se o worker caiu, volta sozinho para leitura após 30 min. Se ficar em `uploaded`, o modelo está indisponível (ele tenta de novo a cada minuto) ou a IA do grupo foi desligada.
 - **`last_run_ok = false`:** provedor falhou ou respondeu algo inválido; o cursor não avança, a próxima tentativa lê as mesmas mensagens. Ver `ai_usage.reason`.
 - **Limite diário atingido:** o worker para até o dia seguinte; "Analisar agora" fica registrado e é atendido depois.
-- **Descartar raw antes dos 90 dias:** só com cobertura completa; senão espera o prazo. O sweep roda a cada minuto.
+- **Lote com resposta inválida:** o cursor não avança e a falha é contada; na 3ª vez seguida o lote é pulado e a execução fica `last_run_ok=false`.
+- **Descartar raw antes dos 90 dias:** só com cobertura completa; senão espera o prazo. O sweep roda a cada minuto, **mesmo com `OMNIRA_GROUP_MEMORY_ENABLED=false`** e para empresa suspensa.
 - **Apagar:** "apagar histórico" (ADR-0015) tira citações e raw e mantém o conhecimento; "apagar memória" (chave `group.memory.erase`) apaga tudo do grupo. Os eventos (sem conteúdo) ficam como trilha.
 
 ## Reverter
@@ -52,7 +53,7 @@ Desligar `OMNIRA_GROUP_MEMORY_ENABLED` e recriar api+worker: a API some, o worke
 
 ## Testes
 - Unidade (domínio: parser de exportação, extração, consolidação, descarte): `go test ./internal/groupai/domain/`.
-- Banco real e RLS (14 testes: Tenant A/B, membership revogada, tabelas append-only, import, consolidação, propostas, HTTP): `scripts/test-integration.sh ./internal/groupai/adapters`.
+- Banco real e RLS (25 testes: Tenant A/B, membership revogada, tabelas append-only, import, consolidação, propostas, HTTP): `scripts/test-integration.sh ./internal/groupai/adapters`.
 - Contrato e superfície anônima: `go test ./internal/groupai/adapters/ -run TestOpenAPIAndRoutesAgree` e `./internal/platform/httpserver -run TestGroupAIRoutes`.
 - RLS de todas as tabelas: `scripts/test-integration.sh ./internal/platform/db`.
 - A suíte de integração completa roda **sem argumentos** (`scripts/test-integration.sh`); nunca rodar `scripts/e2e-inbox.sh` (usa o NATS vivo).

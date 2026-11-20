@@ -26,6 +26,8 @@ const (
 	// MaxExportEntries / MaxExportRecords bound what a hostile or huge file may make the server do.
 	MaxExportEntries = 100
 	MaxExportRecords = 250000
+	// maxRecordBytes bounds what one message may accumulate from its continuation lines while parsing.
+	maxRecordBytes = 64 * 1024
 	// maxMessageRunes bounds one message; the model never needs more and the parse must not be a memory amplifier.
 	maxMessageRunes = 8000
 	// zipRatioLimit: an entry that inflates more than this is a zip bomb.
@@ -100,15 +102,32 @@ func ParseWhatsAppExport(text string, loc *time.Location) (ParseResult, error) {
 	text = strings.TrimPrefix(text, "\ufeff")
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 
+	// One pass over the text, no Split and no repeated concatenation: a continuation line is appended to a builder (and ignored past
+	// maxRecordBytes), so a file of a million blank lines costs a million iterations and a few kilobytes, not a quadratic copy.
 	var recs []rawRecord
-	for n, line := range strings.Split(text, "\n") {
+	var buf strings.Builder
+	flush := func() {
+		if len(recs) > 0 {
+			recs[len(recs)-1].rest = buf.String()
+		}
+		buf.Reset()
+	}
+	for n, rest := 0, text; len(rest) > 0 || n == 0; n++ {
+		line := rest
+		if i := strings.IndexByte(rest, '\n'); i >= 0 {
+			line, rest = rest[:i], rest[i+1:]
+		} else {
+			rest = ""
+		}
 		clean := invisibles.Replace(line)
 		rec, ok := matchHeader(clean, n+1)
 		if ok {
+			flush()
 			if len(recs) >= MaxExportRecords {
 				return res, fmt.Errorf("%w: more than %d messages", ErrImportTooLarge, MaxExportRecords)
 			}
 			recs = append(recs, rec)
+			buf.WriteString(rec.rest)
 			continue
 		}
 		if len(recs) == 0 {
@@ -117,8 +136,12 @@ func ParseWhatsAppExport(text string, loc *time.Location) (ParseResult, error) {
 			}
 			continue
 		}
-		recs[len(recs)-1].rest += "\n" + clean // a continuation of the previous message
+		if buf.Len() < maxRecordBytes { // a continuation of the previous message
+			buf.WriteByte('\n')
+			buf.WriteString(clean)
+		}
 	}
+	flush()
 	if len(recs) == 0 {
 		return res, fmt.Errorf("%w: no dated message found", ErrImportMalformed)
 	}

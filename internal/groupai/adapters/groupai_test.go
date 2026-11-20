@@ -561,7 +561,7 @@ func TestProposalFlowIsHumanApprovedAndIdempotent(t *testing.T) {
 		t.Fatalf("a second draft of the same item and kind must return the first: %+v created=%v", again, created)
 	}
 	e.inSession(tenant, admin, func(ctx context.Context) {
-		p, err = svc.EditProposal(ctx, tenant, g, p.ID, application.ProposalEdit{Title: "Enviar planilha ao financeiro", Priority: "high", Version: p.Version})
+		p, err = svc.EditProposal(ctx, tenant, g, p.ID, application.ProposalEdit{Title: ptr("Enviar planilha ao financeiro"), Priority: ptr("high"), Version: p.Version})
 	})
 	if err != nil || p.Title != "Enviar planilha ao financeiro" || p.Priority != "high" {
 		t.Fatalf("edit: %+v %v", p, err)
@@ -865,5 +865,269 @@ func TestDueGroupsOnlyListsOptedInGroupsOfActiveCompanies(t *testing.T) {
 	}
 	if due[0].GroupID != asked {
 		t.Errorf("a group somebody asked about must come first")
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// ---- findings of the independent review
+
+func (e *env) consolidatedItem(tenant, group uuid.UUID, kind domain.Kind, summary string) domain.Item {
+	e.t.Helper()
+	it := domain.Item{TenantID: tenant, GroupID: group, Kind: kind, Tier: domain.TierConsolidated, Status: domain.StatusOpen, Truth: domain.TruthAIInferred, Summary: summary,
+		Relevance: 1, LastReinforcedAt: time.Now(), Source: domain.SourceConsolidation, PromptVersion: domain.PromptVersion, Fingerprint: domain.FingerprintFor(domain.TierConsolidated, kind, summary)}
+	var stored domain.Item
+	if err := e.sessions()(e.ctx, tenant, func(c context.Context) error {
+		var err error
+		stored, _, err = NewStore(e.app).InsertItem(c, it)
+		return err
+	}); err != nil {
+		e.t.Fatal(err)
+	}
+	return stored
+}
+
+func TestARecurringRequestReopensAResolvedItem(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	old := e.seedItem(tenant, g, domain.KindRequest, domain.StatusResolved, domain.TruthAIInferred, false, 30*24*time.Hour, "Cliente pediu o envio do boleto", "")
+	e.msg(tenant, g, "Maria", "Pode enviar o boleto de novo?", time.Now().Add(-time.Hour))
+	model := &fakeModel{outputs: []string{`{"ops":[{"op":"add","kind":"request","summary":"Cliente pediu o envio do boleto","status":"open","basis":"said","evidence":[{"ref":"m1","quote":"enviar o boleto de novo"}]}]}`}}
+	if _, err := e.engine(model, nil).RunGroup(e.ctx, ref(tenant, g), true); err != nil {
+		t.Fatal(err)
+	}
+	got := e.items(tenant, g)
+	if len(got) != 1 || got[0].ID != old.ID || got[0].Status != domain.StatusOpen || len(got[0].Evidence) != 1 {
+		t.Fatalf("the new request vanished into the old resolved item: %+v", got)
+	}
+	if e.count(`SELECT count(*) FROM wa_group_memory_item_events WHERE item_id=$1 AND event_type='reopened'`, old.ID) != 1 {
+		t.Fatal("no reopened event")
+	}
+}
+
+func TestConsolidationNeverSupersedesAnItemByItself(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	old := e.seedItem(tenant, g, domain.KindFact, domain.StatusOpen, domain.TruthAIInferred, false, 40*24*time.Hour, "O financeiro envia as notas todo dia cinco", "")
+	// the model keeps the SAME words (only punctuation and case change)
+	model := &fakeModel{outputs: []string{`{"consolidated":[{"kind":"fact","summary":"o financeiro envia as notas, todo dia cinco!","actor":"financeiro","replaces":["i1"]}]}`}}
+	if err := e.engine(model, nil).ConsolidateGroup(e.ctx, ref(tenant, g), true); err != nil {
+		t.Fatal(err)
+	}
+	byTier := map[domain.Tier][]domain.Item{}
+	for _, it := range e.items(tenant, g) {
+		byTier[it.Tier] = append(byTier[it.Tier], it)
+	}
+	if len(byTier[domain.TierConsolidated]) != 1 || len(byTier[domain.TierEpisodic]) != 1 {
+		t.Fatalf("the knowledge was lost: %+v", byTier)
+	}
+	ep, co := byTier[domain.TierEpisodic][0], byTier[domain.TierConsolidated][0]
+	if ep.ID != old.ID || ep.Status != domain.StatusSuperseded || ep.SupersededBy == nil || *ep.SupersededBy != co.ID || co.ID == ep.ID || co.Status != domain.StatusOpen {
+		t.Fatalf("episodic %+v consolidated %+v", ep, co)
+	}
+}
+
+func TestAModelAnswerThatTouchesAConsolidatedItemDoesNotAbortTheRun(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	co := e.consolidatedItem(tenant, g, domain.KindFact, "Horário de atendimento comercial")
+	e.msg(tenant, g, "Maria", "Preciso da nota fiscal de março.", time.Now().Add(-time.Hour))
+	model := &fakeModel{outputs: []string{`{"ops":[
+	  {"op":"resolve","id":"i1","evidence":[{"ref":"m1","quote":"x"}]},
+	  {"op":"update","id":"i1","summary":"reescrito","evidence":[{"ref":"m1","quote":"x"}]},
+	  {"op":"add","kind":"request","summary":"Maria pediu a nota fiscal de março","status":"open","basis":"said","evidence":[{"ref":"m1","quote":"nota fiscal de março"}]}]}`}}
+	rep, err := e.engine(model, nil).RunGroup(e.ctx, ref(tenant, g), true)
+	if err != nil || rep.Created != 1 {
+		t.Fatalf("the valid operation of the same answer was lost: %+v %v", rep, err)
+	}
+	for _, it := range e.items(tenant, g) {
+		if it.ID == co.ID && (it.Status != domain.StatusOpen || it.Summary != co.Summary || len(it.Evidence) != 0) {
+			t.Fatalf("the consolidated item was touched: %+v", it)
+		}
+	}
+}
+
+func TestWorkStopsWhenTheAIIsTurnedOffWhileTheModelAnswers(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	e.msg(tenant, g, "Maria", "Preciso da nota fiscal de março.", time.Now().Add(-time.Hour))
+	model := &fakeModel{outputs: []string{`{"ops":[{"op":"add","kind":"request","summary":"pedido","status":"open","basis":"said","evidence":[{"ref":"m1","quote":"nota fiscal"}]}]}`}}
+	model.onCall = func() { e.exec(`UPDATE wa_groups SET ai_enabled=false WHERE id=$1`, g) }
+	if _, err := e.engine(model, nil).RunGroup(e.ctx, ref(tenant, g), true); !errors.Is(err, application.ErrAborted) {
+		t.Fatalf("want ErrAborted, got %v", err)
+	}
+	if len(e.items(tenant, g)) != 0 {
+		t.Fatal("items were written after the AI of the group was turned off")
+	}
+}
+
+func TestAnImportStopsWhenItWasDiscardedWhileTheModelAnswers(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	admin := e.member(tenant, "tenant_admin", "active")
+	svc := e.service(nil, nil)
+	var imp domain.Import
+	var err error
+	e.inSession(tenant, admin, func(ctx context.Context) {
+		imp, err = svc.UploadImport(ctx, tenant, g, admin, "c.txt", []byte(exportChat))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &fakeModel{outputs: []string{`{"ops":[{"op":"add","kind":"request","summary":"pedido","status":"open","basis":"said","evidence":[{"ref":"m1","quote":"nota fiscal"}]}]}`}}
+	model.onCall = func() { // "delete history" arrives while the model is answering
+		e.exec(`UPDATE wa_group_imports SET status='discarded', discarded_at=now(), discard_reason='history_deleted' WHERE id=$1`, imp.ID)
+		e.exec(`DELETE FROM wa_group_import_blobs WHERE import_id=$1`, imp.ID)
+	}
+	if err := e.engine(model, nil).ExtractImport(e.ctx, application.ImportRef{TenantID: tenant, GroupID: g, ImportID: imp.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.items(tenant, g)) != 0 {
+		t.Fatal("items were written from an import that had been discarded")
+	}
+}
+
+func TestUnusableAnswersSkipTheBatchAfterThreeRunsInsteadOfBlockingTheGroup(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	e.msg(tenant, g, "Maria", "mensagem que faz o modelo responder em prosa", time.Now().Add(-time.Hour))
+	model := &fakeModel{outputs: []string{"Claro! Aqui está um resumo em texto livre."}}
+	eng := e.engine(model, nil)
+	for i := 1; i <= 2; i++ {
+		if _, err := eng.RunGroup(e.ctx, ref(tenant, g), true); !errors.Is(err, domain.ErrInvalidOutput) {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		if e.count(`SELECT count(*) FROM wa_group_memory_state WHERE group_id=$1 AND last_processed_at IS NULL AND consecutive_failures=$2`, g, i) != 1 {
+			t.Fatalf("run %d: the cursor must stay and the failure be counted", i)
+		}
+	}
+	if _, err := eng.RunGroup(e.ctx, ref(tenant, g), true); err != nil {
+		t.Fatalf("third run must skip the batch: %v", err)
+	}
+	if e.count(`SELECT count(*) FROM wa_group_memory_state WHERE group_id=$1 AND last_processed_at IS NOT NULL AND consecutive_failures=0 AND NOT last_run_ok`, g) != 1 {
+		t.Fatal("the batch was not skipped, or the run is not marked as not-ok")
+	}
+}
+
+func TestACredentialInAMessageNeverReachesTheProvider(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	secret := "Bearer abcdefghijklmnopqrstuvwxyz0123456789"
+	e.msg(tenant, g, "Maria", "o token é "+secret+" guarde", time.Now().Add(-time.Hour))
+	e.msg(tenant, g, "João", "Preciso do relatório de março.", time.Now().Add(-59*time.Minute))
+	model := &fakeModel{outputs: []string{`{"ops":[{"op":"add","kind":"request","summary":"João pediu o relatório","status":"open","basis":"said","evidence":[{"ref":"m2","quote":"relatório de março"}]}]}`}}
+	if _, err := e.engine(model, nil).RunGroup(e.ctx, ref(tenant, g), true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(model.lastInput(), "abcdefghij") {
+		t.Fatal("a credential was sent to the provider")
+	}
+}
+
+func TestAMessageThatJustArrivedIsReadOnceItSettled(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	e.msg(tenant, g, "Maria", "acabou de chegar", time.Now())
+	model := &fakeModel{}
+	rep, err := e.engine(model, nil).RunGroup(e.ctx, ref(tenant, g), true)
+	if err != nil || rep.Messages != 0 || model.calls() != 0 {
+		t.Fatalf("a message still inside its commit window was read: %+v %v", rep, err)
+	}
+}
+
+func TestPendingImportsSkipGroupsWithoutTheAI(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	off := e.group(tenant, conn, "Sem IA", false)
+	on := e.group(tenant, conn, "Com IA", true)
+	admin := e.member(tenant, "tenant_admin", "active")
+	stuck, live := e.seedImport(tenant, off, admin), e.seedImport(tenant, on, admin)
+	refs, err := NewStore(e.app).PendingImports(e.ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(id uuid.UUID) bool {
+		for _, r := range refs {
+			if r.ImportID == id {
+				return true
+			}
+		}
+		return false
+	}
+	if has(stuck) || !has(live) {
+		t.Fatalf("an import of a group without the AI must not sit at the head of the queue: stuck=%v live=%v", has(stuck), has(live))
+	}
+}
+
+func TestEditingAProposalChangesOnlyWhatWasSentAndADraftIsNotPaidTwice(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	admin := e.member(tenant, "tenant_admin", "active")
+	model := &fakeModel{outputs: []string{`{"title":"Acompanhar entrega da planilha","description":"Cliente combinou receber a planilha na sexta.","priority":"normal"}`}}
+	svc := e.service(model, e.newFakeBridge(tenant))
+	it := e.seedItem(tenant, g, domain.KindAgreement, domain.StatusOpen, domain.TruthAIInferred, false, time.Hour, "Planilha na sexta", "")
+	var p, again domain.Proposal
+	var err error
+	e.inSession(tenant, admin, func(ctx context.Context) {
+		p, _, err = svc.DraftProposal(ctx, tenant, g, it.ID, admin, domain.ProposalTask)
+	})
+	if err != nil || p.ProposedBy != "ai" || model.calls() != 1 {
+		t.Fatalf("draft: %+v calls=%d %v", p, model.calls(), err)
+	}
+	e.inSession(tenant, admin, func(ctx context.Context) {
+		again, _, err = svc.DraftProposal(ctx, tenant, g, it.ID, admin, domain.ProposalTask)
+	})
+	if err != nil || again.ID != p.ID || model.calls() != 1 {
+		t.Fatalf("a repeated draft must return the live proposal without a model call: calls=%d %v", model.calls(), err)
+	}
+	e.inSession(tenant, admin, func(ctx context.Context) {
+		p, err = svc.EditProposal(ctx, tenant, g, p.ID, application.ProposalEdit{Title: ptr("Só o título mudou"), Version: p.Version})
+	})
+	if err != nil || p.Title != "Só o título mudou" || !strings.Contains(p.Description, "sexta") || p.Priority != "normal" {
+		t.Fatalf("a title-only edit wiped other fields: %+v %v", p, err)
+	}
+	due := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Second)
+	e.inSession(tenant, admin, func(ctx context.Context) {
+		p, err = svc.EditProposal(ctx, tenant, g, p.ID, application.ProposalEdit{DueAt: &due, DueAtSet: true, Version: p.Version})
+	})
+	if err != nil || p.DueAt == nil || !p.DueAt.Equal(due) {
+		t.Fatalf("due: %+v %v", p, err)
+	}
+	e.inSession(tenant, admin, func(ctx context.Context) {
+		p, err = svc.EditProposal(ctx, tenant, g, p.ID, application.ProposalEdit{Priority: ptr("high"), Version: p.Version})
+	})
+	if err != nil || p.DueAt == nil || p.Priority != "high" {
+		t.Fatalf("an edit that did not send due_at must keep it: %+v %v", p, err)
+	}
+}
+
+func TestEraseMemoryScrubsTheWordsOfTheProposals(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	admin := e.member(tenant, "tenant_admin", "active")
+	svc := e.service(nil, e.newFakeBridge(tenant))
+	it := e.seedItem(tenant, g, domain.KindRequest, domain.StatusOpen, domain.TruthAIInferred, false, time.Hour, "Cliente sigiloso pediu o contrato X", "")
+	e.inSession(tenant, admin, func(ctx context.Context) {
+		if _, _, err := svc.DraftProposal(ctx, tenant, g, it.ID, admin, domain.ProposalCase); err != nil {
+			t.Error(err)
+		}
+	})
+	e.inSession(tenant, admin, func(ctx context.Context) {
+		if _, _, err := svc.EraseMemory(ctx, tenant, g, admin); err != nil {
+			t.Error(err)
+		}
+	})
+	if e.count(`SELECT count(*) FROM wa_group_proposals WHERE group_id=$1 AND (title ILIKE '%sigiloso%' OR description ILIKE '%sigiloso%')`, g) != 0 {
+		t.Fatal("the words of the erased memory survived in the proposals")
 	}
 }

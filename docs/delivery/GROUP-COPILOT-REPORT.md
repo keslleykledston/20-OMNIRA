@@ -6,13 +6,13 @@ Data: 2026-11-20. Branch: `feat/group-copilot-memory` (worktree `/data/cafegpt/t
 |---|---|
 | Banco (migrations 000169–000171, RLS FORCE, append-only, permissões) | POSTGRES VERIFIED (cadeia completa aplicada em Postgres descartável; varredura de RLS passou) |
 | Domínio (parser de exportação, extração, consolidação, regras de descarte) | UNIT VERIFIED |
-| Aplicação + adaptadores Postgres + HTTP | POSTGRES VERIFIED (14 testes de integração, RLS real, runtime `omnira_app`) |
+| Aplicação + adaptadores Postgres + HTTP | POSTGRES VERIFIED (25 testes de integração, RLS real, runtime `omnira_app`) |
 | Contrato OpenAPI `contracts/openapi/group-ai-v1.yaml` (19 operações) | HTTP-surface VERIFIED (deriva nas duas direções; 401 anônimo/credencial forjada) |
 | Worker (`Engine.Run`), wiring api/worker, compose, nginx do `web` | IMPLEMENTED, NOT WIRED a nenhum ambiente (compila; não subiu nenhum contêiner) |
 | Provedor real (Gemini) | NOT VERIFIED: os testes usam um modelo falso; nenhuma chamada real foi feita |
 | Painel web | ver o relatório do frontend (abaixo/anexo) — visual pendente da aprovação do dono |
 | E2E com WhatsApp/WAHA reais | NOT VERIFIED |
-| Codex (revisão) | `CODEX_PLUGIN_NOT_EXECUTED` |
+| Codex (revisão) | `CODEX_PLUGIN_NOT_EXECUTED`. No lugar: revisão adversarial independente (um agente sem contexto, leitura + testes) — ver "Revisão independente" |
 
 ## Fatias (ADR-0050)
 - **M0 modelo e permissões:** `wa_groups.ai_enabled*`, `wa_group_memory_items`, `wa_group_memory_item_events` (append-only: `UPDATE/DELETE` revogados + gatilho), `wa_group_memory_state`; permissões `group.ai.read`, `group.ai.manage`, `group.import`, `group.memory.erase` (admin e supervisor).
@@ -24,12 +24,17 @@ Data: 2026-11-20. Branch: `feat/group-copilot-memory` (worktree `/data/cafegpt/t
 ## Testes executados (comandos reais)
 - `go vet ./...` — limpo.
 - `go test ./internal/groupai/... ./internal/platform/httpserver/... ./internal/intelligence/... ./internal/audit/... ./internal/groups/...` — ok (os de integração pulam sem o banco; ver abaixo).
-- `scripts/test-integration.sh ./internal/groupai/adapters` — **ok** (14 testes em Postgres 16 descartável).
+- `scripts/test-integration.sh ./internal/groupai/adapters` — **ok** (25 testes em Postgres 16 descartável).
 - `scripts/test-integration.sh ./internal/platform/db ./internal/groups/adapters` — **ok** (inclui `TestRLSCompleteness` sobre as tabelas novas e a regressão do módulo de grupos com o gancho de "apagar histórico").
 - A suíte de integração **completa** (sem argumentos) **não foi rodada** nesta entrega.
 
 ## O que os testes de integração provam
 Tenant A/B com acesso cruzado de leitura e escrita em **cada** tabela nova; membership revogada; telefone nunca chega ao modelo; uma mensagem não fecha a cerca da zona não confiável; item confirmado por pessoa não é alterado pela IA; teto diário de chamadas; consolidação poupa pedido aberto, item fixado e confirmado; raw cifrado (o texto claro não aparece no banco); import duplicado, infectado, sem antivírus e malformado recusados sem deixar linha; descarte só com cobertura completa, expiração pelo sweep; eventos e blobs imutáveis até para o dono do banco; aprovação cria registros reais no módulo de serviço sem criar conversa nem `tickets`; HTTP: matriz de permissão, 404 igual para outro tenant, item de outro grupo inacessível pelo caminho, erro nunca ecoa conteúdo.
+
+## Revisão independente (2026-11-20)
+Um revisor sem contexto leu o diff e reproduziu parte dos achados. Corrigidos e cobertos por teste de regressão: parser de exportação quadrático (DoS por um `.txt` hostil); consolidação que podia substituir um item por ele mesmo; resposta do modelo que resolvia um item consolidado e abortava a transação (travando a leitura do grupo); máscara de telefone burlada por espaço sem quebra, hífen especial, caractere de largura zero e números colados; extração em andamento que continuava gravando depois de "apagar memória"/desligar a IA/descartar o import; import de grupo sem IA travando a fila de todos os tenants; pedido recorrente absorvido por item antigo resolvido (agora reabre); `resolve`/`update` sem evidência (agora exigem; no máximo 10 `resolve` por resposta; item consolidado ou protegido nunca); lote com resposta inválida bloqueando o grupo (pula após 3 tentativas e marca a execução como não-ok); upload sem prazo próprio e erro de leitura reportado como 413; varredura do raw vencido parando com a flag desligada ou empresa suspensa (agora sempre roda); proposta mantendo texto depois de "apagar memória"; edição parcial de proposta apagando campos; mensagem ainda na janela de commit pulada pelo cursor; credencial em mensagem enviada ao provedor; rascunho de proposta pagando chamada ao modelo para uma proposta que já existia, sem teto.
+
+Aceitos como limite conhecido (do relatório do revisor): um import grande pode fazer até 300 chamadas ao modelo sem contar na cota diária do grupo (cada passe só lê; a cobertura mostra o que ficou); a rota GET de busca grava a relevância dos itens encontrados; a política de leitura de `wa_group_import_blobs` deixa qualquer membro ativo do tenant ler o blob **cifrado** (restringir a leitura ao worker quebraria o descarte feito por uma pessoa, que precisa enxergar a linha); `MessageKeys` carrega os corpos das mensagens do intervalo do import; descartes por varredura/apagar não escrevem linha em `audit_events` (escrevem em `wa_group_memory_item_events`, sem conteúdo).
 
 ## Limites e pontos a revisar
 - O modelo usado nos testes é falso; **prompt e qualidade da extração não foram avaliados com um provedor real.** Antes de ligar em produção: rodar a extração num grupo real de teste e revisar os itens à mão.
