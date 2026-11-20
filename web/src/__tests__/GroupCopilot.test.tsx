@@ -12,7 +12,21 @@ vi.mock('axios')
 const READ_ALL = ['group.read', 'group.ai.read']
 const MANAGE_ALL = ['group.read', 'group.manage', 'group.ai.read', 'group.ai.manage', 'group.import', 'group.memory.erase']
 
-const group: Group = { id: 'g-1', name: 'Cobrança K3G', enabled: true, last_message_at: null, last_message: null }
+const group: Group = {
+  id: 'g-1',
+  name: 'Cobrança K3G',
+  enabled: true,
+  purpose: 'client_support',
+  account_id: null,
+  account_name: null,
+  additional_accounts: [],
+  connection_id: 'c-1',
+  connection_account: 'K3G',
+  ai_observer_enabled: false,
+  is_alert_channel: false,
+  last_message_at: null,
+  last_message: null,
+}
 
 const item = (over: Partial<MemoryItem> = {}): MemoryItem => ({
   id: 'i-1',

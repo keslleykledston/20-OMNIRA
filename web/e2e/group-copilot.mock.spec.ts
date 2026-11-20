@@ -51,7 +51,7 @@ function makeApi(page: Page, opts: { aiEnabled?: boolean; permissions?: string[]
         state.calls.push(`${m} ${p}`);
         if (p.endsWith('/events') || p.includes('/presence')) return route.abort();
         if (p.endsWith('/me/access')) return json(route, { permissions, role_key: 'tenant_supervisor' });
-        if (m === 'GET' && p === '/groups') return json(route, { items: [{ id: GROUP, name: 'Cobrança - Cliente Exemplo', enabled: true, last_message_at: '2026-11-18T13:58:00Z', last_message: { author_name: 'Rafael', from_me: false, message_type: 'text', preview: 'obrigado, fico no aguardo' } }] });
+        if (m === 'GET' && p === '/groups') return json(route, { items: [{ id: GROUP, name: 'Cobrança - Cliente Exemplo', enabled: true, purpose: 'client_support', account_id: null, account_name: null, additional_accounts: [], connection_id: 'c-1', connection_account: 'K3G', ai_observer_enabled: false, is_alert_channel: false, last_message_at: '2026-11-18T13:58:00Z', last_message: { author_name: 'Rafael', from_me: false, message_type: 'text', preview: 'obrigado, fico no aguardo' } }] });
         if (m === 'GET' && p === `/groups/${GROUP}/messages`) {
           return json(route, { has_more: false, items: [
             { id: 'm2', author_name: 'Rafael', from_me: false, message_type: 'text', body: 'obrigado, fico no aguardo', sent_at: '2026-11-18T13:58:00Z' },
@@ -165,7 +165,7 @@ test.describe('Copiloto de grupo (ADR-0060)', () => {
       const p = new URL(route.request().url()).pathname.replace('/api/v1/tenants/' + TENANT, '');
       if (p.endsWith('/events') || p.includes('/presence')) return route.abort();
       if (p.endsWith('/me/access')) return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ permissions: ['group.read', 'group.manage', 'group.ai.read'], role_key: 'x' }) });
-      if (p === '/groups') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: GROUP, name: 'Cobrança - Cliente Exemplo', enabled: true, last_message_at: null, last_message: null }] }) });
+      if (p === '/groups') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [{ id: GROUP, name: 'Cobrança - Cliente Exemplo', enabled: true, purpose: 'client_support', account_id: null, account_name: null, additional_accounts: [], connection_id: 'c-1', connection_account: 'K3G', ai_observer_enabled: false, is_alert_channel: false, last_message_at: null, last_message: null }] }) });
       if (p.includes('/messages')) return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], has_more: false }) });
       return route.fulfill({ status: 404, contentType: 'text/plain', body: 'not found' });
     });
