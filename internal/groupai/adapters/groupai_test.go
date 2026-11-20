@@ -746,6 +746,17 @@ func TestHTTPSurfacePermissionsTenancyAndShape(t *testing.T) {
 	if rec := call(t, e.app, tenantA, admin, "DELETE", base+"/"+other.ID.String(), nil, op, h.DeleteItem); rec.Code != http.StatusNotFound {
 		t.Errorf("delete item of another group: %d", rec.Code)
 	}
+	// ... and the refusal left it untouched (the check happens BEFORE any change, not after a commit)
+	if n := e.count(`SELECT count(*) FROM wa_group_memory_items WHERE id=$1 AND NOT pinned AND version=$2`, other.ID, other.Version); n != 1 {
+		t.Errorf("an item of another group was changed through this group's path")
+	}
+	// a search reinforces what it finds WITHOUT bumping the version, so a person's open edit does not turn stale
+	var before int
+	_ = e.seed.QueryRow(e.ctx, `SELECT version FROM wa_group_memory_items WHERE id=$1`, created.ID).Scan(&before)
+	call(t, e.app, tenantA, admin, "GET", base+"/search?q=comercial", nil, gp, h.SearchMemory)
+	if n := e.count(`SELECT count(*) FROM wa_group_memory_items WHERE id=$1 AND version=$2`, created.ID, before); n != 1 {
+		t.Errorf("a search bumped the version of the item")
+	}
 	if rec := call(t, e.app, tenantA, admin, "DELETE", base+"/"+created.ID.String(), nil, ip, h.DeleteItem); rec.Code != http.StatusNoContent {
 		t.Errorf("delete: %d", rec.Code)
 	}

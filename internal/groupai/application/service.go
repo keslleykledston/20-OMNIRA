@@ -136,9 +136,8 @@ func (s *Service) Search(ctx context.Context, tenantID, groupID uuid.UUID, query
 	}
 	now := s.now()
 	for _, it := range items {
-		it.Relevance = domain.Reinforced(it.Relevance, it.LastReinforcedAt, now, it.Protected(), 0.1)
-		it.LastReinforcedAt = now
-		_ = s.store.UpdateItem(ctx, it, it.Version) // a lost race only skips the reinforcement
+		rel := domain.Reinforced(it.Relevance, it.LastReinforcedAt, now, it.Protected(), 0.1)
+		_ = s.store.ReinforceItem(ctx, tenantID, it.ID, rel, now, nil) // a failed reinforcement never fails the search
 	}
 	return items, nil
 }
@@ -197,13 +196,16 @@ type ItemPatch struct {
 
 // PatchItem is what a person does to an item: edit its words, mark it open or resolved, pin it, confirm it. Editing or confirming makes it
 // human_confirmed. The version guards a concurrent change.
-func (s *Service) PatchItem(ctx context.Context, tenantID, itemID, actor uuid.UUID, p ItemPatch) (domain.Item, error) {
+func (s *Service) PatchItem(ctx context.Context, tenantID, groupID, itemID, actor uuid.UUID, p ItemPatch) (domain.Item, error) {
 	if err := s.requireMemory(); err != nil {
 		return domain.Item{}, err
 	}
 	it, err := s.store.GetItem(ctx, tenantID, itemID, true)
 	if err != nil {
 		return it, err
+	}
+	if it.GroupID != groupID { // checked BEFORE any change: an item of another group is not reachable through this group's path
+		return domain.Item{}, ErrNotFound
 	}
 	if p.Version != 0 && p.Version != it.Version {
 		return it, ErrConflict
@@ -265,13 +267,16 @@ func (s *Service) PatchItem(ctx context.Context, tenantID, itemID, actor uuid.UU
 	return it, nil
 }
 
-func (s *Service) DeleteItem(ctx context.Context, tenantID, itemID, actor uuid.UUID) error {
+func (s *Service) DeleteItem(ctx context.Context, tenantID, groupID, itemID, actor uuid.UUID) error {
 	if err := s.requireMemory(); err != nil {
 		return err
 	}
 	it, err := s.store.GetItem(ctx, tenantID, itemID, true)
 	if err != nil {
 		return err
+	}
+	if it.GroupID != groupID {
+		return ErrNotFound
 	}
 	if err := s.store.DeleteItem(ctx, tenantID, itemID); err != nil {
 		return err
@@ -334,6 +339,22 @@ func (s *Service) PurgeHistory(ctx context.Context, tenantID, groupID, actor uui
 }
 
 // ---- imports
+
+// CanImport is the cheap part of an upload, asked BEFORE the body is read: the flags, the antivirus and the group's AI opt-in. A file of 50 MiB is
+// not read just to be refused.
+func (s *Service) CanImport(ctx context.Context, tenantID, groupID uuid.UUID) error {
+	if err := s.requireMemory(); err != nil {
+		return err
+	}
+	if !s.flags.ImportEnabled || s.cipher == nil {
+		return ErrDisabled
+	}
+	if s.scanner == nil && !s.flags.ImportAllowUnscanned {
+		return ErrNotScanned
+	}
+	_, err := s.group(ctx, tenantID, groupID, true)
+	return err
+}
 
 // UploadImport validates, scans, parses and stores an export file: the raw and its normalized form, both sealed, plus the coverage record. The
 // extraction itself is the worker's (the import waits in status uploaded). The same file is never imported twice into one group.

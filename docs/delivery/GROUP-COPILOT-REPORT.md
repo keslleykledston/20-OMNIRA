@@ -36,7 +36,7 @@ Tenant A/B com acesso cruzado de leitura e escrita em **cada** tabela nova; memb
 - O custo é limitado (48 chamadas/grupo/dia, lotes pequenos), mas o primeiro grupo grande lê um backlog de até 12 lotes por rodada.
 - Um import acima do que um passe lê (300 lotes) lê os mais recentes e deixa o resto sem leitura: a cobertura mostra incompleto e o raw só sai por expiração.
 - `clamd` padrão rejeita stream acima de 25 MB (falha fechado). O nginx do host precisa liberar o caminho do import (ver ADR, addendum, item 9).
-- Não construído: tela de diff do reprocessamento; ferramenta do gateway de IA `group.memory.search` (existe a rota); memória por cliente/conta (ponto de extensão apenas).
+- Não construído: o gatilho de leitura por **menção ao número da empresa / palavras de pedido** (ADR §4) — hoje a leitura é por pedido explícito ou, com `OMNIRA_GROUP_AUTO_ANALYZE`, por volume/idade; tela de diff do reprocessamento; ferramenta do gateway de IA `group.memory.search` (existe a rota); memória por cliente/conta (ponto de extensão apenas).
 - Mensagens de grupo de terceiros são tratadas como hostis (injeção de prompt): a defesa é estrutural (dado, nunca instrução; a IA só propõe; um humano aprova), não um filtro.
 
 ## Pendente do dono

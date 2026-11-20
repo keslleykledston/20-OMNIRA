@@ -51,7 +51,7 @@ func (e *Engine) ExtractImport(ctx context.Context, ref ImportRef) error {
 		if !g.AIEnabled {
 			return ErrGroupAIOff
 		}
-		if _, normEnc, err = e.store.ImportBlobs(sctx, ref.TenantID, ref.ImportID); err != nil {
+		if normEnc, err = e.store.ImportNormalized(sctx, ref.TenantID, ref.ImportID); err != nil {
 			return err
 		}
 		imp.Status = domain.ImportExtracting

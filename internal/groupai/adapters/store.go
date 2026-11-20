@@ -271,6 +271,16 @@ func (s *Store) UpdateItem(ctx context.Context, it domain.Item, expectedVersion 
 	return nil
 }
 
+func (s *Store) ReinforceItem(ctx context.Context, tenantID, itemID uuid.UUID, relevance float64, at time.Time, evidence []domain.Evidence) error {
+	var ev []byte
+	if evidence != nil {
+		ev = evidenceJSON(evidence)
+	}
+	_, err := s.q(ctx).Exec(ctx, `UPDATE wa_group_memory_items SET relevance = $3, last_reinforced_at = $4, evidence = COALESCE($5::jsonb, evidence)
+		WHERE tenant_id = $1 AND id = $2 AND status <> 'superseded'`, tenantID, itemID, float32(relevance), at, ev)
+	return err
+}
+
 func (s *Store) DeleteItem(ctx context.Context, tenantID, itemID uuid.UUID) error {
 	tag, err := s.q(ctx).Exec(ctx, `DELETE FROM wa_group_memory_items WHERE tenant_id = $1 AND id = $2`, tenantID, itemID)
 	if err == nil && tag.RowsAffected() == 0 {
@@ -534,13 +544,13 @@ func (s *Store) UpdateImport(ctx context.Context, imp domain.Import) error {
 	return err
 }
 
-func (s *Store) ImportBlobs(ctx context.Context, tenantID, importID uuid.UUID) ([]byte, []byte, error) {
-	var raw, norm []byte
-	err := s.q(ctx).QueryRow(ctx, `SELECT raw_enc, normalized_enc FROM wa_group_import_blobs WHERE tenant_id = $1 AND import_id = $2`, tenantID, importID).Scan(&raw, &norm)
+func (s *Store) ImportNormalized(ctx context.Context, tenantID, importID uuid.UUID) ([]byte, error) {
+	var norm []byte
+	err := s.q(ctx).QueryRow(ctx, `SELECT normalized_enc FROM wa_group_import_blobs WHERE tenant_id = $1 AND import_id = $2`, tenantID, importID).Scan(&norm)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil, application.ErrNotFound
+		return nil, application.ErrNotFound
 	}
-	return raw, norm, err
+	return norm, err
 }
 
 func (s *Store) DiscardImport(ctx context.Context, tenantID, importID uuid.UUID, reason domain.DiscardReason, by *uuid.UUID, now time.Time) error {

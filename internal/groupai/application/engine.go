@@ -564,12 +564,12 @@ func (e *Engine) reinforce(ctx context.Context, it domain.Item, extra []domain.E
 	if it.Status == domain.StatusSuperseded {
 		return nil
 	}
-	it.Relevance = domain.Reinforced(it.Relevance, it.LastReinforcedAt, now, it.Protected(), 0.5)
-	it.LastReinforcedAt = now
+	rel := domain.Reinforced(it.Relevance, it.LastReinforcedAt, now, it.Protected(), 0.5)
+	var ev []domain.Evidence
 	if len(extra) > 0 && it.Tier == domain.TierEpisodic {
-		it.Evidence = mergeEvidence(it.Evidence, extra)
+		ev = mergeEvidence(it.Evidence, extra)
 	}
-	return e.store.UpdateItem(ctx, it, it.Version)
+	return e.store.ReinforceItem(ctx, it.TenantID, it.ID, rel, now, ev)
 }
 
 func (e *Engine) event(ctx context.Context, ref GroupRef, item *uuid.UUID, t EventType, payload map[string]any) error {

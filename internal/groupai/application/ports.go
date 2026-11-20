@@ -139,6 +139,9 @@ type Store interface {
 	// InsertItem stores a new item. When an equal live item exists (same fingerprint) nothing is inserted: the existing one is returned with created=false.
 	InsertItem(ctx context.Context, it domain.Item) (stored domain.Item, created bool, err error)
 	UpdateItem(ctx context.Context, it domain.Item, expectedVersion int) error
+	// ReinforceItem raises the relevance of an item that was used or seen again (and may add evidence) WITHOUT bumping its version: a reinforcement
+	// must not make a person's concurrent edit look stale.
+	ReinforceItem(ctx context.Context, tenantID, itemID uuid.UUID, relevance float64, at time.Time, evidence []domain.Evidence) error
 	DeleteItem(ctx context.Context, tenantID, itemID uuid.UUID) error
 	EraseMemory(ctx context.Context, tenantID, groupID uuid.UUID) (int64, error)
 	PurgeQuotes(ctx context.Context, tenantID, groupID uuid.UUID) (int64, error)
@@ -160,7 +163,8 @@ type Store interface {
 	GetImport(ctx context.Context, tenantID, importID uuid.UUID, forUpdate bool) (domain.Import, error)
 	ListImports(ctx context.Context, tenantID, groupID uuid.UUID, limit int) ([]domain.Import, error)
 	UpdateImport(ctx context.Context, imp domain.Import) error
-	ImportBlobs(ctx context.Context, tenantID, importID uuid.UUID) (rawEnc, normalizedEnc []byte, err error)
+	// ImportNormalized returns the sealed normalized copy of an import. The raw is never read back by any use case.
+	ImportNormalized(ctx context.Context, tenantID, importID uuid.UUID) (normalizedEnc []byte, err error)
 	DiscardImport(ctx context.Context, tenantID, importID uuid.UUID, reason domain.DiscardReason, by *uuid.UUID, now time.Time) error
 	DiscardGroupImports(ctx context.Context, tenantID, groupID uuid.UUID, reason domain.DiscardReason, now time.Time) (int64, error)
 	PendingImports(ctx context.Context, limit int) ([]ImportRef, error)

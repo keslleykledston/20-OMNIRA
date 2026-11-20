@@ -450,10 +450,7 @@ func (h *Handler) PatchItem(w http.ResponseWriter, r *http.Request) {
 		st := domain.Status(*req.Status)
 		p.Status = &st
 	}
-	it, err := h.svc.PatchItem(r.Context(), tc.TenantID, iid, tc.ActorID, p)
-	if err == nil && it.GroupID != gid {
-		err = application.ErrNotFound
-	}
+	it, err := h.svc.PatchItem(r.Context(), tc.TenantID, gid, iid, tc.ActorID, p)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -475,29 +472,12 @@ func (h *Handler) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// the item must belong to the group of the path
-	if _, items, _, err := h.svc.ListItems(r.Context(), tc.TenantID, gid, application.ItemFilter{IncludeSuper: true, Limit: 500}); err != nil {
-		writeErr(w, err)
-		return
-	} else if !containsItem(items, iid) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if err := h.svc.DeleteItem(r.Context(), tc.TenantID, iid, tc.ActorID); err != nil {
+	if err := h.svc.DeleteItem(r.Context(), tc.TenantID, gid, iid, tc.ActorID); err != nil {
 		writeErr(w, err)
 		return
 	}
 	h.record(r, tc, gid, auditdomain.ActionGroupMemoryItemChanged, map[string]any{"change": "deleted", "item_id": iid.String()})
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func containsItem(items []domain.Item, id uuid.UUID) bool {
-	for _, it := range items {
-		if it.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
@@ -604,6 +584,10 @@ func (h *Handler) UploadImport(w http.ResponseWriter, r *http.Request) {
 	}
 	gid, ok := pathID(w, r, "group_id")
 	if !ok {
+		return
+	}
+	if err := h.svc.CanImport(r.Context(), tc.TenantID, gid); err != nil {
+		writeErr(w, err)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, domain.MaxImportBytes+1))
