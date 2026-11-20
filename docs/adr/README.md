@@ -29,3 +29,4 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 - 0046 - Convite completo: função e filas no convite, e conta de login criada pelo OMNIRA — implementada (Fase 2 de Pessoas)
 - 0047 - Ficha da pessoa no console do Hub: instâncias e filas de cada uma — implementada, versão mínima só no frontend (Fase 3 de Pessoas)
 - 0048 - OMNIRA Headless / Híbrido: CRM externo e Workspace sobre um único controle de conversa (identidade de aplicação, journal durável, webhooks) — implementação local na branch feat/headless-crm-dual-operation
+- 0050 - Copiloto de grupo e memória de contexto do grupo (memória em camadas, import de arquivo com raw cifrado de 90 dias, propostas de ocorrência/tarefa aprovadas por humano) — proposta; implementação local na branch feat/group-copilot-memory
