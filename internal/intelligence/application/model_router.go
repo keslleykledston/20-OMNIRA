@@ -13,6 +13,10 @@ type Task string
 const (
 	TaskTopicClassify Task = "topic_classify"
 	TaskTopicSummary  Task = "topic_summary"
+	// the group copilot (ADR-0050)
+	TaskGroupMemory      Task = "group_memory"
+	TaskGroupConsolidate Task = "group_consolidate"
+	TaskGroupProposal    Task = "group_proposal"
 )
 
 // ErrNoModel: no model is configured for the task. The caller degrades (deterministic router, manual work); it never fails.

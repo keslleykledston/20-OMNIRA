@@ -1,0 +1,571 @@
+openapi: 3.0.3
+info:
+  title: OMNIRA Group Copilot API
+  version: 0.1.0
+  description: |
+    The group copilot (ADR-0050): the AI opt-in of a WhatsApp group, the memory the AI keeps about it (typed items with verifiable
+    evidence, editable by people), the import of a conversation export, and the proposals of cases and tasks a person approves.
+    Kept as its own contract so the module ships without touching `omnira-v1.yaml`; a drift test
+    (`internal/groupai/adapters/contract_test.go`) fails the build when this file and the routes diverge.
+
+    Authentication is the session cookie; the tenant comes from the URL and is re-checked against the session's memberships.
+    Authorization is by permission key, never by role name (all four default to tenant admin and supervisor, never the plain agent):
+    `group.ai.read` (read the memory, imports and proposals), `group.ai.manage` (turn the AI on for a group, edit memory, ask for an analysis,
+    draft/edit/approve/reject proposals), `group.import` (import a file, discard or reprocess it), `group.memory.erase` (erase the memory).
+
+    Everything is behind flags that default OFF (`OMNIRA_GROUP_MEMORY_ENABLED`, `OMNIRA_GROUP_IMPORT_ENABLED`, `OMNIRA_GROUP_PROPOSALS_ENABLED`);
+    with the memory flag off these routes are not registered. A group the AI is not enabled for answers `409` to everything that would read or
+    analyze it. A group of another company answers the same `404` as one that does not exist. The AI never acts: it proposes, and a person decides.
+    Error bodies are short plain text and never echo stored content.
+servers:
+  - url: /api/v1
+paths:
+  /tenants/{tenant_id}/groups/{group_id}/ai:
+    patch:
+      operationId: setGroupAI
+      tags: [GroupCopilot]
+      summary: Turn the AI on or off for a group
+      description: |
+        Requires `group.ai.manage`. The opt-in is separate from collecting the group (ADR-0015) and needs the group enabled first
+        (`409` otherwise). Turning it off stops new reading; the memory stays available. `discard_imports` also discards the raw of the group's
+        imports. Audited as `group.ai_enabled` / `group.ai_disabled`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SetGroupAIRequest' } } }
+      responses:
+        '200': { description: The new state, content: { application/json: { schema: { $ref: '#/components/schemas/SetGroupAIResponse' } } } }
+        '400': { $ref: '#/components/responses/Text' }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/memory:
+    get:
+      operationId: listGroupMemory
+      tags: [GroupCopilot]
+      summary: The memory of a group, ranked by what is relevant now
+      description: |
+        Requires `group.ai.read`. Superseded items are left out unless `include_superseded=true`. The memory of a group whose AI was turned
+        off is still readable. Evidence carries a short quote and a date, never a provider id.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { name: status, in: query, schema: { type: string, enum: [open, resolved, superseded] } }
+        - { name: kind, in: query, schema: { type: string, enum: [request, handled_topic, fact, agreement, participant_role] } }
+        - { name: tier, in: query, schema: { type: string, enum: [episodic, consolidated] } }
+        - { name: q, in: query, schema: { type: string, maxLength: 200 } }
+        - { name: include_superseded, in: query, schema: { type: boolean } }
+      responses:
+        '200': { description: The items and where the reading stands, content: { application/json: { schema: { $ref: '#/components/schemas/MemoryList' } } } }
+        '400': { $ref: '#/components/responses/Text' }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+    post:
+      operationId: createGroupMemoryItem
+      tags: [GroupCopilot]
+      summary: Record something a person knows about the group
+      description: |
+        Requires `group.ai.manage` and the AI enabled for the group. The item is `human_confirmed` from the start: the AI never overwrites it.
+        `409` when an equal live item exists. Free text that looks like a credential is refused.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateMemoryItemRequest' } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/MemoryItem' } } } }
+        '400': { $ref: '#/components/responses/Text' }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+    delete:
+      operationId: eraseGroupMemory
+      tags: [GroupCopilot]
+      summary: Erase everything the AI remembers about the group
+      description: |
+        Requires `group.memory.erase`. Deletes every item, resets the reading, and discards the raw of the group's imports. The content-free
+        event trail stays, plus one event for the erase. Audited as `group.memory_erased`. Not the same as deleting the group's message
+        history (ADR-0015), which removes the literal quotes and the raw but keeps the derived knowledge.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      responses:
+        '200': { description: What was erased, content: { application/json: { schema: { $ref: '#/components/schemas/EraseResponse' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/memory/search:
+    get:
+      operationId: searchGroupMemory
+      tags: [GroupCopilot]
+      summary: What do we know about this, in this group
+      description: |
+        Requires `group.ai.read`. A word search (1 to 200 characters) over the memory, ranked by what is relevant now. What is found is reinforced:
+        what is consulted is remembered.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 200 } }
+      responses:
+        '200': { description: The matches, content: { application/json: { schema: { $ref: '#/components/schemas/MemorySearch' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/memory/{item_id}:
+    patch:
+      operationId: patchGroupMemoryItem
+      tags: [GroupCopilot]
+      summary: Edit, resolve, pin or confirm an item
+      description: |
+        Requires `group.ai.manage`. Editing the words or confirming makes the item `human_confirmed`. `version` guards a concurrent change
+        (`409` when stale). An item the AI consolidated away cannot be edited.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { $ref: '#/components/parameters/ItemId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PatchMemoryItemRequest' } } }
+      responses:
+        '200': { description: The item, content: { application/json: { schema: { $ref: '#/components/schemas/MemoryItem' } } } }
+        '400': { $ref: '#/components/responses/Text' }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+    delete:
+      operationId: deleteGroupMemoryItem
+      tags: [GroupCopilot]
+      summary: Delete one item
+      description: Requires `group.ai.manage`. The item must belong to the group of the path (`404` otherwise).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { $ref: '#/components/parameters/ItemId' }
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/analyze:
+    post:
+      operationId: analyzeGroup
+      tags: [GroupCopilot]
+      summary: Ask the worker to read the group now
+      description: |
+        Requires `group.ai.manage` and the AI enabled. Asynchronous: the request only records the ask (`202`); the reading happens in the worker,
+        which never holds a transaction across a model call, and is bounded by a daily limit of model calls per group.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      responses:
+        '202': { description: Asked, content: { application/json: { schema: { $ref: '#/components/schemas/Requested' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/consolidate:
+    post:
+      operationId: consolidateGroup
+      tags: [GroupCopilot]
+      summary: Ask the worker to condense old or settled items now
+      description: Requires `group.ai.manage` and the AI enabled. Asynchronous like `analyze`. An open request is never consolidated; nor is an item a person confirmed or pinned.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      responses:
+        '202': { description: Asked, content: { application/json: { schema: { $ref: '#/components/schemas/Requested' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/imports:
+    get:
+      operationId: listGroupImports
+      tags: [GroupCopilot]
+      summary: The conversation exports imported into the group, with their coverage
+      description: Requires `group.ai.read`. Metadata only: the raw is never returned by any route.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      responses:
+        '200': { description: The imports, newest first, content: { application/json: { schema: { $ref: '#/components/schemas/ImportList' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+    post:
+      operationId: uploadGroupImport
+      tags: [GroupCopilot]
+      summary: Import a WhatsApp conversation export (.txt or .zip)
+      description: |
+        Requires `group.import` and the AI enabled. The file is the request body (up to 50 MiB), its name in `filename`. It is scanned by the
+        antivirus (refused when it cannot be scanned), read for its text only (media inside a zip is never read), parsed, and stored ENCRYPTED
+        with its normalized copy, for 90 days by default. It is NOT stored with the group's messages. The extraction is asynchronous: `202` with the
+        coverage of the parse; the worker reads it afterwards. The same file is never imported twice into a group (`409`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { name: filename, in: query, schema: { type: string, maxLength: 200 } }
+      requestBody:
+        required: true
+        content: { application/octet-stream: { schema: { type: string, format: binary } } }
+      responses:
+        '202': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/Import' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+        '413': { $ref: '#/components/responses/Text' }
+        '422': { $ref: '#/components/responses/Text' }
+        '503': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/imports/{import_id}:
+    get:
+      operationId: getGroupImport
+      tags: [GroupCopilot]
+      summary: One import and its coverage record
+      description: |
+        Requires `group.ai.read`. `coverage_complete` means every message passed through an extraction batch and none failed. It does NOT mean everything
+        was captured: it only says everything was read.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { $ref: '#/components/parameters/ImportId' }
+      responses:
+        '200': { description: The import, content: { application/json: { schema: { $ref: '#/components/schemas/Import' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/imports/{import_id}/discard:
+    post:
+      operationId: discardGroupImport
+      tags: [GroupCopilot]
+      summary: Discard the raw of an import (a person's confirmation)
+      description: |
+        Requires `group.import`. Allowed only when the coverage is complete; otherwise `409` and the raw waits for its expiry (the sweep discards it
+        automatically, 90 days by default). The metadata (sha256, coverage, reason) stays. Audited as `group.import_discarded`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { $ref: '#/components/parameters/ImportId' }
+      responses:
+        '200': { description: Discarded, content: { application/json: { schema: { $ref: '#/components/schemas/Import' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/imports/{import_id}/reprocess:
+    post:
+      operationId: reprocessGroupImport
+      tags: [GroupCopilot]
+      summary: Read the stored raw again (a better prompt or model)
+      description: |
+        Requires `group.import` and the AI enabled. Refused (`409`) when the raw is gone, when the import is still being read, or when it was already
+        read with the current prompt version and fully covered. A person's confirmed or pinned items are never overwritten. Asynchronous (`202`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { $ref: '#/components/parameters/ImportId' }
+      responses:
+        '202': { description: Queued for the worker, content: { application/json: { schema: { $ref: '#/components/schemas/Import' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/proposals:
+    get:
+      operationId: listGroupProposals
+      tags: [GroupCopilot]
+      summary: The cases and tasks proposed from the group's memory
+      description: Requires `group.ai.read`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { name: status, in: query, schema: { type: string, enum: [pending_approval, rejected, created, failed] } }
+      responses:
+        '200': { description: The proposals, newest first, content: { application/json: { schema: { $ref: '#/components/schemas/ProposalList' } } } }
+        '400': { $ref: '#/components/responses/Text' }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+    post:
+      operationId: draftGroupProposal
+      tags: [GroupCopilot]
+      summary: Draft a case or a task from a memory item
+      description: |
+        Requires `group.ai.manage` and the proposals flag. Drafts with the model when one is available and from the item's own words otherwise, so a
+        proposal never depends on the AI. NOTHING is created: the proposal waits for a person's approval. An item has at most one live proposal of each
+        kind: asking again returns it (`200`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/DraftProposalRequest' } } }
+      responses:
+        '200': { description: The existing live proposal, content: { application/json: { schema: { $ref: '#/components/schemas/Proposal' } } } }
+        '201': { description: Drafted, content: { application/json: { schema: { $ref: '#/components/schemas/Proposal' } } } }
+        '400': { $ref: '#/components/responses/Text' }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/proposals/{proposal_id}:
+    patch:
+      operationId: editGroupProposal
+      tags: [GroupCopilot]
+      summary: Fix the draft before approving it
+      description: Requires `group.ai.manage`. Only a pending proposal can be edited (`409` otherwise); `version` guards a concurrent edit.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { $ref: '#/components/parameters/ProposalId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/EditProposalRequest' } } }
+      responses:
+        '200': { description: The proposal, content: { application/json: { schema: { $ref: '#/components/schemas/Proposal' } } } }
+        '400': { $ref: '#/components/responses/Text' }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/proposals/{proposal_id}/approve:
+    post:
+      operationId: approveGroupProposal
+      tags: [GroupCopilot]
+      summary: Approve: create the case or the task
+      description: |
+        Requires `group.ai.manage`. Creates the service case or task (ADR-0049) under the APPROVING person's own session, so the service module asks that
+        person's `service.create` (`403` when missing, and the proposal stays pending): the AI and the proposal hold no permission of their own. No
+        conversation and no ticket is created. Idempotent: approving a created proposal returns the same record. `409` when it was rejected.
+        Audited as `group.proposal_approved`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { $ref: '#/components/parameters/ProposalId' }
+      responses:
+        '200': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Proposal' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+  /tenants/{tenant_id}/groups/{group_id}/ai/proposals/{proposal_id}/reject:
+    post:
+      operationId: rejectGroupProposal
+      tags: [GroupCopilot]
+      summary: Reject a proposal
+      description: Requires `group.ai.manage`. `409` when it was already decided. Audited as `group.proposal_rejected`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { $ref: '#/components/parameters/ProposalId' }
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: '#/components/schemas/RejectProposalRequest' } } }
+      responses:
+        '200': { description: Rejected, content: { application/json: { schema: { $ref: '#/components/schemas/Proposal' } } } }
+        '401': { $ref: '#/components/responses/Text' }
+        '403': { $ref: '#/components/responses/Text' }
+        '404': { $ref: '#/components/responses/Text' }
+        '409': { $ref: '#/components/responses/Text' }
+components:
+  parameters:
+    TenantId: { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+    GroupId: { name: group_id, in: path, required: true, schema: { type: string, format: uuid } }
+    ItemId: { name: item_id, in: path, required: true, schema: { type: string, format: uuid } }
+    ImportId: { name: import_id, in: path, required: true, schema: { type: string, format: uuid } }
+    ProposalId: { name: proposal_id, in: path, required: true, schema: { type: string, format: uuid } }
+  responses:
+    Text: { description: Error (short plain text, never the stored content), content: { text/plain: { schema: { type: string } } } }
+  schemas:
+    SetGroupAIRequest:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        discard_imports: { type: boolean, description: "When turning it off: also discard the raw of the group's imports" }
+    SetGroupAIResponse:
+      type: object
+      required: [id, ai_enabled, imports_discarded]
+      properties:
+        id: { type: string, format: uuid }
+        ai_enabled: { type: boolean }
+        imports_discarded: { type: integer }
+    Evidence:
+      type: object
+      required: [at]
+      properties:
+        quote: { type: string, maxLength: 200, description: "A short excerpt of the message, verified against it; removed when the history is deleted or the item is consolidated" }
+        at: { type: string, format: date-time }
+    MemoryItem:
+      type: object
+      required: [id, kind, tier, status, truth_level, summary, actor_label, evidence, pinned, relevance, last_reinforced_at, source, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [request, handled_topic, fact, agreement, participant_role] }
+        tier: { type: string, enum: [episodic, consolidated], description: "consolidated = condensed knowledge: no literal quote, people by role" }
+        status: { type: string, enum: [open, resolved, superseded] }
+        truth_level: { type: string, enum: [said_in_group, ai_inferred, human_confirmed] }
+        summary: { type: string, maxLength: 600 }
+        actor_label: { type: string, maxLength: 120, description: "Never a phone number" }
+        evidence: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
+        pinned: { type: boolean }
+        relevance: { type: number, description: "The weight now: it halves every 60 days since the item was last reinforced; a ranking, never a deletion" }
+        last_reinforced_at: { type: string, format: date-time }
+        source: { type: string, enum: [live, import, human, consolidation] }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    MemoryState:
+      type: object
+      properties:
+        last_processed_at: { type: string, format: date-time, nullable: true }
+        last_run_at: { type: string, format: date-time, nullable: true }
+        last_run_ok: { type: boolean, nullable: true }
+        last_consolidated_at: { type: string, format: date-time, nullable: true }
+        analyze_requested_at: { type: string, format: date-time, nullable: true }
+        consolidate_requested_at: { type: string, format: date-time, nullable: true }
+        prompt_version: { type: string }
+        runs: { type: integer }
+        input_tokens: { type: integer, format: int64 }
+        output_tokens: { type: integer, format: int64 }
+    MemoryList:
+      type: object
+      required: [group, items, count, state]
+      properties:
+        group:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            enabled: { type: boolean }
+            ai_enabled: { type: boolean }
+        items: { type: array, items: { $ref: '#/components/schemas/MemoryItem' } }
+        count: { type: integer }
+        state: { $ref: '#/components/schemas/MemoryState' }
+    MemorySearch:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/MemoryItem' } }
+        count: { type: integer }
+    CreateMemoryItemRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, summary]
+      properties:
+        kind: { type: string, enum: [request, handled_topic, fact, agreement, participant_role] }
+        summary: { type: string, minLength: 1, maxLength: 600 }
+        actor_label: { type: string, maxLength: 120 }
+        status: { type: string, enum: [open, resolved] }
+    PatchMemoryItemRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        summary: { type: string, maxLength: 600 }
+        status: { type: string, enum: [open, resolved] }
+        pinned: { type: boolean }
+        confirm: { type: boolean }
+        version: { type: integer, description: "The version you read; a different one answers 409" }
+    EraseResponse:
+      type: object
+      required: [items_deleted, imports_discarded]
+      properties:
+        items_deleted: { type: integer, format: int64 }
+        imports_discarded: { type: integer, format: int64 }
+    Requested:
+      type: object
+      required: [requested]
+      properties:
+        requested: { type: boolean }
+    Import:
+      type: object
+      required: [id, status, format, sha256, size_bytes, messages_total, messages_parsed, coverage_complete, raw_available, created_at, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [uploaded, extracting, extracted, failed, discarded] }
+        format: { type: string, enum: [whatsapp_txt, whatsapp_zip] }
+        source_filename: { type: string }
+        sha256: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        messages_total: { type: integer, description: "Every dated record of the file, system lines included" }
+        messages_parsed: { type: integer }
+        messages_rejected: { type: integer }
+        messages_duplicate: { type: integer, description: "Already stored live: not read twice" }
+        rejected_reasons: { type: object, additionalProperties: { type: integer }, description: "system, deleted, empty, bad_date" }
+        range_from: { type: string, format: date-time, nullable: true }
+        range_to: { type: string, format: date-time, nullable: true }
+        batches_total: { type: integer }
+        batches_ok: { type: integer }
+        batches_failed: { type: integer }
+        items_created: { type: integer }
+        coverage_complete: { type: boolean, description: "Everything was READ (not: everything was captured)" }
+        prompt_version: { type: string }
+        extract_runs: { type: integer }
+        created_at: { type: string, format: date-time }
+        extracted_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time, description: "When the raw is discarded by the sweep" }
+        discarded_at: { type: string, format: date-time, nullable: true }
+        discard_reason: { type: string, nullable: true, enum: [confirmed, expired, history_deleted, group_ai_disabled, memory_erased] }
+        raw_available: { type: boolean }
+        version: { type: integer }
+    ImportList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Import' } }
+        count: { type: integer }
+    Proposal:
+      type: object
+      required: [id, kind, title, description, priority, proposed_by, status, version, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        memory_item_id: { type: string, format: uuid, nullable: true }
+        kind: { type: string, enum: [case, task], description: "case = a service case (ticket); task = a follow-up task" }
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        priority: { type: string, enum: [low, normal, high, urgent] }
+        due_at: { type: string, format: date-time, nullable: true }
+        proposed_by: { type: string, enum: [ai, human] }
+        status: { type: string, enum: [pending_approval, rejected, created, failed] }
+        decided_at: { type: string, format: date-time, nullable: true }
+        reject_reason: { type: string }
+        created_case_id: { type: string, format: uuid, nullable: true }
+        created_task_id: { type: string, format: uuid, nullable: true }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+    ProposalList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Proposal' } }
+        count: { type: integer }
+    DraftProposalRequest:
+      type: object
+      additionalProperties: false
+      required: [memory_item_id, kind]
+      properties:
+        memory_item_id: { type: string, format: uuid }
+        kind: { type: string, enum: [case, task] }
+    EditProposalRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        priority: { type: string, enum: [low, normal, high, urgent] }
+        due_at: { type: string, format: date-time, nullable: true }
+        version: { type: integer }
+    RejectProposalRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, maxLength: 500 }

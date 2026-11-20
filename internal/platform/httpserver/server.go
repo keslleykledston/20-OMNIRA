@@ -29,6 +29,7 @@ import (
 	externaldelivery "github.com/omnira/omnira/internal/external/delivery"
 	externaldomain "github.com/omnira/omnira/internal/external/domain"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
+	groupaiadapters "github.com/omnira/omnira/internal/groupai/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
@@ -1064,6 +1065,22 @@ func (s *Server) RegisterGroupHandlers(dbPool *pgxpool.Pool, h *groupsadapters.H
 	s.mux.Handle("PATCH "+base+"/{group_id}", wrap(h.SetEnabled))
 	s.mux.Handle("GET "+base+"/{group_id}/messages", wrap(h.ListMessages))
 	s.mux.Handle("DELETE "+base+"/{group_id}/messages", wrap(h.DeleteHistory))
+}
+
+// RegisterGroupAIHandlers exposes the group copilot (ADR-0050): the AI opt-in of a group, its memory, the imports and the proposals. Authorization is the
+// group.ai.* / group.import / group.memory.erase keys, checked by the handler on top of RLS. Registered only when the memory flag is on.
+func (s *Server) RegisterGroupAIHandlers(dbPool *pgxpool.Pool, h *groupaiadapters.Handler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }
+	h.Routes(s.mux, wrap)
 }
 
 // RegisterAttendanceHandlers exposes finalizing an attendance and the contact's attendance history (ADR-0020) behind authn +

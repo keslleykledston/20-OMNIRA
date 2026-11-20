@@ -54,6 +54,9 @@ type Handler struct {
 	pool  *pgxpool.Pool
 	audit auditports.AuditEventRepository
 	dir   Directory
+	// purge runs inside "delete history" (ADR-0050 §7): the group copilot discards the raw of the group's imports and removes the literal
+	// quotes of its memory. nil = the copilot is not wired.
+	purge func(ctx context.Context, tenantID, groupID, actor uuid.UUID) error
 
 	mu    sync.Mutex
 	cache map[uuid.UUID]directoryEntry
@@ -68,6 +71,12 @@ type directoryEntry struct {
 
 func NewHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository, dir Directory) *Handler {
 	return &Handler{pool: pool, audit: audit, dir: dir, cache: map[uuid.UUID]directoryEntry{}, now: time.Now}
+}
+
+// WithHistoryPurger sets what "delete history" also does to what the group copilot derived from that history.
+func (h *Handler) WithHistoryPurger(f func(ctx context.Context, tenantID, groupID, actor uuid.UUID) error) *Handler {
+	h.purge = f
+	return h
 }
 
 // ---- shapes
@@ -539,6 +548,12 @@ func (h *Handler) DeleteHistory(w http.ResponseWriter, r *http.Request) {
 	if _, err := q.Exec(r.Context(), `UPDATE wa_groups SET last_message_at = NULL, archive_purge_requested_at = now(), updated_at = now() WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id); err != nil {
 		http.Error(w, "failed to delete history", http.StatusInternalServerError)
 		return
+	}
+	if h.purge != nil {
+		if err := h.purge(r.Context(), tc.TenantID, id, tc.ActorID); err != nil {
+			http.Error(w, "failed to delete history", http.StatusInternalServerError)
+			return
+		}
 	}
 	h.record(r, tc, id, auditdomain.ActionGroupHistoryDeleted, map[string]any{"deleted": tag.RowsAffected()})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": tag.RowsAffected()})
