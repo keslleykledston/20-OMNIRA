@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -118,17 +117,13 @@ Responda SOMENTE com um objeto JSON, sem texto fora dele:
 
 // ParseProposalDraft validates the model's draft.
 func ParseProposalDraft(raw string, kind ProposalKind) (title, description, priority string, err error) {
-	s := strings.TrimSpace(raw)
-	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(s, "```json"), "```"), "```"))
-	dec := json.NewDecoder(strings.NewReader(s))
-	dec.DisallowUnknownFields()
 	var in struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 		Priority    string `json:"priority"`
 	}
-	if err := dec.Decode(&in); err != nil || dec.More() {
-		return "", "", "", fmt.Errorf("%w: not a single JSON object", ErrInvalidProposal)
+	if err := decodeModelJSON(raw, &in); err != nil {
+		return "", "", "", fmt.Errorf("%w: %v", ErrInvalidProposal, err)
 	}
 	return CleanProposal(kind, MaskPII(in.Title), MaskPII(in.Description), in.Priority)
 }

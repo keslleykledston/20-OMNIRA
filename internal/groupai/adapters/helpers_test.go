@@ -162,7 +162,9 @@ type fakeModel struct {
 	outputs []string
 	inputs  []string
 	err     error
-	onCall  func() // runs while "the provider is answering": the world may change meanwhile
+	// failFirst: the first N calls fail like a provider that is momentarily unavailable; the next ones answer normally
+	failFirst int
+	onCall    func() // runs while "the provider is answering": the world may change meanwhile
 }
 
 func (f *fakeModel) Generate(_ context.Context, req aiports.GenerateRequest) (aiports.GenerateResponse, error) {
@@ -172,6 +174,10 @@ func (f *fakeModel) Generate(_ context.Context, req aiports.GenerateRequest) (ai
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inputs = append(f.inputs, req.Input)
+	if f.failFirst > 0 {
+		f.failFirst--
+		return aiports.GenerateResponse{}, errors.New("provider unavailable")
+	}
 	if f.err != nil {
 		return aiports.GenerateResponse{}, f.err
 	}

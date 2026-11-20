@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -116,7 +115,7 @@ type rawOp struct {
 	Evidence []rawEvidence `json:"evidence"`
 }
 
-// ParseExtraction validates the model's answer strictly: one JSON object, known fields, bounded size and number of operations. Every
+// ParseExtraction validates the model's answer: the first JSON object of it (see decodeModelJSON) with an "ops" list, bounded size and number of operations. Every
 // operation is checked on its own and a bad one is dropped, never the whole answer. An item is only created when at least one of its
 // evidence refs names a real message of this run; the quote is verified against that message.
 func ParseExtraction(raw string, ctx ExtractionContext) ([]Op, ParseStats, error) {
@@ -125,19 +124,18 @@ func ParseExtraction(raw string, ctx ExtractionContext) ([]Op, ParseStats, error
 	if len(raw) > maxRawOutputBytes {
 		return nil, stats, fmt.Errorf("%w: output too large", ErrInvalidOutput)
 	}
-	s := strings.TrimSpace(raw)
-	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(s, "```json"), "```"), "```"))
-	dec := json.NewDecoder(strings.NewReader(s))
-	dec.DisallowUnknownFields()
 	var in struct {
-		Ops []rawOp `json:"ops"`
+		Ops *[]rawOp `json:"ops"`
 	}
-	if err := dec.Decode(&in); err != nil || dec.More() {
-		return nil, stats, fmt.Errorf("%w: not a single JSON object with ops", ErrInvalidOutput)
+	if err := decodeModelJSON(raw, &in); err != nil {
+		return nil, stats, err
+	}
+	if in.Ops == nil {
+		return nil, stats, fmt.Errorf("%w: the JSON object has no \"ops\" list", ErrInvalidOutput)
 	}
 	var out []Op
 	resolves := 0
-	for i, o := range in.Ops {
+	for i, o := range *in.Ops {
 		if i >= MaxOpsPerRun {
 			stats.drop("over_limit")
 			continue

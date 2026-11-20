@@ -22,7 +22,9 @@ import (
 )
 
 func (e *env) engineWith(m aiports.TextGenerator, led aiusage.Ledger, flags application.Flags) *application.Engine {
-	return application.NewEngine(NewStore(e.app), e.sessions(), routerFor(m), flags).WithLedger(led).WithCipher(testCipher(e.t))
+	cfg := application.DefaultEngineConfig()
+	cfg.ProviderRetryDelay = time.Millisecond // the production wait would only slow the tests down
+	return application.NewEngine(NewStore(e.app), e.sessions(), routerFor(m), flags).WithLedger(led).WithCipher(testCipher(e.t)).WithConfig(cfg)
 }
 
 func (e *env) engine(m aiports.TextGenerator, led aiusage.Ledger) *application.Engine {
@@ -1012,6 +1014,69 @@ func TestUnusableAnswersSkipTheBatchAfterThreeRunsInsteadOfBlockingTheGroup(t *t
 	}
 	if e.count(`SELECT count(*) FROM wa_group_memory_state WHERE group_id=$1 AND last_processed_at IS NOT NULL AND consecutive_failures=0 AND NOT last_run_ok`, g) != 1 {
 		t.Fatal("the batch was not skipped, or the run is not marked as not-ok")
+	}
+}
+
+// The worker's Tick reads a group and then, for the same group, looks at consolidating it. A consolidation that finds nothing to condense used to record
+// itself as an "ok" run: a reading that had just failed showed as ok, and the failure count that makes the engine skip a batch it keeps getting an unusable
+// answer for was reset every minute - the batch could never be skipped. Found in the first real run against the homologation group.
+func TestAConsolidationThatFindsNothingDoesNotTurnAFailedReadingIntoAnOkOne(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	e.msg(tenant, g, "Maria", "mensagem que faz o modelo responder em prosa", time.Now().Add(-time.Hour))
+	model := &fakeModel{outputs: []string{"Claro! Aqui está um resumo em texto livre."}}
+	eng := e.engine(model, nil)
+	ask := func() {
+		e.exec(`INSERT INTO wa_group_memory_state (tenant_id, group_id, analyze_requested_at) VALUES ($1,$2,now())
+		        ON CONFLICT (tenant_id, group_id) DO UPDATE SET analyze_requested_at = now()`, tenant, g)
+	}
+	for i := 1; i <= 2; i++ {
+		ask()
+		eng.Tick(e.ctx)
+		if e.count(`SELECT count(*) FROM wa_group_memory_state WHERE group_id=$1 AND last_processed_at IS NULL AND consecutive_failures=$2 AND last_run_ok IS FALSE`, g, i) != 1 {
+			t.Fatalf("tick %d: the failed reading must stay failed (not ok) with its failures counted, even though the consolidation of the group also ran", i)
+		}
+		// the consolidation did look at the group (and remembered it) - without touching the outcome of the reading
+		if e.count(`SELECT count(*) FROM wa_group_memory_state WHERE group_id=$1 AND last_consolidated_at IS NOT NULL AND runs = $2`, g, i) != 1 {
+			t.Fatalf("tick %d: a consolidation must not count as a reading run", i)
+		}
+	}
+	ask()
+	eng.Tick(e.ctx) // third unusable answer in a row: the batch is skipped, the group moves on
+	if e.count(`SELECT count(*) FROM wa_group_memory_state WHERE group_id=$1 AND last_processed_at IS NOT NULL AND consecutive_failures=0 AND last_run_ok IS FALSE`, g) != 1 {
+		t.Fatal("the batch was not skipped on the third unusable answer when the consolidation runs after each reading")
+	}
+}
+
+// Found in the first real run: the provider answered "unavailable" to about one call in eight and then answered the very same request. The reading
+// tries once more, in the same unit of the daily budget, so the click on "Analisar agora" is not lost; a provider that stays down still ends the run.
+func TestATransientProviderErrorIsRetriedOnceInTheSameBudgetUnit(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, "G", true)
+	e.msg(tenant, g, "Maria", "preciso da segunda via do boleto de novembro", time.Now().Add(-time.Hour))
+	model := &fakeModel{failFirst: 1}
+	eng := e.engine(model, nil)
+	if _, err := eng.RunGroup(e.ctx, ref(tenant, g), true); err != nil {
+		t.Fatalf("a momentary provider error must not fail the reading: %v", err)
+	}
+	if model.calls() != 2 {
+		t.Fatalf("expected the failed call and one retry, got %d calls", model.calls())
+	}
+	if e.count(`SELECT count(*) FROM wa_group_memory_state WHERE group_id=$1 AND last_run_ok AND last_processed_at IS NOT NULL AND budget_calls = 1`, g) != 1 {
+		t.Fatal("the run must be ok, the cursor must have moved and the retry must not cost a second unit of the budget")
+	}
+
+	// a provider that stays down: two tries, then the run ends as unavailable, the cursor stays
+	g2 := e.group(tenant, conn, "G2", true)
+	e.msg(tenant, g2, "Maria", "outra mensagem qualquer sobre o contrato", time.Now().Add(-time.Hour))
+	down := &fakeModel{err: errors.New("provider unavailable")}
+	if _, err := e.engine(down, nil).RunGroup(e.ctx, ref(tenant, g2), true); !errors.Is(err, application.ErrModelUnavailable) {
+		t.Fatalf("a provider that stays down must end the run as unavailable: %v", err)
+	}
+	if down.calls() != 2 || e.count(`SELECT count(*) FROM wa_group_memory_state WHERE group_id=$1 AND last_processed_at IS NULL`, g2) != 1 {
+		t.Fatalf("expected exactly two tries and an unmoved cursor, got %d calls", down.calls())
 	}
 }
 

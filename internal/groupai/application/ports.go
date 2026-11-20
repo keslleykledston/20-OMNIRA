@@ -87,18 +87,22 @@ type State struct {
 
 // RunRecord is what a run adds to the state.
 type RunRecord struct {
-	At               time.Time
-	OK               bool
-	Failed           bool // an unusable answer at this cursor: counts toward the skip threshold
-	PromptVersion    string
-	InputTokens      int
-	OutputTokens     int
-	Calls            int
-	LastProcessedAt  *time.Time // nil = unchanged
-	LastProcessedID  *uuid.UUID
-	Consolidated     bool
-	ClearAnalyzeAsk  bool
-	ClearConsolidAsk bool
+	At     time.Time
+	OK     bool
+	Failed bool // an unusable answer at this cursor: counts toward the skip threshold
+	// ConsolidationOnly: the record of a consolidation. It touches only what is the consolidation's own (its date, its ask, its tokens) and never the
+	// outcome of the last READING (last_run_at, last_run_ok, consecutive_failures, runs): a consolidation that finds nothing to do must not turn a
+	// failed reading into an "ok" one, nor reset the count that makes the engine skip a batch the model keeps answering badly.
+	ConsolidationOnly bool
+	PromptVersion     string
+	InputTokens       int
+	OutputTokens      int
+	Calls             int
+	LastProcessedAt   *time.Time // nil = unchanged
+	LastProcessedID   *uuid.UUID
+	Consolidated      bool
+	ClearAnalyzeAsk   bool
+	ClearConsolidAsk  bool
 }
 
 type EventType string

@@ -38,12 +38,16 @@ type EngineConfig struct {
 	ConsolidateEvery time.Duration
 	ConsolidateMin   int // candidates below this are not worth a call (unless someone asked)
 	MaxCandidates    int // candidates shown to one consolidation call
+	// ProviderRetryDelay: a provider error is most often transient (an overloaded model says "unavailable" and then answers the very same request), and a
+	// person who pressed "Analisar agora" should not have to press it again for that. The reading tries ONCE more after this wait, inside the same unit of
+	// the daily budget. Zero means no wait; a permanent failure still ends the run after the second try.
+	ProviderRetryDelay time.Duration
 }
 
 func DefaultEngineConfig() EngineConfig {
 	return EngineConfig{BatchRunes: 12000, BatchMessages: 80, MessageRunes: 600, MaxBatchesLive: 4, MaxBatchesBoot: 12, MaxImportBatches: 300,
 		MaxItemsInPrompt: 40, MemoryRunes: 6000, MinInterval: 10 * time.Minute, AutoMinNew: 25, AutoMaxAge: 6 * time.Hour, AutoMinOld: 5,
-		ConsolidateEvery: 7 * 24 * time.Hour, ConsolidateMin: 5, MaxCandidates: 60}
+		ConsolidateEvery: 7 * 24 * time.Hour, ConsolidateMin: 5, MaxCandidates: 60, ProviderRetryDelay: 3 * time.Second}
 }
 
 // Engine keeps the memory of the groups. It runs in the worker. A model call is NEVER made while a transaction is open: every step
@@ -459,7 +463,17 @@ func (e *Engine) extractBatch(ctx context.Context, ref GroupRef, msgs []sourceMs
 		callCtx, cancel = context.WithTimeout(ctx, route.Timeout)
 		defer cancel()
 	}
-	resp, err := route.Generator.Generate(callCtx, aiports.GenerateRequest{Instructions: domain.ExtractionInstructions, Input: input, MaxOutputTokens: route.MaxOutputTokens})
+	req := aiports.GenerateRequest{Instructions: domain.ExtractionInstructions, Input: input, MaxOutputTokens: route.MaxOutputTokens}
+	resp, err := route.Generator.Generate(callCtx, req)
+	if err != nil && callCtx.Err() == nil {
+		// one more try (see ProviderRetryDelay); the first failure is accounted too, so the cost and the failure rate stay visible
+		e.account(ctx, ref, route, intelapp.TaskGroupMemory, resp, false, "provider_error_retried")
+		select {
+		case <-time.After(e.cfg.ProviderRetryDelay):
+			resp, err = route.Generator.Generate(callCtx, req)
+		case <-ctx.Done():
+		}
+	}
 	res.InputTokens, res.OutputTokens = resp.InputTokens, resp.OutputTokens
 	if err != nil {
 		e.account(ctx, ref, route, intelapp.TaskGroupMemory, resp, false, "provider_error")

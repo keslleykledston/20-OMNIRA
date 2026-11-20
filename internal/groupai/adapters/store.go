@@ -350,20 +350,24 @@ func (s *Store) GetState(ctx context.Context, tenantID, groupID uuid.UUID) (appl
 
 func (s *Store) RecordRun(ctx context.Context, tenantID, groupID uuid.UUID, r application.RunRecord) error {
 	runs := 1
-	if r.LastProcessedAt != nil { // a partial record while a run is going on; the final one counts the run
+	if r.LastProcessedAt != nil || r.ConsolidationOnly { // a partial record while a run is going on (the final one counts the run); a consolidation is not a reading
 		runs = 0
 	}
 	var consolidatedAt *time.Time
 	if r.Consolidated {
 		consolidatedAt = &r.At
 	}
+	// $15 = a consolidation's record: it never changes how the last READING went. On the first row of a group it leaves last_run_* empty.
 	_, err := s.q(ctx).Exec(ctx, `
 		INSERT INTO wa_group_memory_state (tenant_id, group_id, last_run_at, last_run_ok, prompt_version, runs, input_tokens, output_tokens, last_processed_at,
 		  last_processed_message_id, last_consolidated_at, consecutive_failures)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, CASE WHEN $14::boolean THEN 1 ELSE 0 END)
+		VALUES ($1,$2, CASE WHEN $15::boolean THEN NULL ELSE $3::timestamptz END, CASE WHEN $15::boolean THEN NULL ELSE $4::boolean END, $5,$6,$7,$8,$9,$10,$11, CASE WHEN $14::boolean THEN 1 ELSE 0 END)
 		ON CONFLICT (tenant_id, group_id) DO UPDATE SET
-		  last_run_at = EXCLUDED.last_run_at, last_run_ok = EXCLUDED.last_run_ok,
-		  consecutive_failures = CASE WHEN $14::boolean THEN wa_group_memory_state.consecutive_failures + 1 WHEN $4::boolean THEN 0 ELSE wa_group_memory_state.consecutive_failures END,
+		  last_run_at = CASE WHEN $15::boolean THEN wa_group_memory_state.last_run_at ELSE EXCLUDED.last_run_at END,
+		  last_run_ok = CASE WHEN $15::boolean THEN wa_group_memory_state.last_run_ok ELSE EXCLUDED.last_run_ok END,
+		  consecutive_failures = CASE WHEN $15::boolean THEN wa_group_memory_state.consecutive_failures
+		                              WHEN $14::boolean THEN wa_group_memory_state.consecutive_failures + 1
+		                              WHEN $4::boolean THEN 0 ELSE wa_group_memory_state.consecutive_failures END,
 		  prompt_version = CASE WHEN EXCLUDED.prompt_version <> '' THEN EXCLUDED.prompt_version ELSE wa_group_memory_state.prompt_version END,
 		  runs = wa_group_memory_state.runs + EXCLUDED.runs,
 		  input_tokens = wa_group_memory_state.input_tokens + EXCLUDED.input_tokens,
@@ -374,7 +378,7 @@ func (s *Store) RecordRun(ctx context.Context, tenantID, groupID uuid.UUID, r ap
 		  analyze_requested_at = CASE WHEN $12 THEN NULL ELSE wa_group_memory_state.analyze_requested_at END,
 		  consolidate_requested_at = CASE WHEN $13 THEN NULL ELSE wa_group_memory_state.consolidate_requested_at END,
 		  updated_at = now()`,
-		tenantID, groupID, r.At, r.OK, r.PromptVersion, runs, r.InputTokens, r.OutputTokens, r.LastProcessedAt, r.LastProcessedID, consolidatedAt, r.ClearAnalyzeAsk, r.ClearConsolidAsk, r.Failed)
+		tenantID, groupID, r.At, r.OK, r.PromptVersion, runs, r.InputTokens, r.OutputTokens, r.LastProcessedAt, r.LastProcessedID, consolidatedAt, r.ClearAnalyzeAsk, r.ClearConsolidAsk, r.Failed, r.ConsolidationOnly)
 	return err
 }
 

@@ -159,16 +159,38 @@ func TestParseExtractionBuildsGroundedItemsOnly(t *testing.T) {
 	}
 }
 
-func TestParseExtractionIsStrict(t *testing.T) {
+func TestParseExtractionRefusesWhatIsNotAnAnswerAndToleratesWhatAModelHabituallyAdds(t *testing.T) {
 	for name, raw := range map[string]string{
-		"not json":      "claro, aqui está",
-		"two objects":   `{"ops":[]} {"ops":[]}`,
-		"unknown field": `{"ops":[],"extra":1}`,
-		"too large":     `{"ops":[],"pad":"` + strings.Repeat("a", 70000) + `"}`,
+		"not json":       "claro, aqui está",
+		"empty":          "  ",
+		"no ops list":    `{"result":[]}`,
+		"ops not a list": `{"ops":"nada"}`,
+		"cut off":        `{"ops":[{"op":"add","kind":"fact","summary":"SEGREDO-123`,
+		"too large":      `{"ops":[],"pad":"` + strings.Repeat("a", 70000) + `"}`,
 	} {
-		if _, _, err := ParseExtraction(raw, extCtx()); err == nil {
-			t.Errorf("%s: must be refused", name)
+		_, _, err := ParseExtraction(raw, extCtx())
+		if !errors.Is(err, ErrInvalidOutput) {
+			t.Errorf("%s: must be refused as an invalid answer, got %v", name, err)
 		}
+		// the error goes to a log: it may say what was wrong, never what the model wrote
+		if err != nil && strings.Contains(err.Error(), "SEGREDO") {
+			t.Errorf("%s: the error repeats the model's text: %v", name, err)
+		}
+	}
+	for name, raw := range map[string]string{
+		"a second object after the first": `{"ops":[]} {"ops":[{"op":"reinforce","id":"i1"}]}`,
+		"a field nobody asked for":        `{"ops":[],"notes":"observação","confidence":0.9}`,
+		"a sentence before and after":     "Segue a atualização:\n{\"ops\":[]}\nQualquer dúvida, avise.",
+		"a fence with a sentence after":   "```json\n{\"ops\":[]}\n```\nObservação final.",
+		"an explicitly empty list":        `{"ops":[]}`,
+	} {
+		if _, _, err := ParseExtraction(raw, extCtx()); err != nil {
+			t.Errorf("%s: must be accepted, got %v", name, err)
+		}
+	}
+	// only the first object counts: a second one is never read
+	if got, _, _ := ParseExtraction(`{"ops":[]} {"ops":[{"op":"reinforce","id":"i1"}]}`, extCtx()); len(got) != 0 {
+		t.Errorf("a second object was applied: %d ops", len(got))
 	}
 	// a fenced answer is accepted, and the number of ops is capped
 	ops := make([]string, 40)

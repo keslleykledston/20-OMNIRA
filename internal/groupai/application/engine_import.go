@@ -236,7 +236,7 @@ func (e *Engine) ConsolidateGroup(ctx context.Context, ref GroupRef, explicit bo
 		if asked || st.LastConsolidatedAt == nil || now.Sub(*st.LastConsolidatedAt) >= e.cfg.ConsolidateEvery {
 			// nothing worth a call: remember that we looked, so the next look is a week away
 			return e.sessions(ctx, ref.TenantID, func(sctx context.Context) error {
-				return e.store.RecordRun(sctx, ref.TenantID, ref.GroupID, RunRecord{At: now, OK: true, Consolidated: true, ClearConsolidAsk: true, PromptVersion: domain.PromptVersion})
+				return e.store.RecordRun(sctx, ref.TenantID, ref.GroupID, RunRecord{At: now, OK: true, ConsolidationOnly: true, Consolidated: true, ClearConsolidAsk: true, PromptVersion: domain.PromptVersion})
 			})
 		}
 		return nil
@@ -326,7 +326,7 @@ func (e *Engine) ConsolidateGroup(ctx context.Context, ref GroupRef, explicit bo
 				}
 			}
 		}
-		return e.store.RecordRun(sctx, ref.TenantID, ref.GroupID, RunRecord{At: now, OK: true, Consolidated: true, ClearConsolidAsk: true,
+		return e.store.RecordRun(sctx, ref.TenantID, ref.GroupID, RunRecord{At: now, OK: true, ConsolidationOnly: true, Consolidated: true, ClearConsolidAsk: true,
 			PromptVersion: domain.PromptVersion, InputTokens: resp.InputTokens, OutputTokens: resp.OutputTokens})
 	})
 }

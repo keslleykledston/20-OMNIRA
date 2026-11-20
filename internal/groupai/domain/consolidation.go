@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -87,24 +86,23 @@ func ParseConsolidation(raw string, candidates map[string]Item) ([]Consolidated,
 	if len(raw) > maxRawOutputBytes {
 		return nil, stats, fmt.Errorf("%w: output too large", ErrInvalidOutput)
 	}
-	s := strings.TrimSpace(raw)
-	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(s, "```json"), "```"), "```"))
-	dec := json.NewDecoder(strings.NewReader(s))
-	dec.DisallowUnknownFields()
 	var in struct {
-		Consolidated []struct {
+		Consolidated *[]struct {
 			Kind     string   `json:"kind"`
 			Summary  string   `json:"summary"`
 			Actor    string   `json:"actor"`
 			Replaces []string `json:"replaces"`
 		} `json:"consolidated"`
 	}
-	if err := dec.Decode(&in); err != nil || dec.More() {
-		return nil, stats, fmt.Errorf("%w: not a single JSON object with consolidated", ErrInvalidOutput)
+	if err := decodeModelJSON(raw, &in); err != nil {
+		return nil, stats, err
+	}
+	if in.Consolidated == nil {
+		return nil, stats, fmt.Errorf("%w: the JSON object has no \"consolidated\" list", ErrInvalidOutput)
 	}
 	used := map[string]bool{}
 	var out []Consolidated
-	for i, c := range in.Consolidated {
+	for i, c := range *in.Consolidated {
 		if i >= MaxConsolidatedPerRun {
 			stats.drop("over_limit")
 			continue
