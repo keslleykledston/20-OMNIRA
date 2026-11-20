@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, ConfirmDialog, Icon } from '../primitives'
+import { GroupCopilot } from './GroupCopilot'
 import { useThreadScroll } from '../../hooks/useThreadScroll'
 import { authorLabel, messageText, sortGroupMessages } from '../../lib/groupModel'
 import { groupErrorMessage, groupsAPI, type Group, type GroupMessage } from '../../lib/groups'
@@ -75,11 +76,15 @@ export function GroupThread({ group, canManage, onBack }: Props) {
             <p className="text-xs text-text-secondary">Somente leitura · nada é enviado ao grupo</p>
           </div>
         </div>
-        {canManage && (
-          <Button size="sm" variant="tertiary" onClick={() => setConfirmDelete(true)} disabled={messages.length === 0 && !hasNextPage}>
-            Apagar histórico
-          </Button>
-        )}
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {/* renders nothing unless the group copilot exists for this tenant and person (ADR-0050) */}
+          <GroupCopilot group={group} />
+          {canManage && (
+            <Button size="sm" variant="tertiary" onClick={() => setConfirmDelete(true)} disabled={messages.length === 0 && !hasNextPage}>
+              Apagar histórico
+            </Button>
+          )}
+        </div>
       </div>
 
       {error && (

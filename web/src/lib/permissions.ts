@@ -47,6 +47,10 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     items: [
       { key: 'group.read', label: 'Ler os grupos do WhatsApp habilitados' },
       { key: 'group.manage', label: 'Habilitar grupos e apagar o histórico' },
+      { key: 'group.ai.read', label: 'Ver a memória, as importações e as propostas do copiloto de um grupo' },
+      { key: 'group.ai.manage', label: 'Ligar a IA num grupo, editar a memória e aprovar ou rejeitar propostas' },
+      { key: 'group.import', label: 'Importar a conversa de um grupo e descartar o arquivo original' },
+      { key: 'group.memory.erase', label: 'Apagar toda a memória do copiloto de um grupo' },
     ],
   },
   {
