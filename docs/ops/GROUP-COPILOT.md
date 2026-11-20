@@ -1,6 +1,6 @@
 # Copiloto de grupo — operação (ADR-0060)
 
-Estado: **implementado em LAB, integrado ao `main`; tudo nasce desligado.** Ver o relatório de implantação em `docs/delivery/GROUP-COPILOT-REPORT.md`.
+Estado (2026-11-20): **implantado em produção**, migrations 000205–000207 aplicadas, `OMNIRA_GROUP_MEMORY_ENABLED`, `_IMPORT_ENABLED` e `_PROPOSALS_ENABLED` ligadas no `.env` do destino, `AUTO_ANALYZE` desligado; IA ligada só no grupo `[K3G] Homologação OMNIRA`. Um ambiente novo continua nascendo com tudo desligado. Relatório: `docs/delivery/GROUP-COPILOT-REPORT.md`.
 
 ## O que é
 Memória por grupo de WhatsApp (itens tipados com evidência, editáveis por pessoas), importação de uma exportação da conversa (raw cifrado por 90 dias) e propostas de ocorrência/tarefa que uma pessoa aprova. A IA lê e propõe; **nunca age e nunca escreve no grupo**.
@@ -24,7 +24,7 @@ Além dessas: `OMNIRA_AI_ENABLED=true` com provedor, modelo e chave (a IA da pla
 1. Backup: `scripts/backup-omnira-db.sh`.
 2. Migrations `000205`–`000207`: `docker compose up migrate`.
 3. Rebuild/recreate **api, worker e web** (o worker sobe junto com a api; a regra do nginx do `web` vai dentro da imagem).
-4. Liberar `client_max_body_size 52m` para `^/api/v1/tenants/<uuid>/groups/<uuid>/ai/imports$` no nginx do host (e do destino, após a migração de host).
+4. Liberar `client_max_body_size 52m` para `^/api/v1/tenants/<uuid>/groups/<uuid>/ai/imports$` no nginx do host de destino (`/etc/nginx/sites-available/omnira`, bloco do host canônico; feito em 2026-11-20, com `proxy_request_buffering off`). O NPM externo (`proxy.k3gsolutions.com.br`) deixou passar 3 MB sem mudança. Teste: um POST anônimo de 3 MB nessa rota deve dar 401 (chegou na API), e 55 MB deve dar 413.
 5. Ligar `OMNIRA_GROUP_MEMORY_ENABLED=true` (depois `_IMPORT_`, depois `_PROPOSALS_`), recriar api+worker.
 6. Num grupo de teste: habilitar a coleta, ligar a IA do grupo, "Analisar agora", conferir itens e evidências.
 Smoke público depois de qualquer deploy: `POST /webhooks/v1/whatsapp/meta` deve dar 401, nunca 502.
@@ -41,6 +41,9 @@ SELECT task, count(*), sum(input_tokens), sum(output_tokens), count(*) FILTER (W
 ```
 
 ## Situações
+- **Resposta do modelo recusada (`last_run_ok=false`, `ai_usage.reason=invalid_output`):** o log do worker diz o motivo sem repetir texto (vazio, sem objeto JSON, cortado, sintaxe no byte N, tipo de campo). O parser tolera cerca de código, frase antes/depois e campos extras. Na 3ª recusa seguida do mesmo lote, ele é pulado.
+- **Erro do provedor:** a leitura tenta uma segunda vez após 3 s (mesma unidade do orçamento). Duas falhas seguidas encerram a execução como indisponível; o cursor não anda.
+- **O estado da última leitura** (`last_run_ok`, `consecutive_failures`, `runs`) só muda por leitura; a consolidação não o altera.
 - **Import parado em `extracting`:** se o worker caiu, volta sozinho para leitura após 30 min. Se ficar em `uploaded`, o modelo está indisponível (ele tenta de novo a cada minuto) ou a IA do grupo foi desligada.
 - **`last_run_ok = false`:** provedor falhou ou respondeu algo inválido; o cursor não avança, a próxima tentativa lê as mesmas mensagens. Ver `ai_usage.reason`.
 - **Limite diário atingido:** o worker para até o dia seguinte; "Analisar agora" fica registrado e é atendido depois.
